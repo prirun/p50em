@@ -1,4 +1,4 @@
-em:	em.o
+em:
 	cc -O -o em em.c
 
 debug:

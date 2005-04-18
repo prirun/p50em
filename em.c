@@ -46,6 +46,8 @@
 
 #include <stdio.h>
 #include <errno.h>
+#include "syscom/keys.ins.cc"
+#include "syscom/errd.ins.cc"
 
 /* Prime CPU registers are mapped to memory locations 0-'37, but only
    0-7 are accessible in SR user mode.  In VI user mode, locations
@@ -1303,7 +1305,7 @@ svc() {
       a2 = mem[argl++];
       a3 = mem[argl++];
       a4 = mem[argl++];
-      if (mem[a1] == 1) {         /* arg 1 = k$read? */
+      if (mem[a1] == k$read) {
 	mem[a2] = 0210;
 	mem[a3] = 0377;
       }
