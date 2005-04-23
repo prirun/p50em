@@ -125,6 +125,7 @@ os_rdtk$$(short *key, short *info, char *buf, short *buflen, short *code) {
 }
 
 os_t1ou(short *charg) {
+  fprintf(stderr," Character is '%o/%d, Prime is '%o/%d, (%c)\n", *charg, *charg, *charg & 0x7f, *charg & 0x7f, *charg & 0x7f);
   putchar(*charg & 0x7f);
   fflush(stdout);
 }
@@ -156,8 +157,13 @@ os_timdat(short *userbuf, short *n) {
   tod = time(NULL);
   localtime_r(&tod, &tms);
   strncpy(timbuf.mmddyy,"042105",6);
+#if 0
   timbuf.timemins = tms.tm_hour*60 + tms.tm_min;
   timbuf.timesecs = tms.tm_sec;
+#else
+  timbuf.timemins = 0;
+  timbuf.timesecs = 0;
+#endif  
   timbuf.timeticks = 0;
   timbuf.cpusecs = timbuf.cputicks = timbuf.iosecs = timbuf.ioticks = 0;
   timbuf.tickspersec = 330;
