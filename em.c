@@ -49,73 +49,55 @@
 /* Prime CPU registers are mapped to memory locations 0-'37, but only
    0-7 are accessible in SR user mode.  In VI user mode, locations
    0-'17 are trapped and map to the live register file (p 5-17, Sys Arch)
-*/
 
-#define X 0
-#define A 1
-#define B 2
-#define S 3
-#define Y 3
-#define FLTH 4
-#define FLTL 5
-#define FLTD 07776<<16
-#define FEXP 6
-#define VSC 6
-#define P 7
-/* XXX: this is a huge hack! */
-#define E 010
-#define PMAR 010
-#define FCODE 011
-#define PFAR 012
-#define DMA0 020
-#define DMA1 022
-#define DMA2 024
-#define DMA3 026
-#define DMA4 030
-#define DMA5 032
-#define DMA6 034
-#define DMA7 036
-
-/* Locations '40-'57 are reserved for 8 DMC channels, 2 words each.
+   Locations '40-'57 are reserved for 8 DMC channels, 2 words each.
    Locations '60-'77 are interrupt vectors
    Locations '100-'177 are for external device interrupts 
    see p. A-8 of Sys Arch
 */
 
+#include "regs.h"
+typedef unsigned int ea_t;
+
+/* the live program counter register is aka microcode scratch register TR7 */
+
+#define PC regs.tr7;
+#define RPH regs.u16[14]
+#define RPL regs.u16[15]
 
 #define SETCC_A \
-  keys &= ~0300; \
-  if (mem[A] == 0) \
-    keys |= 0100; \
-  else if (*(short *)(mem+A) < 0) \
-    keys |= 0200;
+  crs[KEYS] &= ~0300; \
+  if (crs[A] == 0) \
+    crs[KEYS] |= 0100; \
+  else if (*(short *)(crs+A) < 0) \
+    crs[KEYS] |= 0200;
 
 #define SETCC_X \
-  keys &= ~0300; \
-  if (mem[X] == 0) \
-    keys |= 0100; \
-  else if (*(short *)(mem+X) < 0) \
-    keys |= 0200;
+  crs[KEYS] &= ~0300; \
+  if (crs[X] == 0) \
+    crs[KEYS] |= 0100; \
+  else if (*(short *)(crs+X) < 0) \
+    crs[KEYS] |= 0200;
 
 #define SETCC_L \
-  keys & ~0300; \
-  if (*(int *)(mem+A) == 0) \
-    keys |= 0100; \
-  else if (*(int *)(mem+A) < 0) \
-    keys |= 0200;
+  crs[KEYS] & ~0300; \
+  if (*(int *)(crs+L) == 0) \
+    crs[KEYS] |= 0100; \
+  else if (*(int *)(crs+L) < 0) \
+    crs[KEYS] |= 0200;
   
 #define SETCC_F \
-  keys & ~0300; \
-  if (*(short *)(mem+FLTH) < 0) \
-    keys |= 0200; \
-  else if (*(int *)(mem+FLTH) == 0 && *(short *)(mem+FEXP) == 0) \
-    keys |= 0100;
+  crs[KEYS] & ~0300; \
+  if (*(short *)(crs+FLTH) < 0) \
+    crs[KEYS] |= 0200; \
+  else if (*(int *)(crs+FLTH) == 0 && *(short *)(crs+FEXP) == 0) \
+    crs[KEYS] |= 0100;
 
 #define SETCC_D SETCC_F
 
 #define SETC(onoff) \
-  if ((onoff)) keys |= 0100000; \
-  else keys &= 077777;
+  if ((onoff)) crs[KEYS] |= 0100000; \
+  else crs[KEYS] &= 077777;
 
 /* Table for unusual instructions that aren't implemented but we want to
    print something when they're encountered */
@@ -156,8 +138,6 @@ char gen0nam[][5] = {
 /* NOTES: 
    - mem is 1 user's virtual memory address space in this version,
    but eventually should be the system's physical memory
-   - where to put the V/I mode live register file to make mapped
-   memory access to registers, easy?
 */
 
 unsigned short mem[07776*64*1024];   /* 4095 segments of 64K words each */
@@ -178,8 +158,7 @@ unsigned int bitmask16[17] = {0,
 			    0x0080, 0x0040, 0x0020, 0x0010,
 			    0x0008, 0x0004, 0x0002, 0x0001};
 
-unsigned short prevpc,keys;          /* program counter, prev pc, keys */
-unsigned short modals;
+unsigned short prevpc;          /* program counter, prev pc, keys */
 
 unsigned short amask;                /* address mask */
 #define faultamask 0100000           /* fault bit */
@@ -190,6 +169,45 @@ unsigned short amask;                /* address mask */
 int verbose;
 int domemdump;                         /* -memdump arg */
 int boot;                            /* true if reading a boot record */
+
+/* XXX: needs to check for restricted addresses */
+
+unsigned short get16(ea_t ea) {
+  if (ea == 7)                   /* PC */
+    return RPL;
+  if (ea <= 017)                 /* CRS */
+    return crs[memtocrs[ea]];
+  if (ea <= 037)                 /* DMX */
+    return regs.sym.regdmx[((ea & 036) < 1) | (ea & 1)];
+  return mem[ea];
+}
+
+unsigned int get32(ea_t ea) {
+  return *(unsigned int *)(mem+ea);
+}
+
+double get64(ea_t ea) {
+  return *(double *)(mem+ea);
+}
+
+put16(unsigned short value, ea_t ea) {
+  if (ea == 7)                        /* PC */
+    RPL = value;
+  else if (ea <= 017)                 /* CRS */
+    crs[memtocrs[ea]] = value;
+  else if (ea <= 037)                 /* DMX */
+    regs.sym.regdmx[((ea & 036) < 1) | (ea & 1)] = value;
+  else
+    mem[ea] = value;
+}
+
+put32(unsigned int value, ea_t ea) {
+  *(unsigned int *)(mem+ea) = value;
+}
+
+put64(double value, ea_t ea) {
+  *(double *)(mem+ea) = value;
+}
 
 /* I/O device map table, containing function pointers to handle device I/O */
 
@@ -205,6 +223,7 @@ void (*devmap[64])(short, short, short) = {
   0,0,0,0,0,0,0,0,
   0,0,0,0,0,0,0,0};
 
+
 /* read a short (16-bit) integer in big-endian from stdin */
 
 unsigned short readshort () {
@@ -217,37 +236,37 @@ unsigned short readshort () {
 
 newkeys (unsigned short new) {
 
-  keys = new;
-  switch ((keys & 016000) >> 10) {
+  crs[KEYS] = new;
+  switch ((crs[KEYS] & 016000) >> 10) {
   case 0:                     /* 16S */
-    fprintf(stderr,"Entering 16S mode, keys=%o\n", keys);
+    fprintf(stderr,"Entering 16S mode, keys=%o\n", crs[KEYS]);
     amask = 037777;
     break;
   case 1:                     /* 32S */
-    fprintf(stderr,"Entering 32S mode, keys=%o\n", keys);
+    fprintf(stderr,"Entering 32S mode, keys=%o\n", crs[KEYS]);
     amask = 077777;
     break;
   case 2:                     /* 64R */
-    fprintf(stderr,"Entering 64R mode, keys=%o\n", keys);
+    fprintf(stderr,"Entering 64R mode, keys=%o\n", crs[KEYS]);
     amask = 0177777;
     break;
   case 3:                     /* 32R */
-    fprintf(stderr,"Entering 32R mode, keys=%o\n", keys);
+    fprintf(stderr,"Entering 32R mode, keys=%o\n", crs[KEYS]);
     amask = 077777;
     break;
   case 4:                     /* 32I */
-    fprintf(stderr,"Entering 32I mode, keys=%o\n", keys);
+    fprintf(stderr,"Entering 32I mode, keys=%o\n", crs[KEYS]);
     amask = 0177777;
     exit(1);
     break;
   case 6:                     /* 64V */
-    fprintf(stderr,"Entering 64V mode, keys=%o\n", keys);
+    fprintf(stderr,"Entering 64V mode, keys=%o\n", crs[KEYS]);
     amask = 0177777;
     memdump(0,0177777);
     exit(1);
     break;
   default:                    /* invalid */
-    fprintf(stderr,"Invalid CPU mode: %o\n", keys);
+    fprintf(stderr,"Invalid CPU mode: %o\n", crs[KEYS]);
     exit(1);
   }
 }
@@ -258,7 +277,7 @@ newkeys (unsigned short new) {
 
 unsigned short ea16s (unsigned short inst, short i, short x) {
   
-  unsigned short ea;
+  unsigned short ea,m;
 
   if (inst & 001000)
     ea = (prevpc & 037000) | (inst & 0777);      /* current sector */
@@ -266,12 +285,13 @@ unsigned short ea16s (unsigned short inst, short i, short x) {
     ea = (inst & 0777);                          /* sector 0 */
   while (1) {
     if (x)                                       /* indexed */
-      ea += mem[X];
+      ea += crs[X];
     if (!i)                                      /* not indirect */
       break;
-    i = mem[ea] & 0100000;
-    x = mem[ea] & 040000;
-    ea = mem[ea] & 037777;                       /* go indirect */
+    m = get16(ea);                               /* get indirect word */
+    i = m & 0100000;
+    x = m & 040000;
+    ea = m & 037777;                             /* go indirect */
   }
   return ea;
 }
@@ -281,23 +301,24 @@ unsigned short ea16s (unsigned short inst, short i, short x) {
 
 unsigned short ea32s (unsigned short inst, short i, short x) {
   
-  unsigned short ea;
+  unsigned short ea,m;
 
   if (inst & 001000)
     ea = (prevpc & 077000) | (inst & 0777);      /* current sector */
   else {
     ea = (inst & 0777);                          /* sector 0 */
     if (ea < 0100 && x) {                        /* preindex by X */
-      ea += mem[X];
+      ea += crs[X];
       x = 0;
     }
   }
   while (i) {
-    i = mem[ea] & 0100000;
-    ea = mem[ea] & 077777;                       /* go indirect */
+    m = get16(ea);
+    i = m & 0100000;
+    ea = m & 077777;                             /* go indirect */
   }
   if (x)                                         /* postindex */
-    ea += mem[X];
+    ea += crs[X];
   return ea & amask;
 }
 
@@ -309,13 +330,13 @@ unsigned short ea32s (unsigned short inst, short i, short x) {
 unsigned short ea32r64r (unsigned short inst, short i, short x, short *opcode) {
 
   short class;
-  unsigned short ea;
+  unsigned short ea,m;
 
   fprintf(stderr," ea32r64r: i=%o, x=%o\n", i!= 0, x!=0);
   if (inst & 001000)                             /* sector bit 7 set? */
     if ((inst & 0760) != 0400) {                 /* PC relative? */
-      ea = mem[P] + (((short) (inst << 7)) >> 7);   /* yes, sign extend D */
-      fprintf(stderr," PC relative, P=%o, new ea=%o\n", mem[P], ea);
+      ea = RPL + (((short) (inst << 7)) >> 7);   /* yes, sign extend D */
+      fprintf(stderr," PC relative, P=%o, new ea=%o\n", RPL, ea);
     }
     else 
       goto special;                              /* special cases */
@@ -323,24 +344,25 @@ unsigned short ea32r64r (unsigned short inst, short i, short x, short *opcode) {
     ea = (inst & 0777);                          /* sector 0 */
     fprintf(stderr," Sector 0, new ea=%o\n", ea);
     if (ea < 0100 && x) {                        /* preindex by X */
-      fprintf(stderr," Preindex, ea=%o, X='%o/%d\n", ea, mem[X], *(short *)(mem+X));
-      ea += mem[X];
+      fprintf(stderr," Preindex, ea=%o, X='%o/%d\n", ea, crs[X], *(short *)(crs+X));
+      ea += crs[X];
       fprintf(stderr," Preindex, new ea=%o\n", ea);
       x = 0;
     }
   }
   while (i) {
-    fprintf(stderr," Indirect, old ea=%o, [ea]=%o\n", ea, mem[ea]);
-    if ((keys & 016000) == 06000)
-      i = mem[ea] & 0100000;
+    m = get16(ea);
+    fprintf(stderr," Indirect, old ea=%o, [ea]=%o\n", ea, m);
+    if ((crs[KEYS] & 016000) == 06000)
+      i = m & 0100000;
     else
       i = 0;
-    ea = mem[ea] & amask;                       /* go indirect */
+    ea = m & amask;                              /* go indirect */
     fprintf(stderr," Indirect, new i=%d, new ea=%o\n", i!=0, ea);
   }
   if (x) {
-    fprintf(stderr," Postindex, old ea=%o, X='%o/%d\n", ea, mem[X], *(short *)(mem+X));
-    ea += mem[X];
+    fprintf(stderr," Postindex, old ea=%o, X='%o/%d\n", ea, crs[X], *(short *)(crs+X));
+    ea += crs[X];
     fprintf(stderr," Postindex, new ea=%o\n", ea);
   }
   return ea & amask;
@@ -351,64 +373,68 @@ special:
   fprintf(stderr," special, new opcode=%5#0o, class=%d\n", *opcode, class);
 
   if (class < 2) {                               /* class 0/1 */
-    ea = mem[mem[P]++];                          /* get A from next word */
+    ea = get16(RPL++);                           /* get A from next word */
     fprintf(stderr," Class %d, new ea=%o\n", class, ea);
     if (class == 1)
-      ea += mem[S];
+      ea += crs[S];
     if (x) {
-      fprintf(stderr," Preindex, ea=%o, X='%o/%d\n", ea, mem[X], *(short *)(mem+X));
-      ea += mem[X];
+      fprintf(stderr," Preindex, ea=%o, X='%o/%d\n", ea, crs[X], *(short *)(crs+X));
+      ea += crs[X];
       fprintf(stderr," Preindex, new ea=%o\n", ea);
     }
     while (i) {
-      fprintf(stderr," Indirect, old ea=%o, [ea]=%o\n", ea, mem[ea]);
-      if ((keys & 016000) == 06000)
-	i = mem[ea] & 0100000;
+      m = get16(ea);
+      fprintf(stderr," Indirect, old ea=%o, [ea]=%o\n", ea, m);
+      if ((crs[KEYS] & 016000) == 06000)
+	i = m & 0100000;
       else
 	i = 0;
-      ea = mem[ea] & amask;
+      ea = m & amask;
       fprintf(stderr," Indirect, new i=%d, new ea=%o\n", i!=0, ea);
     }
 
   } else if (i && x) {                           /* class 2/3, ix=11 */
     fprintf(stderr," class 2/3, ix=11\n");
-    ea = mem[mem[P]++];                          /* get A from next word */
+    ea = get16(RPL++);                           /* get A from next word */
     fprintf(stderr," ea=%o\n", ea);
     if (class == 3)
-      ea += (short) mem[S];
+      ea += (short) crs[S];
     while (i) {
-      fprintf(stderr," Indirect, ea=%o, [ea]=%o\n", ea, mem[ea]);
-      if ((keys & 016000) == 06000)
-	i = mem[ea] & 0100000;
+      m = get16(ea);
+      fprintf(stderr," Indirect, ea=%o, [ea]=%o\n", ea, m);
+      if ((crs[KEYS] & 016000) == 06000)
+	i = m & 0100000;
       else
 	i = 0;
-      ea = mem[ea] & amask;
+      ea = m & amask;
       fprintf(stderr," Indirect, new i=%d, new ea=%o\n", i!=0, ea);
     }
-    fprintf(stderr," Postindex, old ea=%o, X='%o/%d\n", ea, mem[X], *(short *)(mem+X));
-    ea += (short) mem[X];
+    fprintf(stderr," Postindex, old ea=%o, X='%o/%d\n", ea, crs[X], *(short *)(crs+X));
+    ea += (short) crs[X];
     fprintf(stderr," Postindex, new ea=%o\n", ea);
 
   } else {                                       /* class 2/3, ix != 11 */
     if (class == 2)
-      ea = mem[S]++;
+      ea = crs[S]++;
     else
-      ea = --mem[S];
-    fprintf(stderr," Class 2/3, new ea=%o, new S=%o\n", ea, mem[S]);
+      ea = --crs[S];
+    fprintf(stderr," Class 2/3, new ea=%o, new S=%o\n", ea, crs[S]);
     if (x) {
-      if ((keys & 016000) == 06000)
-	i = mem[ea] & 0100000;
-      ea = mem[ea] & amask;
+      m = get16(ea);
+      if ((crs[KEYS] & 016000) == 06000)
+	i = m & 0100000;
+      ea = m & amask;
     }
     while (i) {
-      if ((keys & 016000) == 06000)
-	i = mem[ea] & 0100000;
+      m = get16(ea);
+      if ((crs[KEYS] & 016000) == 06000)
+	i = m & 0100000;
       else
 	i = 0;
-      ea = mem[ea] & amask;
+      ea = m & amask;
     }
     if (x)
-      ea += mem[X];
+      ea += crs[X];
   }
   return ea & amask;
 }
@@ -421,13 +447,13 @@ unsigned int ea64v (unsigned short inst, short i, short x, short *opcode) {
   unsigned short r;                              /* true if same ring */
   unsigned int ea;                               /* full seg/word va */
 
-  //  ea_s = reg[pb.h] & segmask;
-  ea_w = mem[P];
+  ea_s = RPH;
+  ea_w = RPL;
   ea_r = 1;
   if (inst & 001000)                             /* sector bit 7 set? */
     if ((inst & 0740) != 0400) {                 /* PC relative? */
-      ea_w = mem[P] + (((short) (inst << 7)) >> 7);   /* yes, sign extend D */
-      fprintf(stderr," PC relative, P=%o, new ea_w=%o\n", mem[P], ea_w);
+      ea_w = RPL + (((short) (inst << 7)) >> 7);   /* yes, sign extend D */
+      fprintf(stderr," PC relative, P=%o, new ea_w=%o\n", RPL, ea_w);
     }
     else 
       goto labB;                                 /* special cases */
@@ -435,8 +461,8 @@ unsigned int ea64v (unsigned short inst, short i, short x, short *opcode) {
     ea_w = (inst & 0777);                        /* sector 0 */
     fprintf(stderr," Sector 0, new ea_w=%o\n", ea_w);
     if (ea_w < 0100 && x) {                      /* preindex by X */
-      fprintf(stderr," Preindex, ea_w=%o, X='%o/%d\n", ea_w, mem[X], *(short *)(mem+X));
-      ea_w += mem[X];
+      fprintf(stderr," Preindex, ea_w=%o, X='%o/%d\n", ea_w, crs[X], *(short *)(crs+X));
+      ea_w += crs[X];
       fprintf(stderr," Preindex, new ea_w=%o\n", ea_w);
       x = 0;
     }
@@ -449,8 +475,8 @@ unsigned int ea64v (unsigned short inst, short i, short x, short *opcode) {
     fprintf(stderr," Indirect, new i=%d, new ea=%o\n", i!=0, ea);
   }
   if (x) {
-    fprintf(stderr," Postindex, old ea=%o, X='%o/%d\n", ea, mem[X], *(short *)(mem+X));
-    ea += mem[X];
+    fprintf(stderr," Postindex, old ea=%o, X='%o/%d\n", ea, crs[X], *(short *)(crs+X));
+    ea += crs[X];
     fprintf(stderr," Postindex, new ea=%o\n", ea);
   }
   return ea;
@@ -485,24 +511,24 @@ cpuexception(unsigned char extype)
 {
   switch (extype) {
   case 'i':
-    if (keys & 0400) {
+    if (crs[KEYS] & 0400) {
       printf(" Integer exception fault\n");
       exit(1);
     } else {
-      keys |= 0x8000;
+      crs[KEYS] |= 0x8000;
     }
     break;
   case 'd':
-    if (keys & 40) {
+    if (crs[KEYS] & 40) {
       printf(" Decimal exception fault\n");
       exit(1);
     } else {
-      keys |= 0x8000;
+      crs[KEYS] |= 0x8000;
     }
     break;
   case 'f':
-    if (keys & 01000) {
-      keys |= 0x8000;
+    if (crs[KEYS] & 01000) {
+      crs[KEYS] |= 0x8000;
     } else {
       printf(" FP exception fault\n");
       exit(1);
@@ -544,7 +570,7 @@ main (int argc, char **argv) {
   unsigned int utempl;
   float tempf,tempf1,tempf2;
   double tempd,tempd1,tempd2;
-  signed short tempda[4],tempda1[4];
+  unsigned short tempda[4],tempda1[4];
   unsigned int ea32;                   /* full V/I mode eff address */
   unsigned short ea;                   /* effective address (word) */
   unsigned short opcode;
@@ -555,6 +581,7 @@ main (int argc, char **argv) {
   int nw;
   unsigned short rvec[9];    /* SA, EA, P, A, B, X, keys, dummy, dummy */
   unsigned short inst;
+  unsigned short m;
   int scount;                          /* shift count */
   int instcount=0;
 
@@ -566,6 +593,11 @@ main (int argc, char **argv) {
      - interrupts and machine checks inhibited
      - standard interrupt mode
   */
+
+  for (i=0; i < 32*REGSETS; i++)
+    regs.u32[i] = 0;
+  crs = (void *)regs.rs[2];
+  RPL = 01000;
 
   verbose = 0;
   domemdump = 0;
@@ -618,15 +650,15 @@ main (int argc, char **argv) {
 
   /* setup execution (registers, keys, address mask, etc.) from rvec */
 
-  modals = 0;
-  mem[A] = rvec[3];
-  mem[B] = rvec[4];
-  mem[X] = rvec[5];
+  crs[MODALS] = 0;
+  crs[A] = rvec[3];
+  crs[B] = rvec[4];
+  crs[X] = rvec[5];
   newkeys(rvec[6]);
-  mem[P] = rvec[2];
+  RPL = rvec[2];
 
-  if (mem[P] == 0161000)      /* hack for *DOS64; P is off by 3?? */
-    mem[P] = 0161003;
+  if (RPL == 0161000)      /* hack for *DOS64; P is off by 3?? */
+    RPL = 0161003;
 
   if (domemdump)
     memdump(rvec[0], rvec[1]);
@@ -635,16 +667,16 @@ main (int argc, char **argv) {
 
   while (1) {
     
-    if (mem[P] > rvec[1]) {       /* hack for testing */
-      fprintf(stderr,"\nOOPS! Program counter %o > EA %o\n", mem[P], rvec[1]);
+    if (RPL > rvec[1]) {       /* hack for testing */
+      fprintf(stderr,"\nOOPS! Program counter %o > EA %o\n", RPL, rvec[1]);
       exit(1);
     }
 
-    prevpc = mem[P];
-    inst = mem[mem[P]];
+    prevpc = RPL;
+    inst = get16(RPL);
     instcount++;
-    fprintf(stderr,"\n%o: %o		A='%o/%:0d B='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d	#%d\n", mem[P], inst, mem[A], *(short *)(mem+A), mem[B], *(short *)(mem+B), mem[X], *(short *)(mem+X), mem[Y], *(short *)(mem+Y), (keys&0100000) != 0, (keys&040000) != 0, (keys&0200) != 0, (keys&0100) != 0, instcount);
-    mem[P]++;
+    fprintf(stderr,"\n%o: %o		A='%o/%:0d B='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d	#%d\n", RPL, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&040000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, instcount);
+    RPL++;
 
     /* generic? */
 
@@ -656,43 +688,43 @@ main (int argc, char **argv) {
 
 	if (inst == 000005) {                 /* SGL */
 	  fprintf(stderr," SGL\n");
-	  newkeys(keys & ~040000);
+	  newkeys(crs[KEYS] & ~040000);
 	  continue;
 	}
 
 	if (inst == 000011) {                 /* E16S */
 	  fprintf(stderr," E16S\n");
-	  newkeys(keys & 0161777);
+	  newkeys(crs[KEYS] & 0161777);
 	  continue;
 	}
 
 	if (inst == 000013) {                 /* E32S */
 	  fprintf(stderr," E32S\n");
-	  newkeys((keys & 0161777) | 1<<10);
+	  newkeys((crs[KEYS] & 0161777) | 1<<10);
 	  continue;
 	}
 
 	if (inst == 001013) {                 /* E32R */
 	  fprintf(stderr," E32R\n");
-	  newkeys((keys & 0161777) | 3<<10);
+	  newkeys((crs[KEYS] & 0161777) | 3<<10);
 	  continue;
 	}
 
 	if (inst == 001011) {                 /* E64R */
 	  fprintf(stderr," E64R\n");
-	  newkeys((keys & 0161777) | 2<<10);
+	  newkeys((crs[KEYS] & 0161777) | 2<<10);
 	  continue;
 	}
 
 	if (inst == 000010) {                 /* E64V */
 	  fprintf(stderr," E64V\n");
-	  newkeys((keys & 0161777) | 6<<10);
+	  newkeys((crs[KEYS] & 0161777) | 6<<10);
 	  continue;
 	}
 
 	if (inst == 001010) {                 /* E32I */
 	  fprintf(stderr," E32I\n");
-	  newkeys((keys & 0161777) | 4<<10);
+	  newkeys((crs[KEYS] & 0161777) | 4<<10);
 	  continue;
 	}
 
@@ -704,27 +736,28 @@ main (int argc, char **argv) {
 
 	if (inst == 000111) {                  /* CEA */
 	  fprintf(stderr," CEA\n");
-	  switch ((keys & 016000) >> 10) {
+	  switch ((crs[KEYS] & 016000) >> 10) {
 	  case 0:                       /* 16S */
-	    ea = mem[A];
+	    ea = crs[A];
 	    i = ea & 0100000;
 	    x = ea & 040000;
 	    ea &= 037777;
 	    while (1) {
 	      if (x)                           /* indexed */
-		ea += mem[X];
+		ea += crs[X];
 	      if (!i)                          /* not indirect */
 		break;
-	      i = mem[ea] & 0100000;
-	      x = mem[ea] & 040000;
-	      ea = mem[ea] & 037777;           /* go indirect */
+	      m = get16(ea);
+	      i = m & 0100000;
+	      x = m & 040000;
+	      ea = m & 037777;                 /* go indirect */
 	    }
-	    mem[A] = ea;
+	    crs[A] = ea;
 	    break;
 	  case 1:                       /* 32S */
 	  case 3:                       /* 32R */
-	    while (mem[A] & 0100000) {
-	      mem[A] = mem[mem[A] & 077777];
+	    while (crs[A] & 0100000) {
+	      crs[A] = get16(crs[A] & 077777);
 	    }
 	  }
 	  continue;
@@ -738,22 +771,22 @@ main (int argc, char **argv) {
 
 	if (inst == 000201) {
 	  fprintf(stderr," IAB\n");
-	  tempa = mem[B];
-	  mem[B] = mem[A];
-	  mem[A] = tempa;
+	  tempa = crs[B];
+	  crs[B] = crs[A];
+	  crs[A] = tempa;
 	  continue;
 	}
 
 	if (inst == 000205) {                /* PIM (R-mode) */
 	  fprintf(stderr," PIM\n");
-	  mem[A] = mem[B] | (mem[A] & 0x8000);
+	  crs[A] = crs[B] | (crs[A] & 0x8000);
 	  continue;
 	}
 
 	if (inst == 000211) {                /* PID (R-mode) */
 	  fprintf(stderr," PID\n");
-	  *(int *)(mem+A) = *(short *)(mem+A);
-	  mem[B] &= 0x7fff;
+	  *(int *)(crs+L) = *(short *)(crs+A);
+	  crs[B] &= 0x7fff;
 	  continue;
 	}
 
@@ -771,23 +804,30 @@ main (int argc, char **argv) {
 
 	if (inst == 000007) {                 /* DBL */
 	  fprintf(stderr," DBL\n");
-	  newkeys(keys | 040000);
+	  newkeys(crs[KEYS] | 040000);
 	  continue;
 	}
 
 	if (inst == 001314) {
 	  fprintf(stderr," CGT\n");
-	  tempa = mem[mem[P]];              /* get number of words */
-	  if (1 <= mem[A] && mem[A] <= tempa)
-	    mem[P] = mem[mem[P]+mem[A]];
+	  tempa = get16(RPL);              /* get number of words */
+	  if (1 <= crs[A] && crs[A] <= tempa)
+	    RPL = get16(RPL+crs[A]);
 	  else
-	    mem[P] = mem[mem[P]+tempa+1];
+	    RPL = get16(RPL+tempa+1);
 	  continue;
 	}
 
 	if (inst == 000115) {
 	  fprintf(stderr," PIDA\n");
-	  *(int *)(mem+A) = *(short *)(mem+A);
+	  *(int *)(crs+L) = *(short *)(crs+A);
+	  continue;
+	}
+
+	if (inst == 000305) {
+	  fprintf(stderr," PIDL\n");
+	  *(int *)(crs+E) = *(int *)(crs+L);
+	  *(int *)(crs+L) = (*(int *)(crs+L)) >> 16;
 	  continue;
 	}
 
@@ -795,11 +835,23 @@ main (int argc, char **argv) {
 
 	if (inst == 000015) {
 	  fprintf(stderr," PIMA\n");
-	  if (mem[A] == 0 | mem[A] == 0177777) {
-	    keys &= 077777;
-	    mem[A] = mem[B];
+	  if (crs[A] == 0 | crs[A] == 0177777) {
+	    SETC(0);
+	    crs[A] = crs[B];
 	  } else {
-	    mem[A] = mem[B];
+	    crs[A] = crs[B];
+	    cpuexception('i');
+	  }
+	  continue;
+	}
+
+	if (inst == 000301) {
+	  fprintf(stderr," PIML\n");
+	  if (*(int *)(crs+L) == 0 || *(int *)(crs+L) == 0xFFFFFFFF) {
+	    SETC(0);
+	    *(int *)(crs+L) = *(int *)(crs+E);
+	  } else {
+	    *(int *)(crs+L) = *(int *)(crs+E);
 	    cpuexception('i');
 	  }
 	  continue;
@@ -807,32 +859,32 @@ main (int argc, char **argv) {
 
 	if (inst == 000041) {
 	  fprintf(stderr," SCA\n");
-	  mem[A] = mem[VSC] & 0xFF;
+	  crs[A] = crs[VSC] & 0xFF;
 	  continue;
 	}
 
 	if (inst == 000043) {
 	  fprintf(stderr," INK\n");
-	  mem[A] = (keys & 0xFF00) | (mem[VSC] & 0xFF);
+	  crs[A] = (crs[KEYS] & 0xFF00) | (crs[VSC] & 0xFF);
 	  continue;
 	}
 
 	if (inst == 001005) {
 	  fprintf(stderr," TKA\n");
-	  mem[A] = keys;
+	  crs[A] = crs[KEYS];
 	  continue;
 	}
 
 	if (inst == 000405) {
 	  fprintf(stderr," OTK\n");
-	  newkeys(mem[A] & 0xFF00);
-	  mem[VSC] = mem[A] & 0xFF;
+	  newkeys(crs[A] & 0xFF00);
+	  crs[VSC] = crs[A] & 0xFF;
 	  continue;
 	}
 
 	if (inst == 001015) {
 	  fprintf(stderr," TAK\n");
-	  newkeys(mem[A]);
+	  newkeys(crs[A]);
 	  continue;
 	}
 
@@ -843,50 +895,50 @@ main (int argc, char **argv) {
 
 	if (inst == 000101) {
 	  fprintf(stderr," NRM\n");
-	  mem[VSC] = 0;
-	  if (mem[A] == 0) {
-	    if (mem[B] == 0)
+	  crs[VSC] = 0;
+	  if (crs[A] == 0) {
+	    if (crs[B] == 0)
 	      continue;
-	    mem[A] = mem[B];
-	    mem[B] = 0;
-	    mem[VSC] = 15;
-	  } else if (mem[A] == 0xFFFF) {
-	    mem[A] = mem[B] | 0x8000;
-	    mem[B] = 0;
-	    mem[VSC] = 15;
+	    crs[A] = crs[B];
+	    crs[B] = 0;
+	    crs[VSC] = 15;
+	  } else if (crs[A] == 0xFFFF) {
+	    crs[A] = crs[B] | 0x8000;
+	    crs[B] = 0;
+	    crs[VSC] = 15;
 	  }
-	  while (!((mem[A] ^ (mem[A] << 1)) & 0x8000)) {
-	    fprintf(stderr, " step %d: mem[A]=%o, mem[B]=%o\n", mem[VSC], mem[A], mem[B]);
-	    mem[B] = mem[B] << 1;
-	    mem[A] = (mem[A] & 0x8000) | ((mem[A] << 1) & 0x7FFE) | (mem[B] >> 15);
-	    mem[B] &= 0x7FFF;
-	    mem[VSC]++;
+	  while (!((crs[A] ^ (crs[A] << 1)) & 0x8000)) {
+	    fprintf(stderr, " step %d: crs[A]=%o, crs[B]=%o\n", crs[VSC], crs[A], crs[B]);
+	    crs[B] = crs[B] << 1;
+	    crs[A] = (crs[A] & 0x8000) | ((crs[A] << 1) & 0x7FFE) | (crs[B] >> 15);
+	    crs[B] &= 0x7FFF;
+	    crs[VSC]++;
 	  }
-	  fprintf(stderr, " finished with %d shifts: mem[A]=%o, mem[B]=%o\n", mem[VSC], mem[A], mem[B]);
+	  fprintf(stderr, " finished with %d shifts: crs[A]=%o, crs[B]=%o\n", crs[VSC], crs[A], crs[B]);
 	  continue;
 	}
 
 	if (inst == 000401) {
 	  fprintf(stderr," ENB\n");
-	  modals &= ~0100000;
+	  crs[MODALS] &= ~0100000;
 	  continue;
 	}
 
 	if (inst == 001001) {
 	  fprintf(stderr," INH\n");
-	  modals |= 0100000;
+	  crs[MODALS] |= 0100000;
 	  continue;
 	}
 
 	if (inst == 000415) {
 	  fprintf(stderr," ESIM\n");
-	  modals &= ~040000;
+	  crs[MODALS] &= ~040000;
 	  continue;
 	}
 
 	if (inst == 000417) {
 	  fprintf(stderr," EVIM\n");
-	  modals |= 040000;
+	  crs[MODALS] |= 040000;
 	  continue;
 	}
 
@@ -902,10 +954,11 @@ main (int argc, char **argv) {
 	  continue;
 
 	fprintf(stderr," unrecognized generic class 0 instruction!\n");
-	if (mem[066] != 0) {
-	  fprintf(stderr," JST* '66 [%o]\n", mem[066]);
-	  mem[mem[066]] = mem[P];
-	  mem[P] = mem[066]+1;
+	m = get16(066);
+	if (m != 0) {
+	  fprintf(stderr," JST* '66 [%o]\n", m);
+	  put16(RPL,m);
+	  RPL = m+1;
 	  continue;
 	}
 
@@ -919,98 +972,98 @@ main (int argc, char **argv) {
 	if (inst == 0141604) {
 	  fprintf(stderr," BCLT\n");
 bclt:
-	  if (keys & 0200)
-	    mem[P] = mem[mem[P]];
+	  if (crs[KEYS] & 0200)
+	    RPL = get16(RPL);
 	  else
-	    mem[P]++;
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0141600) {
 	  fprintf(stderr," BCLE\n");
 bcle:
-	  if (keys & 0300)
-	    mem[P] = mem[mem[P]];
+	  if (crs[KEYS] & 0300)
+	    RPL = get16(RPL);
 	  else
-	    mem[P]++;
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0141602) {
 	  fprintf(stderr," BCEQ\n");
 bceq:
-	  if (keys & 0100)
-	    mem[P] = mem[mem[P]];
+	  if (crs[KEYS] & 0100)
+	    RPL = get16(RPL);
 	  else
-	    mem[P]++;
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0141603) {
 	  fprintf(stderr," BCNE\n");
 bcne:
-	  if (!(keys & 0100))
-	    mem[P] = mem[mem[P]];
+	  if (!(crs[KEYS] & 0100))
+	    RPL = get16(RPL);
 	  else
-	    mem[P]++;
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0141605) {
 	  fprintf(stderr," BCGE\n");
 bcge:
-	  if (!(keys & 0200))
-	    mem[P] = mem[mem[P]];
+	  if (!(crs[KEYS] & 0200))
+	    RPL = get16(RPL);
 	  else
-	    mem[P]++;
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0141601) {
 	  fprintf(stderr," BCGT\n");
 bcgt:
-	  if (!(keys & 0300))
-	    mem[P] = mem[mem[P]];
+	  if (!(crs[KEYS] & 0300))
+	    RPL = get16(RPL);
 	  else
-	    mem[P]++;
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0141705) {
 	  fprintf(stderr," BCR\n");
-	  if (!(keys & 0100000))
-	    mem[P] = mem[mem[P]];
+	  if (!(crs[KEYS] & 0100000))
+	    RPL = get16(RPL);
 	  else
-	    mem[P]++;
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0141704) {
 	  fprintf(stderr," BCS\n");
-	  if (keys & 0100000)
-	    mem[P] = mem[mem[P]];
+	  if (crs[KEYS] & 0100000)
+	    RPL = get16(RPL);
 	  else
-	    mem[P]++;
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0141707) {
 	  fprintf(stderr," BLR\n");
 	  exit(1);
-	  if (!(keys & 020000))
-	    mem[P] = mem[mem[P]];
+	  if (!(crs[KEYS] & 020000))
+	    RPL = get16(RPL);
 	  else
-	    mem[P]++;
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0141706) {
 	  fprintf(stderr," BLS\n");
 	  exit(1);
-	  if (keys & 020000)
-	    mem[P] = mem[mem[P]];
+	  if (crs[KEYS] & 020000)
+	    RPL = get16(RPL);
 	  else
-	    mem[P]++;
+	    RPL++;
 	  continue;
 	}
 
@@ -1113,59 +1166,59 @@ bcgt:
 
 	if (inst == 0141334) {
 	  fprintf(stderr," BIX\n");
-	  mem[X]++;
+	  crs[X]++;
 bidx:
-	  if (mem[X] == 0)
-	    mem[P] = mem[mem[P]];
+	  if (crs[X] == 0)
+	    RPL = get16(RPL);
 	  else
-	    mem[P]++;
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0141324) {
 	  fprintf(stderr," BIY\n");
-	  mem[Y]++;
+	  crs[Y]++;
 bidy:
-	  if (mem[Y] == 0)
-	    mem[P] = mem[mem[P]];
+	  if (crs[Y] == 0)
+	    RPL = get16(RPL);
 	  else
-	    mem[P]++;
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0140724) {
 	  fprintf(stderr," BDY\n");
-	  mem[Y]--;
+	  crs[Y]--;
 	  goto bidy;
 	}
 
 	if (inst == 0140734) {
 	  fprintf(stderr," BDX\n");
-	  mem[X]--;
+	  crs[X]--;
 	  goto bidx;
 	}
 
 	if (inst == 0141206) {                /* A1A */
 	  fprintf(stderr," A1A\n");
-	  mem[A]++;
-	  SETC(mem[A] == 32768);
+	  crs[A]++;
+	  SETC(crs[A] == 32768);
 	  SETCC_A;
 	  continue;
 	}
 
 	if (inst == 0140304) {                /* A2A */
 	  fprintf(stderr," A2A\n");
-	  mem[A] += 2;
-	  SETC(*(short *)(mem+A) <= -32767);
+	  crs[A] += 2;
+	  SETC(*(short *)(crs+A) <= -32767);
 	  SETCC_A;
 	  continue;
 	}
 
 	if (inst == 0141216) {                /* ACA */
 	  fprintf(stderr," ACA\n");
-	  if (keys & 0100000) {
-	    mem[A]++;
-	    SETC(mem[A] == 32768);
+	  if (crs[KEYS] & 0100000) {
+	    crs[A]++;
+	    SETC(crs[A] == 32768);
 	  } else 
 	    SETC(0);
 	  SETCC_A;
@@ -1174,35 +1227,35 @@ bidy:
 
 	if (inst == 0140110) {                /* S1A */
 	  fprintf(stderr," S1A\n");
-	  mem[A]--;
-	  SETC(mem[A] == 32767);
+	  crs[A]--;
+	  SETC(crs[A] == 32767);
 	  SETCC_A;
 	  continue;
 	}
 
 	if (inst == 0140310) {                /* S2A */
 	  fprintf(stderr," S2A\n");
-	  mem[A] -= 2;
-	  SETC(*(short *)(mem+A) >= -32766);
+	  crs[A] -= 2;
+	  SETC(*(short *)(crs+A) >= -32766);
 	  SETCC_A;
 	  continue;
 	}
 
 	if (inst == 0141050) {                /* CAL */
 	  fprintf(stderr," CAL\n");
-	  mem[A] &= 0xFF;
+	  crs[A] &= 0xFF;
 	  continue;
 	}
 
 	if (inst == 0141044) {                /* CAR */
 	  fprintf(stderr," CAR\n");
-	  mem[A] &= 0xFF00;
+	  crs[A] &= 0xFF00;
 	  continue;
 	}
 
 	if (inst == 0140040) {                /* CRA */
 	  fprintf(stderr," CRA\n");
-	  mem[A] = 0;
+	  crs[A] = 0;
 	  continue;
 	}
 
@@ -1219,28 +1272,28 @@ bidy:
 
 	if (inst == 0140014) {                /* P300 CRB */
 	  fprintf(stderr," P300CRB\n");
-	  mem[B] = 0;
+	  crs[B] = 0;
+	  crs[FLTD] = 0;
 	  continue;
 	}
 
 	if (inst == 0140015) {                /* CRB */
 	  fprintf(stderr," CRB\n");
-	  mem[B] = 0;
+	  crs[B] = 0;
 	  continue;
 	}
 
 	if (inst == 0140016) {                /* FDBL */
 	  fprintf(stderr," FDBL\n");
+	  crs[FLTD] = 0;
 	  continue;
 	}
 
 	if (inst == 0140010) {                /* CRL */
 	  fprintf(stderr," CRL\n");
-	  mem[A] = 0; mem[B] = 0;
+	  *(int *)(crs+L) = 0;
 	  continue;
 	}
-
-	/* this should set cc */
 
 	if (inst == 0140214) {                /* CAZ */
 	  fprintf(stderr," CAZ\n");
@@ -1249,207 +1302,207 @@ bidy:
 	  continue;
 	}
 
-	/* NOTE: using "if mem[X]++ == 0" doesn't work because of unsigned
+	/* NOTE: using "if crs[X]++ == 0" doesn't work because of unsigned
 	   short type promotion! */
 
 	if (inst == 0140114) {                /* IRX */
 	  fprintf(stderr," IRX\n");
-	  mem[X]++;
-	  if (mem[X] == 0)
-	    mem[P]++;
+	  crs[X]++;
+	  if (crs[X] == 0)
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0140210) {                /* DRX */
 	  fprintf(stderr," DRX\n");
-	  mem[X]--;
-	  if (mem[X] == 0)
-	    mem[P]++;
+	  crs[X]--;
+	  if (crs[X] == 0)
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0141240) {                /* ICR */
 	  fprintf(stderr," ICR\n");
-	  mem[A] = mem[A] << 8;
+	  crs[A] = crs[A] << 8;
 	  continue;
 	}
 
 	if (inst == 0141140) {                /* ICL */
 	  fprintf(stderr," ICL\n");
-	  mem[A] = mem[A] >> 8;
+	  crs[A] = crs[A] >> 8;
 	  continue;
 	}
 
 	if (inst == 0141340) {                /* ICA */
 	  fprintf(stderr," ICA\n");
-	  mem[A] = (mem[A] >> 8) | (mem[A] << 8);
+	  crs[A] = (crs[A] >> 8) | (crs[A] << 8);
 	  continue;
 	}
 
 	if (inst == 0140417) {                /* LT */
 	  fprintf(stderr," LT\n");
-	  mem[A] = 1;
-	  keys = (keys & ~0300);
+	  crs[A] = 1;
+	  crs[KEYS] = (crs[KEYS] & ~0300);
 	  continue;
 	}
 
 	if (inst == 0140416) {                /* LF */
 	  fprintf(stderr," LF\n");
-	  mem[A] = 0;
-	  keys = (keys & ~0300) | 0100;
+	  crs[A] = 0;
+	  crs[KEYS] = (crs[KEYS] & ~0300) | 0100;
 	  continue;
 	}
 
 	if (inst == 0140314) {
 	  fprintf(stderr," TAB\n");
-	  mem[B] = mem[A];
+	  crs[B] = crs[A];
 	  continue;
 	}
 
 	if (inst == 0140504) {
 	  fprintf(stderr," TAX\n");
-	  mem[X] = mem[A];
+	  crs[X] = crs[A];
 	  continue;
 	}
 
 	if (inst == 0140505) {
 	  fprintf(stderr," TAY\n");
-	  mem[Y] = mem[A];
+	  crs[Y] = crs[A];
 	  continue;
 	}
 
 	if (inst == 0140604) {
 	  fprintf(stderr," TBA\n");
-	  mem[A] = mem[B];
+	  crs[A] = crs[B];
 	  continue;
 	}
 
 	if (inst == 0141034) {
 	  fprintf(stderr," TXA\n");
-	  mem[A] = mem[X];
+	  crs[A] = crs[X];
 	  continue;
 	}
 
 	if (inst == 0141124) {
 	  fprintf(stderr," TYA\n");
-	  mem[A] = mem[Y];
+	  crs[A] = crs[Y];
 	  continue;
 	}
 
 	if (inst == 0140104) {
 	  fprintf(stderr," XCA\n");
-	  mem[B] = mem[A];
-	  mem[A] = 0;
+	  crs[B] = crs[A];
+	  crs[A] = 0;
 	  continue;
 	}
 
 	if (inst == 0140204) {
 	  fprintf(stderr," XCB\n");
-	  mem[A] = mem[B];
-	  mem[B] = 0;
+	  crs[A] = crs[B];
+	  crs[B] = 0;
 	  continue;
 	}
 
 	if (inst == 0140407) {
 	  fprintf(stderr," TCA\n");
-	  *(short *)(mem+A) = - (*(short *)(mem+A));
+	  *(short *)(crs+A) = - (*(short *)(crs+A));
 	  SETCC_A;
-	  if (*(unsigned short *)(mem+A) == 0x8000)
+	  if (crs[A] == 0x8000)
 	    cpuexception('i');
 	  continue;
 	}
 
 	if (inst == 0141210) {
 	  fprintf(stderr," TCL\n");
-	  *(int *)(mem+A) = - (*(int *)(mem+A));
+	  *(int *)(crs+L) = - (*(int *)(crs+L));
 	  SETCC_L;
-	  if (*(unsigned int *)(mem+A) == 0x80000000)
+	  if (*(unsigned int *)(crs+L) == 0x80000000)
 	    cpuexception('i');
 	  continue;
 	}
 
 	if (inst == 0140600) {
 	  fprintf(stderr," SCB\n");
-	  newkeys(keys | 0100000);
+	  newkeys(crs[KEYS] | 0100000);
 	  continue;
 	}
 
 	if (inst == 0140200) {
 	  fprintf(stderr," RCB\n");
-	  newkeys(keys & 077777);
+	  newkeys(crs[KEYS] & 077777);
 	  continue;
 	}
 
 	if (inst == 0140024) {
 	  fprintf(stderr," CHS\n");
-	  mem[A] ^= 0x8000;
+	  crs[A] ^= 0x8000;
 	  continue;
 	}
 
 	if (inst == 0140500) {
 	  fprintf(stderr," SSM\n");
-	  mem[A] |= 0100000;
+	  crs[A] |= 0100000;
 	  continue;
 	}
 
 	if (inst == 0140100) {
 	  fprintf(stderr," SSP\n");
-	  mem[A] &= 077777;
+	  crs[A] &= 077777;
 	  continue;
 	}
 
 	if (inst == 0140401) {
 	  fprintf(stderr," CMA\n");
-	  mem[A] = ~mem[A];
+	  crs[A] = ~crs[A];
 	  continue;
 	}
 
 	if (inst == 0140320) {
 	  fprintf(stderr," CSA\n");
-	  newkeys((keys & 077777) | (mem[A] & 0x8000));
-	  mem[A] = mem[A] & 077777;
+	  newkeys((crs[KEYS] & 077777) | (crs[A] & 0x8000));
+	  crs[A] = crs[A] & 077777;
 	  continue;
 	}
 
 	if (inst == 0141500) {
 	  fprintf(stderr," LCLT\n");
 lclt:
-	  mem[A] = ((keys & 0300) == 0200);
+	  crs[A] = ((crs[KEYS] & 0300) == 0200);
 	  continue;
 	}
 
 	if (inst == 0141501) {
 	  fprintf(stderr," LCLE\n");
 lcle:
-	  mem[A] = ((keys & 0300) != 0);
+	  crs[A] = ((crs[KEYS] & 0300) != 0);
 	  continue;
 	}
 
 	if (inst == 0141503) {
 	  fprintf(stderr," LCEQ\n");
 lceq:
-	  mem[A] = ((keys & 0100) != 0);
+	  crs[A] = ((crs[KEYS] & 0100) != 0);
 	  continue;
 	}
 
 	if (inst == 0141502) {
 	  fprintf(stderr," LCNE\n");
 lcne:
-	  mem[A] = ((keys & 0100) == 0);
+	  crs[A] = ((crs[KEYS] & 0100) == 0);
 	  continue;
 	}
 
 	if (inst == 0141504) {
 	  fprintf(stderr," LCGE\n");
 lcge:
-	  mem[A] = !(keys & 0200) || (keys & 0100);
+	  crs[A] = !(crs[KEYS] & 0200) || (crs[KEYS] & 0100);
 	  continue;
 	}
 
 	if (inst == 0141505) {
 	  fprintf(stderr," LCGT\n");
 lcgt:
-	  mem[A] = ((keys & 0300) == 0);
+	  crs[A] = ((crs[KEYS] & 0300) == 0);
 	  continue;
 	}
 
@@ -1505,8 +1558,6 @@ lcgt:
 	  fprintf(stderr," LLNE\n");
 	  SETCC_L;
 	  goto lcne;
-	  mem[A] = *(int *)(mem+A) != 0;
-	  continue;
 	}
 
 	if (inst == 0141515) {
@@ -1553,13 +1604,13 @@ lcgt:
 
 	if (inst == 0140550) {
 	  fprintf(stderr," FLOT\n");
-	  templ = mem[A];
-	  templ = mem[B] | (templ<<15);
+	  templ = crs[A];
+	  templ = crs[B] | (templ<<15);
 	  tempf = templ;
 	  ieeepr4(&tempf);
-	  mem[FLTH] = (*(unsigned int *)&tempf) >> 16;
-	  mem[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
-	  mem[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
+	  crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
+	  crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
+	  crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
 	  continue;
 	}
 
@@ -1570,17 +1621,18 @@ lcgt:
 
 	if (inst == 0140574) {
 	  fprintf(stderr," DFCM\n");
-	  fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", mem[FEXP], mem[FLTH], mem[FLTL]);
-	  tempda[0] = mem[FLTH];
-	  tempda[1] = mem[FLTL];
-	  tempda[2] = 0;
-	  tempda[3] = mem[FEXP];
+	  fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
+	  tempda[0] = crs[FLTH];
+	  tempda[1] = crs[FLTL];
+	  tempda[2] = crs[FLTD];
+	  tempda[3] = crs[FEXP];
 	  prieee8(tempda); 
 	  *(double *)tempda = -(*(double *)tempda);
 	  ieeepr8(tempda);
-	  mem[FLTH] = tempda[0];
-	  mem[FLTL] = tempda[1];
-	  mem[FEXP] = tempda[3];
+	  crs[FLTH] = tempda[0];
+	  crs[FLTL] = tempda[1];
+	  crs[FLTD] = tempda[2];
+	  crs[FEXP] = tempda[3];
 	  SETC(0);
 	  continue;
 	}
@@ -1588,141 +1640,154 @@ lcgt:
 	if (inst == 0140000) {
 	  fprintf(stderr," ADLL\n");
 	  exit(1);
-	  if (keys & 020000)
-	    (*(int *)(mem+A))++;
+	  if (crs[KEYS] & 020000)
+	    (*(int *)(crs+A))++;
 	  continue;
 	}
 
 	if (inst == 0140530) {
 	  fprintf(stderr," FCM\n");
-	  fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", mem[FEXP], mem[FLTH], mem[FLTL]);
-	  *(int *)&tempf = (mem[FLTH]<<16) | (mem[FLTL] & 0xFF00) | (mem[FEXP] & 0xFF);
+	  fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
+	  *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
 	  prieee4(&tempf);
 	  tempf = -tempf;
 	  ieeepr4(&tempf);
-	  mem[FLTH] = (*(unsigned int *)&tempf) >> 16;
-	  mem[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
-	  mem[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
+	  crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
+	  crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
+	  crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
 	  SETC(0);
 	  continue;
 	}
 
 	if (inst == 0140510) {
 	  fprintf(stderr," FSZE\n");
-	  if (*(int *)(mem+FLTH) == 0 && mem[FEXP] == 0)
-	    mem[P]++;
+	  if (*(int *)(crs+FLTH) == 0 && crs[FEXP] == 0)
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0140511) {
 	  fprintf(stderr," FSNZ\n");
-	  if (*(int *)(mem+FLTH) != 0 || mem[FEXP] != 0)
-	    mem[P]++;
+	  if (*(int *)(crs+FLTH) != 0 || crs[FEXP] != 0)
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0140512) {
 	  fprintf(stderr," FSMI\n");
-	  if (*(int *)(mem+FLTH) < 0)
-	    mem[P]++;
+	  if (*(int *)(crs+FLTH) < 0)
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0140513) {
 	  fprintf(stderr," FSPL\n");
-	  if (*(int *)(mem+FLTH) >= 0)
-	    mem[P]++;
+	  if (*(int *)(crs+FLTH) >= 0)
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0140514) {
 	  fprintf(stderr," FSLE\n");
-	  if (*(int *)(mem+FLTH) < 0 || (*(int *)(mem+FLTH) == 0 && mem[FEXP] == 0))
-	    mem[P]++;
+	  if (*(int *)(crs+FLTH) < 0 || (*(int *)(crs+FLTH) == 0 && crs[FEXP] == 0))
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0140515) {
 	  fprintf(stderr," FSGT\n");
-	  if (*(int *)(mem+FLTH) >= 0 && (*(int *)(mem+FLTH) != 0 || mem[FEXP] != 0))
-	    mem[P]++;
+	  if (*(int *)(crs+FLTH) >= 0 && (*(int *)(crs+FLTH) != 0 || crs[FEXP] != 0))
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0140554) {
 	  fprintf(stderr," INT\n");
-	  *(int *)&tempf = (mem[FLTH]<<16) | (mem[FLTL] & 0xFF00) | (mem[FEXP] & 0xFF);
+	  *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
 	  prieee4(&tempf);
 	  templ = tempf;
-	  mem[B] = templ & 0x7FFF;
-	  mem[A] = templ >> 15;
+	  crs[B] = templ & 0x7FFF;
+	  crs[A] = templ >> 15;
 	  continue;
 	}
 
 	if (inst == 0141414) {
 	  fprintf(stderr," ILE\n");
-	  templ = *(int *)(mem+A);
-	  *(int *)(mem+A) = *(int *)(mem+E);
-	  *(int *)(mem+E) = templ;
+	  templ = *(int *)(crs+L);
+	  *(int *)(crs+L) = *(int *)(crs+E);
+	  *(int *)(crs+E) = templ;
 	  continue;
 	}
 
 	if (inst == 0141707) {
 	  fprintf(stderr," BMLT\n");
-	  if (keys & 020000)
+	  if (crs[KEYS] & 020000)
 	    goto bclt;
-	  mem[P]++;
+	  RPL++;
 	  continue;
 	}
 
 	if (inst == 0141711) {
 	  fprintf(stderr," BMLE\n");
-	  if (keys & 020000)
+	  if (crs[KEYS] & 020000)
 	    goto bcle;
-	  mem[P]++;
+	  RPL++;
 	  continue;
 	}
 
 	if (inst == 0141602) {
 	  fprintf(stderr," BMEQ\n");
-	  if (keys & 020000)
+	  if (crs[KEYS] & 020000)
 	    goto bceq;
-	  mem[P]++;
+	  RPL++;
 	  continue;
 	}
 
 	if (inst == 0141603) {
 	  fprintf(stderr," BMNE\n");
-	  if (keys & 020000)
+	  if (crs[KEYS] & 020000)
 	    goto bcne;
-	  mem[P]++;
+	  RPL++;
 	  continue;
 	}
 
 	if (inst == 0141606) {
 	  fprintf(stderr," BMGE\n");
-	  if (keys & 020000)
+	  if (crs[KEYS] & 020000)
 	    goto bcge;
-	  mem[P]++;
+	  RPL++;
 	  continue;
 	}
 
 	if (inst == 0141710) {
 	  fprintf(stderr," BMGT\n");
-	  if (keys & 020000)
+	  if (crs[KEYS] & 020000)
 	    goto bcgt;
-	  mem[P]++;
+	  RPL++;
+	  continue;
+	}
+
+	if (inst == 0141404) {
+	  fprintf(stderr," CRE\n");
+	  *(int *)(crs+E) = 0;
+	  continue;
+	}
+
+	if (inst == 0141410) {
+	  fprintf(stderr," CRLE\n");
+	  *(int *)(crs+L) = *(int *)(crs+E) = 0;
+	  continue;
+	}
+
+	if (inst == 0141414) {
+	  fprintf(stderr," ILE\n");
+	  templ = *(int *)(crs+L);
+	  *(int *)(crs+L) = *(int *)(crs+E);
+	  *(int *)(crs+E) = templ;
 	  continue;
 	}
 
 	fprintf(stderr," unrecognized generic class 3 instruction!\n");
-	if (mem[066] != 0) {
-	  fprintf(stderr," JST* '66 [%o]\n", mem[066]);
-	  mem[mem[066]] = mem[P];
-	  mem[P] = mem[066]+1;
-	  continue;
-	}
-
 	exit(1);
 	
       }
@@ -1737,44 +1802,44 @@ lcgt:
 	  case 00000: /* LRL */
 	    fprintf(stderr," LRL %d\n", scount);
 	    if (scount <= 32) {
-	      utempl = *(unsigned int *)(mem+A);
+	      utempl = *(unsigned int *)(crs+A);
 	      SETC(utempl & bitmask32[33-scount]);
 	      utempl = utempl >> scount;
-	      *(unsigned int *)(mem+A) = utempl;
+	      *(unsigned int *)(crs+A) = utempl;
 	    } else {
-	      *(unsigned int *)(mem+A) = 0;
+	      *(unsigned int *)(crs+A) = 0;
 	      SETC(0);
 	    }
 	    break;
 
 	  case 00100: /* LRS (different in R & V modes) */
 	    fprintf(stderr," LRS %d\n", scount);
-	    if (keys & 010000) {          /* V/I mode */
+	    if (crs[KEYS] & 010000) {          /* V/I mode */
 	      if (scount <= 32) {
-		templ = *(int *)(mem+A);
+		templ = *(int *)(crs+A);
 		SETC(templ & bitmask32[33-scount]);
 		templ = templ >> scount;
-		*(int *)(mem+A) = templ;
-	      } else if (mem[A] & 0x8000) {
-		*(int *)(mem+A) = 0xFFFFFFFF;
+		*(int *)(crs+A) = templ;
+	      } else if (crs[A] & 0x8000) {
+		*(int *)(crs+A) = 0xFFFFFFFF;
 		SETC(1);
 	      } else {
-		*(int *)(mem+A) = 0;
+		*(int *)(crs+A) = 0;
 		SETC(0);
 	      }
 	    } else {
 	      if (scount <= 31) {
-		templ = mem[A];
-		templ = (templ<<16) | (mem[B]<<1);
+		templ = crs[A];
+		templ = (templ<<16) | (crs[B]<<1);
 		SETC(templ & bitmask32[32-scount]);
 		templ = templ >> (scount+1);
-		mem[A] = templ >> 15;
-		mem[B] = templ & 0x7FFF;
-	      } else if (mem[A] & 0x8000) {
-		*(int *)(mem+A) = 0xFFFF7FFF;
+		crs[A] = templ >> 15;
+		crs[B] = templ & 0x7FFF;
+	      } else if (crs[A] & 0x8000) {
+		*(int *)(crs+A) = 0xFFFF7FFF;
 		SETC(1);
 	      } else {
-		*(int *)(mem+A) = 0;
+		*(int *)(crs+A) = 0;
 		SETC(0);
 	      }
 	    }
@@ -1784,21 +1849,21 @@ lcgt:
 	    fprintf(stderr," LRR %d\n", scount);
 	    if (scount > 32)
 	      scount = scount - 32;
-	    utempl = *(unsigned int *)(mem+A);
+	    utempl = *(unsigned int *)(crs+A);
 	    SETC(utempl & bitmask32[33-scount]);
 	    utempl = (utempl >> scount) | (utempl << (32-scount));
-	    *(unsigned int *)(mem+A) = utempl;
+	    *(unsigned int *)(crs+A) = utempl;
 	    break;
 
 	  case 00400: /* ARL */
 	    fprintf(stderr," ARL %d\n", scount);
 	    if (scount <= 16) {
-	      utempa = mem[A];
+	      utempa = crs[A];
 	      SETC(utempa & bitmask16[17-scount]);
 	      utempa = utempa >> scount;
-	      mem[A] = utempa;
+	      crs[A] = utempa;
 	    } else {
-	      mem[A] = 0;
+	      crs[A] = 0;
 	      SETC(0);
 	    }
 	    break;
@@ -1806,15 +1871,15 @@ lcgt:
 	  case 00500: /* ARS */
 	    fprintf(stderr," ARS %d\n", scount);
 	    if (scount <= 16) {
-	      tempa = *(short *)(mem+A);
+	      tempa = *(short *)(crs+A);
 	      SETC(tempa & bitmask16[17-scount]);
 	      tempa = tempa >> scount;
-	      *(short *)(mem+A) = tempa;
-	    } else if (mem[A] & 0x8000) {
-	      *(short *)(mem+A) = 0xFFFF;
+	      *(short *)(crs+A) = tempa;
+	    } else if (crs[A] & 0x8000) {
+	      *(short *)(crs+A) = 0xFFFF;
 	      SETC(1);
 	    } else {
-	      *(short *)(mem+A) = 0;
+	      *(short *)(crs+A) = 0;
 	      SETC(0);
 	    }
 	    break;
@@ -1822,51 +1887,51 @@ lcgt:
 	  case 00600: /* ARR */
 	    fprintf(stderr," ARR %d\n", scount);
 	    scount = ((scount-1)%16)+1;   /* make scount 1-16 */
-	    SETC(mem[A] & bitmask16[17-scount]);
-	    mem[A] = (mem[A] >> scount) | (mem[A] << (16-scount));
+	    SETC(crs[A] & bitmask16[17-scount]);
+	    crs[A] = (crs[A] >> scount) | (crs[A] << (16-scount));
 	    break;
 
 	  case 01000: /* LLL */
 	    fprintf(stderr," LLL %d\n", scount);
 	    if (scount <= 32) {
-	      utempl = *(unsigned int *)(mem+A);
+	      utempl = *(unsigned int *)(crs+A);
 	      SETC(utempl & bitmask32[scount]);
 	      utempl = utempl << scount;
-	      *(unsigned int *)(mem+A) = utempl;
+	      *(unsigned int *)(crs+A) = utempl;
 	    } else {
-	      *(unsigned int *)(mem+A) = 0;
+	      *(unsigned int *)(crs+A) = 0;
 	      SETC(0);
 	    }
 	    break;
 
 	  case 01100: /* LLS (different in R/V modes) */
 	    fprintf(stderr," LLS %d\n", scount);
-	    if (keys & 010000) {          /* V/I mode */
+	    if (crs[KEYS] & 010000) {          /* V/I mode */
 	      if (scount < 32) {
 		templ = 0x80000000;
 		templ = templ >> scount;         /* create mask */
-		templ = templ & *(int *)(mem+A); /* grab bits */
+		templ = templ & *(int *)(crs+A); /* grab bits */
 		templ = templ >> (31-scount);    /* extend them */
 		SETC(!(templ == -1 || templ == 0));
-		*(int *)(mem+A) = *(int *)(mem+A) << scount;
+		*(int *)(crs+A) = *(int *)(crs+A) << scount;
 	      } else {
-		*(int *)(mem+A) = 0;
+		*(int *)(crs+A) = 0;
 		SETC(0);
 	      }
 	    } else {
               if (scount < 31) {
-                templ = mem[A];
-                templ = (templ<<16) | (mem[B]<<1);
+                templ = crs[A];
+                templ = (templ<<16) | (crs[B]<<1);
 		templ2 = 0x80000000;
 		templ2 = templ2 >> scount;         /* create mask */
 		templ2 = templ2 & templ;           /* grab bits */
 		templ2 = templ2 >> (31-scount);    /* extend them */
 		SETC(!(templ2 == -1 || templ2 == 0));
                 templ = templ << scount;
-                mem[A] = templ >> 16;
-                mem[B] = (templ >> 1) & 0x7FFF;
+                crs[A] = templ >> 16;
+                crs[B] = (templ >> 1) & 0x7FFF;
               } else {
-                *(int *)(mem+A) = 0;
+                *(int *)(crs+A) = 0;
                 SETC(0);
               }
 	    }
@@ -1876,19 +1941,19 @@ lcgt:
 	    fprintf(stderr," LLR %d\n", scount);
 	    if (scount > 32)
 	      scount = scount - 32;
-	    utempl = *(unsigned int *)(mem+A);
+	    utempl = *(unsigned int *)(crs+A);
 	    SETC(utempl & bitmask32[scount]);
 	    utempl = (utempl << scount) | (utempl >> (32-scount));
-	    *(unsigned int *)(mem+A) = utempl;
+	    *(unsigned int *)(crs+A) = utempl;
 	    break;
 
 	  case 01400: /* ALL */
 	    fprintf(stderr," ALL %d\n", scount);
 	    if (scount <= 16) {
-	      SETC(mem[A] & bitmask16[scount]);
-	      mem[A] = mem[A] << scount;
+	      SETC(crs[A] & bitmask16[scount]);
+	      crs[A] = crs[A] << scount;
 	    } else {
-	      mem[A] = 0;
+	      crs[A] = 0;
 	      SETC(0);
 	    }
 	    break;
@@ -1898,14 +1963,14 @@ lcgt:
 	    if (scount <= 15) {
 	      tempa = 0100000;
 	      tempa = tempa >> scount;         /* create mask */
-	      tempa = tempa & mem[A];          /* grab bits */
+	      tempa = tempa & crs[A];          /* grab bits */
 	      tempa = tempa >> (15-scount);    /* extend them */
 	      SETC(!(tempa == -1 || tempa == 0));
-	      mem[A] = mem[A] << scount;
-	    } else if (mem[A] == 0) {
+	      crs[A] = crs[A] << scount;
+	    } else if (crs[A] == 0) {
 	      SETC(0);
 	    } else {
-	      mem[A] = 0;
+	      crs[A] = 0;
 	      SETC(1);
 	    }
 	    break;
@@ -1913,8 +1978,8 @@ lcgt:
 	  case 01600: /* ALR */
 	    fprintf(stderr," ALR %d\n", scount);
 	    scount = ((scount-1)%16)+1;   /* make scount 1-16 */
-	    SETC(mem[A] & bitmask16[scount]);
-	    mem[A] = (mem[A] << scount) | (mem[A] >> (16-scount));
+	    SETC(crs[A] & bitmask16[scount]);
+	    crs[A] = (crs[A] << scount) | (crs[A] >> (16-scount));
 	    break;
 
 	  default:
@@ -1934,91 +1999,91 @@ lcgt:
 
 	if (inst == 0100000) {
 	  fprintf(stderr," SKP\n");
-	  mem[P]++;
+	  RPL++;
 	  continue;
 	}
 
 	if (inst == 0101400) {
 	  fprintf(stderr," SMI/SLT\n");
-	  if (*(short *)(mem+A) < 0)
-	    mem[P]++;
+	  if (*(short *)(crs+A) < 0)
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0100400) {
 	  fprintf(stderr," SPL/SGE\n");
-	  if (*(short *)(mem+A) >= 0)
-	    mem[P]++;
+	  if (*(short *)(crs+A) >= 0)
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0101100) {
 	  fprintf(stderr," SLN\n");
-	  if (mem[A] & 1)
-	    mem[P]++;
+	  if (crs[A] & 1)
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0100100) {
 	  fprintf(stderr," SLZ\n");
-	  if (!(mem[A] & 1))
-	    mem[P]++;
+	  if (!(crs[A] & 1))
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0101040) {
 	  fprintf(stderr," SNZ/SNE\n");
-	  if (mem[A] != 0)
-	    mem[P]++;
+	  if (crs[A] != 0)
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0100040) {
 	  fprintf(stderr," SZE/SEQ\n");
-	  if (mem[A] == 0)
-	    mem[P]++;
+	  if (crs[A] == 0)
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0101220) {
 	  fprintf(stderr," SLE\n");
-	  if (*(short *)(mem+A) <= 0)
-	    mem[P]++;
+	  if (*(short *)(crs+A) <= 0)
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0100220) {
 	  fprintf(stderr," SGT\n");
-	  if (*(short *)(mem+A) > 0)
-	    mem[P]++;
+	  if (*(short *)(crs+A) > 0)
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0101001) {
 	  fprintf(stderr," SSC\n");
-	  if (keys & 0100000)
-	    mem[P]++;
+	  if (crs[KEYS] & 0100000)
+	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0100001) {
 	  fprintf(stderr," SRC\n");
-	  if (!(keys & 0100000))
-	    mem[P]++;
+	  if (!(crs[KEYS] & 0100000))
+	    RPL++;
 	  continue;
 	}
 
 	if ((inst & 0177760) == 0100260) {
 	  fprintf(stderr," SAR %d\n", (inst & 017)+1);
-	  if (!(mem[A] & bitmask16[(inst & 017)+1]))
-	    mem[P]++;
+	  if (!(crs[A] & bitmask16[(inst & 017)+1]))
+	    RPL++;
 	  continue;
 	}
 
 	if ((inst & 0177760) == 0101260) {
 	  fprintf(stderr," SAS %d\n", (inst & 017)+1);
-	  if (mem[A] & bitmask16[(inst & 017)+1])
-	    mem[P]++;
+	  if (crs[A] & bitmask16[(inst & 017)+1])
+	    RPL++;
 	  continue;
 	}
 
@@ -2030,7 +2095,7 @@ lcgt:
 
     /* here for non-generic instructions: memory references or pio */
 
-    if (keys & 010000) {
+    if (crs[KEYS] & 010000) {
       fprintf(stderr," VI-mode MR decode\n");
       exit(1);
     }
@@ -2080,7 +2145,7 @@ lcgt:
 
     fprintf(stderr," opcode=%5#0o, i=%o, x=%o\n", opcode, i, x);
 
-    switch ((keys & 016000) >> 10) {
+    switch ((crs[KEYS] & 016000) >> 10) {
     case 0:  /* 16S */
       ea = ea16s(inst, i, x);
       break;
@@ -2100,224 +2165,235 @@ lcgt:
       exit(1);
       break;
     default:
-      fprintf(stderr,"Bad CPU mode in EA calculation, keys = %o\n", keys);
+      fprintf(stderr,"Bad CPU mode in EA calculation, keys = %o\n", crs[KEYS]);
       exit(1);
     }
 
-    fprintf(stderr," ea=%o (%o/%o), [ea]='%o/%d\n", ea, ea>>16, ea & 0xFFFF, mem[ea], *(short *)(mem+ea));
+    m = get16(ea);
+    fprintf(stderr," ea=%o (%o/%o), [ea]='%o/%d\n", ea, ea>>16, ea & 0xFFFF, m, *(short *)&m);
 
     if (opcode == 00100) {
       fprintf(stderr," JMP\n");
-      mem[P] = ea;
+      RPL = ea;
       continue;
     }
 
     if (opcode == 00200) {
-      if ((keys & 050000) == 040000) {  /* R-mode and DP */
+      crs[A] = get16(ea);
+      if ((crs[KEYS] & 050000) == 040000) {  /* R-mode and DP */
 	fprintf(stderr," DLD\n");
-	*(unsigned int *)(mem+A) = *(unsigned int *)(mem+ea);
+	crs[B] = get16(ea+1);
       } else {
 	fprintf(stderr," LDA\n");
-	mem[A] = mem[ea];
       }
       continue;
     }
 
     if (opcode == 00400) {
-      if ((keys & 050000) == 040000) {
+      put16(crs[A],ea);
+      if ((crs[KEYS] & 050000) == 040000) {
 	fprintf(stderr," DST\n");
-	*(unsigned int *)(mem+ea) = *(unsigned int *)(mem+A);
+	put16(crs[B],ea+1);
       } else {
 	fprintf(stderr," STA\n");
-	mem[ea] = mem[A];
       }
       continue;
     }
 
     if (opcode == 00600) {
-      utempa = mem[A];
-      if ((keys & 050000) == 040000) {
+      utempa = crs[A];
+      m = get16(ea);
+      if ((crs[KEYS] & 050000) == 040000) {
 	fprintf(stderr," DAD\n");
-	mem[B] += mem[ea+1];
-	if (mem[B] & 0x8000) {
-	  mem[A]++;
-	  mem[B] &= 0x7fff;
+	crs[B] += get16(ea+1);
+	if (crs[B] & 0x8000) {
+	  crs[A]++;
+	  crs[B] &= 0x7fff;
 	}
-	mem[A] += mem[ea];
+	crs[A] += m;
 	SETCC_L;
       } else {
 	fprintf(stderr," ADD\n");
-	*(short *)(mem+A) += *(short *)(mem+ea);
+	crs[A] += m;
 	SETCC_A;
       }
-      SETC(((~utempa ^ mem[ea]) & (utempa ^ mem[A])) & 0x8000);
+      SETC(((~utempa ^ m) & (utempa ^ crs[A])) & 0x8000);
       continue;
     }
 
     if (opcode == 00700) {
-      utempa = mem[A];
-      if ((keys & 050000) == 040000) {
+      utempa = crs[A];
+      m = get16(ea);
+      if ((crs[KEYS] & 050000) == 040000) {
 	fprintf(stderr," DSB\n");
-	mem[B] -= mem[ea+1];
-	if (mem[B] & 0x8000) {
-	  mem[A]--;
-	  mem[B] &= 0x7fff;
+	crs[B] -= get16(ea+1);
+	if (crs[B] & 0x8000) {
+	  crs[A]--;
+	  crs[B] &= 0x7fff;
 	}
-	mem[A] -= mem[ea];
+	crs[A] -= m;
 	SETCC_L;
       } else {
 	fprintf(stderr," SUB\n");
-	*(short *)(mem+A) -= *(short *)(mem+ea);
+	crs[A] -= m;
 	SETCC_A;
       }
-      SETC(((~utempa ^ mem[ea]) & (utempa ^ mem[A])) & 0x8000);
+      SETC(((~utempa ^ m) & (utempa ^ crs[A])) & 0x8000);
       continue;
     }
 
     if (opcode == 00300) {
       fprintf(stderr," ANA\n");
-      mem[A] &= mem[ea];
+      crs[A] &= get16(ea);
       continue;
     }
 
     if (opcode == 00500) {
       fprintf(stderr," ERA\n");
-      mem[A] ^= mem[ea];
+      crs[A] ^= get16(ea);
       continue;
     }
 
     if (opcode == 00302) {
       fprintf(stderr," ORA\n");
-      mem[A] |= mem[ea];
+      crs[A] |= get16(ea);
       continue;
     }
 
     if (opcode == 01000) {
       fprintf(stderr," JST\n");
-      mem[ea] = mem[P];
-      mem[P] = ea+1;
+      put16(RPL,ea);
+      RPL = ea+1;
       continue;
     }
 
     if (opcode == 01100) {
       fprintf(stderr," CAS\n");
-      utempa = mem[A];
-      *(short *)(mem+A) -= *(short *)(mem+ea);
+      utempa = crs[A];
+      crs[A] -= get16(ea);
       SETCC_A;
-      mem[A] = utempa;
+      crs[A] = utempa;
 compskip:
-      if (keys & 0200)
-	mem[P] += 2;
-      else if (keys & 0100)
-	mem[P]++;
+      if (crs[KEYS] & 0200)
+	RPL += 2;
+      else if (crs[KEYS] & 0100)
+	RPL++;
       continue;
     }
 
     if (opcode == 01200) {
       fprintf(stderr," IRS\n");
-      mem[ea]++;
-      if (mem[ea] == 0)
-	mem[P]++;
+      m = get16(ea) + 1;
+      put16(m,ea);
+      if (m == 0)
+	RPL++;
       continue;
     }
 
     if (opcode == 01300) {
       fprintf(stderr," IMA\n");
-      tempa = mem[ea];
-      mem[ea] = mem[A];
-      mem[A] = tempa;
+      m = get16(ea);
+      put16(crs[A],ea);
+      crs[A] = m;
       continue;
     }
 
     if (opcode == 01400) {
       /* if V-mode, JSY, else (LDX in R-mode?) */
-      fprintf(stderr," JSY/LDX\n");
-      exit(1);
+      fprintf(stderr," JSY\n");
+      crs[Y] = RPL;
+      RPL = ea;
+      continue;
     }
 
     if (opcode == 01500) {
       fprintf(stderr," STX\n");
-      mem[ea] = mem[X];
+      put16(crs[X],ea);
       continue;
     }
 
     if (opcode == 01600) {
       fprintf(stderr," MPY\n");
-      templ = *(short *)(mem+A) * *(short *)(mem+ea);
-      if (keys & 010000) {          /* V/I mode */
-	*(int *)(mem+A) = templ;
+      m = get16(ea);
+      templ = *(short *)(crs+A) * *(short *)&m;
+      if (crs[KEYS] & 010000) {          /* V/I mode */
+	*(int *)(crs+L) = templ;
       } else {                      /* R/S mode */
-	mem[A] = (templ >> 15);
-	mem[B] = templ & 077777;
+	crs[A] = (templ >> 15);
+	crs[B] = templ & 077777;
       }
       continue;
     }
 
     if (opcode == 01700) {
       fprintf(stderr," DIV\n");
-      if (keys & 010000) {          /* V/I mode */
-	templ = *(int *)(mem+A);
+      if (crs[KEYS] & 010000) {          /* V/I mode */
+	templ = *(int *)(crs+A);
       } else {                      /* R/S mode */
-	templ = mem[A];           /* convert to 32-bit signed */
-	templ = mem[B] | (templ<<15);
+	templ = crs[A];           /* convert to 32-bit signed */
+	templ = crs[B] | (templ<<15);
       }
-      mem[A] = templ / *(short *)(mem+ea);
-      mem[B] = templ % *(short *)(mem+ea);
+      m = get16(ea);
+      crs[A] = templ / *(short *)&m;
+      crs[B] = templ % *(short *)&m;
       continue;
     }
 
     if (opcode == 03500) {
       fprintf(stderr," LDX\n");
-      mem[X] = mem[ea];
+      crs[X] = get16(ea);
       continue;
     }
 
     if (opcode == 00101) {
-      if (keys & 010000) {          /* V/I mode */
+      if (crs[KEYS] & 010000) {          /* V/I mode */
 	fprintf(stderr," EAL\n");
-	exit(1);
-	*(unsigned int *)(mem+A) = ea32;
+	*(unsigned int *)(crs+L) = ea;
       } else {
 	fprintf(stderr," EAA\n");
-	mem[A] = ea;
+	crs[A] = ea;
       }
       continue;
     }
 
     if (opcode == 00101) {
       fprintf(stderr," EAA\n");
-      mem[A] = ea;
+      crs[A] = ea;
       continue;
     }
 
     /* NOTE: P300 u-code listings show CC set on Jxx instructions */
 
     if (opcode == 00203) {
-      if (keys & 010000) {          /* V/I mode */
+      if (crs[KEYS] & 010000) {          /* V/I mode */
 	fprintf(stderr," LDL\n");
-	*(unsigned int *)(mem+A) = *(unsigned int *)(mem+ea);
+	crs[A] = get16(ea);
+	crs[B] = get16(ea);
       } else {
 	fprintf(stderr," JEQ\n");
-	if (*(short *)(mem+A) == 0)
-	  mem[P] = ea;
+	if (*(short *)(crs+A) == 0)
+	  RPL = ea;
       }
       continue;
     }
 
     if (opcode == 00703) {
-      if (keys & 010000) {          /* V/I mode */
+      if (crs[KEYS] & 010000) {          /* V/I mode */
 	fprintf(stderr," SBL\n");
-	*(int *)(mem+A) -= *(int *)(mem+ea);
+	m = get16(ea);
+	templ = m<<16 | get16(ea+1);
+	*(int *)(crs+L) -= templ;
+	/* NOTE: need to set C bit here! */
       } else {
 	fprintf(stderr," JGE\n");
-	if (*(short *)(mem+A) >= 0)
-	  mem[P] = ea;
+	if (*(short *)(crs+A) >= 0)
+	  RPL = ea;
       }
       continue;
     }
 
     if (opcode == 01002) {
-      if (keys & 010000) {          /* V/I mode */
+      if (crs[KEYS] & 010000) {          /* V/I mode */
 	fprintf(stderr," PCL\n");
 	exit(1);
       } else {
@@ -2328,49 +2404,53 @@ compskip:
     }
 
     if (opcode == 00503) {
-      if (keys & 010000) {          /* V/I mode */
+      if (crs[KEYS] & 010000) {          /* V/I mode */
 	fprintf(stderr," ERL\n");
-	*(int *)(mem+A) ^= *(int *)(mem+ea);
+	templ = get16(ea)<<16 | get16(ea+1);
+	*(int *)(crs+A) ^= templ;
       } else {
 	fprintf(stderr," JGT\n");
-	if (*(short *)(mem+A) > 0)
-	  mem[P] = ea;
+	if (*(short *)(crs+A) > 0)
+	  RPL = ea;
       }
       continue;
     }
 
     if (opcode == 00403) {
-      if (keys & 010000) {          /* V/I mode */
+      if (crs[KEYS] & 010000) {          /* V/I mode */
 	fprintf(stderr," STL\n");
-	*(int *)(mem+ea) = *(int *)(mem+A);
+	put16(crs[A],ea);
+	put16(crs[B],ea+1);
       } else {
 	fprintf(stderr," JLE\n");
-	if (*(short *)(mem+A) <= 0)
-	  mem[P] = ea;
+	if (*(short *)(crs+A) <= 0)
+	  RPL = ea;
       }
       continue;
     }
 
     if (opcode == 00603) {
-      if (keys & 010000) {          /* V/I mode */
+      if (crs[KEYS] & 010000) {          /* V/I mode */
 	fprintf(stderr," ADL\n");
-	*(int *)(mem+A) += *(int *)(mem+ea);
+	templ = get16(ea)<<16 | get16(ea+1);
+	*(int *)(crs+A) += templ;
       } else {
 	fprintf(stderr," JLT\n");
-	if (*(short *)(mem+A) < 0)
-	  mem[P] = ea;
+	if (*(short *)(crs+A) < 0)
+	  RPL = ea;
       }
       continue;
     }
 
     if (opcode == 00303) {
-      if (keys & 010000) {          /* V/I mode */
+      if (crs[KEYS] & 010000) {          /* V/I mode */
 	fprintf(stderr," ANL\n");
-	*(unsigned int *)(mem+A) &= *(unsigned int *)(mem+ea);
+	crs[A] &= get16(ea);
+	crs[B] &= get16(ea+1);
       } else {
 	fprintf(stderr," JNE\n");
-	if (*(short *)(mem+A) != 0)
-	  mem[P] = ea;
+	if (*(short *)(crs+A) != 0)
+	  RPL = ea;
       }
       continue;
     }
@@ -2378,220 +2458,222 @@ compskip:
     /* NOTE: P300 u-code shows CC set for JIX/JDX */
 
     if (opcode == 01502) {
-      if (keys & 010000) {          /* V/I mode */
+      if (crs[KEYS] & 010000) {          /* V/I mode */
 	fprintf(stderr," DFLX\n");
-	mem[X] = mem[ea] * 4;
+	crs[X] = get16(ea) * 4;
       } else {
 	fprintf(stderr," JDX\n");
-	mem[X]--;
-	if (mem[X] != 0)
-	  mem[P] = ea;
+	crs[X]--;
+	if (crs[X] != 0)
+	  RPL = ea;
       }
       continue;
     }
 
     if (opcode == 03502) {
       fprintf(stderr," STY\n");
-      mem[ea] = mem[Y];
+      put16(crs[Y],ea);
       continue;
     }
 
     if (opcode == 01503) {
       fprintf(stderr," JIX\n");
-      mem[X]++;
-      if (mem[X] != 0)
-	mem[P] = ea;
+      crs[X]++;
+      if (crs[X] != 0)
+	RPL = ea;
       continue;
     }
 
     if (opcode == 01501) {
       fprintf(stderr," FLX\n");
-      mem[X] = mem[ea] * 2;
+      crs[X] = get16(ea) * 2;
       continue;
     }
 
     if (opcode == 03501) {
       fprintf(stderr," LDY\n");
-      mem[Y] = mem[ea];
+      crs[Y] = get16(ea);
       continue;
     }
 
     if (opcode == 03503) {
       fprintf(stderr," JSX\n");
-      mem[X] = mem[P];
-      mem[P] = ea;
+      crs[X] = RPL;
+      RPL = ea;
       continue;
     }
 
     if (opcode == 01103) {
       fprintf(stderr," CLS\n");
-      utempl = *(unsigned int *)(mem+A);
-      *(int *)(mem+A) -= *(int *)(mem+ea);
+      utempl = *(unsigned int *)(crs+L);
+      templ = get16(ea)<<16 | get16(ea+1);
+      *(int *)(crs+L) -= templ;
       SETCC_L;
-      *(unsigned int *)(mem+A) = utempl;
+      *(unsigned int *)(crs+L) = utempl;
       goto compskip;
     }
 
     if (opcode == 00601) {
       fprintf(stderr," FAD\n");
-      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", mem[FEXP], mem[FLTH], mem[FLTL]);
+      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
-      *(int *)&tempf = (mem[FLTH]<<16) | (mem[FLTL] & 0xFF00) | (mem[FEXP] & 0xFF);
+      *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
       prieee4(&tempf);
-      *(int *)&tempf1 = *(int *)(mem+ea);
+      *(int *)&tempf1 = get16(ea)<<16 | get16(ea+1);
       prieee4(&tempf1);
       tempf += tempf1;
       ieeepr4(&tempf);
-      mem[FLTH] = (*(unsigned int *)&tempf) >> 16;
-      mem[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
-      mem[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
+      crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
+      crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
+      crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
       SETC(0);
       continue;
     }
 
     if (opcode == 01101) {
       fprintf(stderr," FCS\n");
-      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", mem[FEXP], mem[FLTH], mem[FLTL]);
+      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
-      *(int *)&tempf = (mem[FLTH]<<16) | (mem[FLTL] & 0xFF00) | (mem[FEXP] & 0xFF);
+      *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
       prieee4(&tempf);
-      *(int *)&tempf1 = *(int *)(mem+ea);
+      *(int *)&tempf1 = get16(ea)<<16 | get16(ea+1);
       prieee4(&tempf1);
       tempf -= tempf1;
-      keys &= ~0300;
+      crs[KEYS] &= ~0300;
       if (tempf < 0.0)
-	keys |= 0200;
+	crs[KEYS] |= 0200;
       else if (tempf == 0.0)
-	keys |= 0100;
+	crs[KEYS] |= 0100;
       goto compskip;
     }
 
     if (opcode == 01701) {
       fprintf(stderr," FDV\n");
-      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", mem[FEXP], mem[FLTH], mem[FLTL]);
+      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
-      *(int *)&tempf = (mem[FLTH]<<16) | (mem[FLTL] & 0xFF00) | (mem[FEXP] & 0xFF);
+      *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
       prieee4(&tempf);
-      *(int *)&tempf1 = *(int *)(mem+ea);
+      *(int *)&tempf1 = get16(ea)<<16 | get16(ea+1);
       prieee4(&tempf1);
       tempf /= tempf1;
       ieeepr4(&tempf);
-      mem[FLTH] = (*(unsigned int *)&tempf) >> 16;
-      mem[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
-      mem[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
+      crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
+      crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
+      crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
       SETC(0);
       continue;
     }
 
     if (opcode == 0201) {
       fprintf(stderr," FLD\n");
-      mem[FLTH] = mem[ea];
-      mem[FLTL] = mem[ea+1] & 0xFF00;
-      mem[FEXP] = mem[ea+1] & 0xFF;
+      crs[FLTH] = get16(ea);
+      m = get16(ea+1);
+      crs[FLTL] = m & 0xFF00;
+      crs[FEXP] = m & 0xFF;
       continue;
     }
 
     if (opcode == 01601) {
       fprintf(stderr," FMP\n");
-      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", mem[FEXP], mem[FLTH], mem[FLTL]);
+      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
-      *(int *)&tempf = (mem[FLTH]<<16) | (mem[FLTL] & 0xFF00) | (mem[FEXP] & 0xFF);
+      *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
       prieee4(&tempf);
-      *(int *)&tempf1 = *(int *)(mem+ea);
+      *(int *)&tempf1 = get16(ea)<<16 | get16(ea+1);
       prieee4(&tempf1);
       tempf *= tempf1;
       ieeepr4(&tempf);
-      mem[FLTH] = (*(unsigned int *)&tempf) >> 16;
-      mem[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
-      mem[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
+      crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
+      crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
+      crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
       SETC(0);
       continue;
     }
 
     if (opcode == 00701) {
       fprintf(stderr," FSB\n");
-      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", mem[FEXP], mem[FLTH], mem[FLTL]);
+      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
-      *(int *)&tempf = (mem[FLTH]<<16) | (mem[FLTL] & 0xFF00) | (mem[FEXP] & 0xFF);
+      *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
       prieee4(&tempf);
-      *(int *)&tempf1 = *(int *)(mem+ea);
+      *(int *)&tempf1 = get16(ea)<<16 | get16(ea+1);
       prieee4(&tempf1);
       tempf -= tempf1;
       ieeepr4(&tempf);
-      mem[FLTH] = (*(unsigned int *)&tempf) >> 16;
-      mem[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
-      mem[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
+      crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
+      crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
+      crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
       SETC(0);
       continue;
     }
 
     if (opcode == 0401) {
       fprintf(stderr," FST\n");
-      if (mem[FEXP] & 0xFF00)
+      if (crs[FEXP] & 0xFF00)
 	cpuexception('f');
-      mem[ea] = mem[FLTH];
-      mem[ea+1] = (mem[FLTL] & 0xFF00) | mem[FEXP];
+      put16(crs[FLTH],ea);
+      put16((crs[FLTL] & 0xFF00) | crs[FEXP],ea+1);
       continue;
     }
 
     if (opcode == 0602) {
       fprintf(stderr," DFAD\n");
-      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", mem[FEXP], mem[FLTH], mem[FLTL]);
+      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
-      tempda[0] = mem[FLTH];
-      tempda[1] = mem[FLTL];
-      tempda[2] = mem[FLTD];
-      tempda[3] = mem[FEXP];
+      tempda[0] = crs[FLTH];
+      tempda[1] = crs[FLTL];
+      tempda[2] = crs[FLTD];
+      tempda[3] = crs[FEXP];
       prieee8(tempda);
-      tempd = *(double *)(mem+ea);
+      tempd = get64(ea);
       prieee8(&tempd);
       *(double *)tempda += tempd;
       ieeepr8(tempda);
-      mem[FLTH] = tempda[0];
-      mem[FLTL] = tempda[1];
-      mem[FLTD] = tempda[2];
-      mem[FEXP] = tempda[3];
+      crs[FLTH] = tempda[0];
+      crs[FLTL] = tempda[1];
+      crs[FLTD] = tempda[2];
+      crs[FEXP] = tempda[3];
       SETC(0);
       continue;
     }
 
     if (opcode == 01102) {
       fprintf(stderr," DFCS\n");
-      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", mem[FEXP], mem[FLTH], mem[FLTL]);
+      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
-      tempda[0] = mem[FLTH];
-      tempda[1] = mem[FLTL];
-      tempda[2] = mem[FLTD];
-      tempda[3] = mem[FEXP];
+      tempda[0] = crs[FLTH];
+      tempda[1] = crs[FLTL];
+      tempda[2] = crs[FLTD];
+      tempda[3] = crs[FEXP];
       prieee8(tempda);
-      tempd = *(double *)(mem+ea);
+      tempd = get64(ea);
       prieee8(&tempd);
       *(double *)tempda -= tempd;
-      keys &= ~0300;
+      crs[KEYS] &= ~0300;
       if (*(double *)tempda < 0.0)
-	keys |= 0200;
+	crs[KEYS] |= 0200;
       else if (*(double *)tempda == 0.0)
-	keys |= 0100;
+	crs[KEYS] |= 0100;
       goto compskip;
     }
 
     if (opcode == 01702) {
       fprintf(stderr," DFDV\n");
-      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", mem[FEXP], mem[FLTH], mem[FLTL]);
+      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
-      tempda[0] = mem[FLTH];
-      tempda[1] = mem[FLTL];
-      tempda[2] = mem[FLTD];
-      tempda[3] = mem[FEXP];
+      tempda[0] = crs[FLTH];
+      tempda[1] = crs[FLTL];
+      tempda[2] = crs[FLTD];
+      tempda[3] = crs[FEXP];
       prieee8(tempda);
-      tempd = *(double *)(mem+ea);
+      tempd = get64(ea);
       prieee8(&tempd);
       *(double *)tempda /= tempd;
       ieeepr8(tempda);
-      mem[FLTH] = tempda[0];
-      mem[FLTL] = tempda[1];
-      mem[FLTD] = tempda[2];
-      mem[FEXP] = tempda[3];
+      crs[FLTH] = tempda[0];
+      crs[FLTL] = tempda[1];
+      crs[FLTD] = tempda[2];
+      crs[FEXP] = tempda[3];
       SETC(0);
       continue;
     }
@@ -2599,68 +2681,68 @@ compskip:
     if (opcode == 0202) {
       fprintf(stderr," DFLD\n");
       *(double *)tempda = *(double *)(mem+ea);
-      mem[FLTH] = tempda[0];
-      mem[FLTL] = tempda[1];
-      mem[FLTD] = tempda[2];
-      mem[FEXP] = tempda[3];
+      crs[FLTH] = tempda[0];
+      crs[FLTL] = tempda[1];
+      crs[FLTD] = tempda[2];
+      crs[FEXP] = tempda[3];
       continue;
     }
 
     if (opcode == 01602) {
       fprintf(stderr," DFMP\n");
-      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", mem[FEXP], mem[FLTH], mem[FLTL]);
+      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
-      tempda[0] = mem[FLTH];
-      tempda[1] = mem[FLTL];
-      tempda[2] = mem[FLTD];
-      tempda[3] = mem[FEXP];
+      tempda[0] = crs[FLTH];
+      tempda[1] = crs[FLTL];
+      tempda[2] = crs[FLTD];
+      tempda[3] = crs[FEXP];
       prieee8(tempda);
-      tempd = *(double *)(mem+ea);
+      tempd = get64(ea);
       prieee8(&tempd);
       *(double *)tempda *= tempd;
       ieeepr8(tempda);
-      mem[FLTH] = tempda[0];
-      mem[FLTL] = tempda[1];
-      mem[FLTD] = tempda[2];
-      mem[FEXP] = tempda[3];
+      crs[FLTH] = tempda[0];
+      crs[FLTL] = tempda[1];
+      crs[FLTD] = tempda[2];
+      crs[FEXP] = tempda[3];
       SETC(0);
       continue;
     }
 
     if (opcode == 0702) {
       fprintf(stderr," DFSB\n");
-      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", mem[FEXP], mem[FLTH], mem[FLTL]);
+      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
-      tempda[0] = mem[FLTH];
-      tempda[1] = mem[FLTL];
-      tempda[2] = mem[FLTD];
-      tempda[3] = mem[FEXP];
+      tempda[0] = crs[FLTH];
+      tempda[1] = crs[FLTL];
+      tempda[2] = crs[FLTD];
+      tempda[3] = crs[FEXP];
       prieee8(tempda);
-      tempd = *(double *)(mem+ea);
+      tempd = get64(ea);
       prieee8(&tempd);
       *(double *)tempda -= tempd;
       ieeepr8(tempda);
-      mem[FLTH] = tempda[0];
-      mem[FLTL] = tempda[1];
-      mem[FLTD] = tempda[2];
-      mem[FEXP] = tempda[3];
+      crs[FLTH] = tempda[0];
+      crs[FLTL] = tempda[1];
+      crs[FLTD] = tempda[2];
+      crs[FEXP] = tempda[3];
       SETC(0);
       continue;
     }
 
     if (opcode == 0402) {
       fprintf(stderr," DFST\n");
-      mem[ea] = mem[FLTH];
-      mem[ea+1] = mem[FLTL];
-      mem[ea+2] = mem[FLTD];
-      mem[ea+3] = mem[FEXP];
+      put16(crs[FLTH], ea);
+      put16(crs[FLTL], ea+1);
+      put16(crs[FLTD], ea+2);
+      put16(crs[FEXP], ea+3);
       continue;
     }
 
     if (mem[066] != 0) {
       fprintf(stderr," JST* '66 [%o]\n", mem[066]);
-      mem[mem[066]] = mem[P];
-      mem[P] = mem[066]+1;
+      mem[mem[066]] = RPL;
+      RPL = mem[066]+1;
       continue;
     }
     fprintf(stderr," UNKNOWN OPCODE: %o\n", opcode);
@@ -2930,7 +3012,7 @@ svc() {
 
   /* get svc code word, break into class and function */
 
-  code = mem[mem[P]];
+  code = mem[RPL];
   class = (code >> 6) & 077;
   if (class == 0)
     class = 1;
@@ -2939,11 +3021,11 @@ svc() {
   /* determine argument list location and create arg list vector */
 
   if (code & 0100000)
-    argl = mem[mem[P]-2];
+    argl = mem[RPL-2];
   else if (code & 040000)
-    argl = mem[P]+2;
+    argl = RPL+2;
   else
-    argl = mem[P]+1;
+    argl = RPL+1;
 
   fprintf(stderr," code=%o, class=%o, func=%o, argl=%o\n", code, class, func, argl);
   if (class <= MAXCLASS && func <= MAXFUNC)
@@ -2955,8 +3037,8 @@ svc() {
 
   if (mem[065] != 0) {
     fprintf(stderr," JST* '65 [%o]\n", mem[065]);
-    mem[mem[065]] = mem[P];
-    mem[P] = mem[065]+1;
+    mem[mem[065]] = RPL;
+    RPL = mem[065]+1;
     return;
   }
 
@@ -3261,7 +3343,7 @@ svc() {
   /* after the SVC, argl is the return address */
 
   fprintf(stderr," returning from SVC to %o\n", argl);
-  mem[P] = argl;
+  RPL = argl;
   return;
 
 
@@ -3277,8 +3359,8 @@ unimp:
 badsvc:
 
   if (code & 040000) {
-    mem[P]++;
-    fprintf(stderr," bouncing svc error to address %o\n", mem[P]);
+    RPL++;
+    fprintf(stderr," bouncing svc error to address %o\n", RPL);
     return;
   }
   

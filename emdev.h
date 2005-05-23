@@ -72,7 +72,7 @@ void devnull (short class, short func, short device) {
   case 1:
     fprintf(stderr," SKS '%02o%02o\n", func, device);
     if (func == 0)
-      mem[P]++;                     /* assume it's always ready */
+      RPL++;                     /* assume it's always ready */
     else {
       fprintf(stderr," unimplemented SKS device '%02o function\n", device);
       exit(1);
@@ -92,7 +92,7 @@ void devnull (short class, short func, short device) {
   case 3:
     fprintf(stderr," OTA '%02o%02o\n", func, device);
     if (func == 0 | func == 1) {
-      mem[P]++;                     /* OTA '0004 always works on Unix */
+      RPL++;                     /* OTA '0004 always works on Unix */
     } else {
       fprintf(stderr," unimplemented OTA device '%02o function\n", device);
       exit(1);
@@ -138,7 +138,7 @@ void devasr (short class, short func, short device) {
   case 1:
     fprintf(stderr," SKS '%02o%02o\n", func, device);
     if (func <= 7)
-      mem[P]++;                     /* assume it's always ready */
+      RPL++;                     /* assume it's always ready */
     else {
       fprintf(stderr," unimplemented SKS '04 function\n");
       exit(1);
@@ -152,7 +152,7 @@ void devasr (short class, short func, short device) {
 	perror(" unable to get tty flags");
 	exit(1);
       }
-      if (mem[mem[P]] == 03776)       /* JMP *-1 -> blocking read */
+      if (get16(RPL) == 03776)       /* JMP *-1 -> blocking read */
 	newflags = ttyflags & ~O_NONBLOCK;
       else
 	newflags = ttyflags | O_NONBLOCK;
@@ -168,19 +168,19 @@ void devasr (short class, short func, short device) {
 	}
       } else if (n == 1) {
 	if (func >= 010)
-	  mem[A] = 0;
-	mem[A] = mem[A] | ch | 0x80;
-	mem[P]++;
+	  crs[A] = 0;
+	crs[A] = crs[A] | ch | 0x80;
+	RPL++;
       } else  if (n != 0) {
 	fprintf(stderr," unexpected error reading from tty, n=%d", n);
 	exit(1);
       }
     } else if (func == 011) {    /* read device id? */
-      mem[A] = 4;
-      mem[P]++;
+      crs[A] = 4;
+      RPL++;
     } else if (func == 012) {    /* read control word */
-      mem[A] = 04110;
-      mem[P]++;
+      crs[A] = 04110;
+      RPL++;
     } else {
       fprintf(stderr," unimplemented INA '04 function\n");
       exit(1);
@@ -190,12 +190,12 @@ void devasr (short class, short func, short device) {
   case 3:
     fprintf(stderr," OTA '%02o%02o\n", func, device);
     if (func == 0) {
-      fprintf(stderr," char to write=%o\n", mem[A]);
-      putchar(mem[A] & 0x7f);
+      fprintf(stderr," char to write=%o\n", crs[A]);
+      putchar(crs[A] & 0x7f);
       fflush(stdout);
-      mem[P]++;                     /* OTA '0004 always works on Unix */
+      RPL++;                     /* OTA '0004 always works on Unix */
     } else if (func == 1) {         /* write control word */
-      mem[P]++;
+      RPL++;
     } else {
       fprintf(stderr," unimplemented OTA '04 function\n");
       exit(1);
@@ -224,7 +224,7 @@ void devmt (short class, short func, short device) {
 
   case 2:
     fprintf(stderr," INA '%02o%02o\n", func, device);
-    if (mem[mem[P]] == 03776) {       /* JMP *-1 -> blocking read */
+    if (get16(RPL) == 03776) {       /* JMP *-1 -> blocking read */
       fprintf(stderr," Device not supported, so I/O hangs\n");
       exit(1);
     }
@@ -232,7 +232,7 @@ void devmt (short class, short func, short device) {
 
   case 3:
     fprintf(stderr," OTA '%02o%02o\n", func, device);
-    if (mem[mem[P]] == 03776) {       /* JMP *-1 -> blocking read */
+    if (get16(RPL) == 03776) {       /* JMP *-1 -> blocking read */
       fprintf(stderr," Device not supported, so I/O hangs\n");
       exit(1);
     }
@@ -267,8 +267,7 @@ void devcp (short class, short func, short device) {
   case 2:
     fprintf(stderr," INA '%02o%02o\n", func, device);
     if (func == 016) {
-      mem[A] = 014114;
-      mem[A] = 0;
+      crs[A] = 014114;
     } else {
       fprintf(stderr," unimplemented INA device '%02o function\n", device);
       exit(1);
@@ -278,7 +277,7 @@ void devcp (short class, short func, short device) {
   case 3:
     fprintf(stderr," OTA '%02o%02o\n", func, device);
     if (func == 017) {           /* write lights */
-      mem[P]++;
+      RPL++;
     } else {
       fprintf(stderr," unimplemented OTA device '%02o function\n", device);
       exit(1);
@@ -310,6 +309,7 @@ void devcp (short class, short func, short device) {
  */
 
 void devdisk (short class, short func, short device) {
+  unsigned short m;
   unsigned short oar;
   unsigned short status;       /* actual status */
   unsigned short teststatus;   /* status for order testing */
@@ -338,18 +338,18 @@ void devdisk (short class, short func, short device) {
   case 2:
     fprintf(stderr," INA '%2o%2o\n", func, device);
     if (func == 01)          /* read device id, clear A first */
-      mem[A] = device;
+      crs[A] = device;
     else if (func == 011)    /* read device id, don't clear A */
-      mem[A] |= device;
+      crs[A] |= device;
     else if (func == 017)    /* read status */
-      mem[A] = 0100000;
-    mem[P]++;
+      crs[A] = 0100000;
+    RPL++;
     break;
 
   case 3:
     fprintf(stderr," OTA '%02o%02o\n", func, device);
     if (func == 017) {        /* set OAR (order address register) */
-      oar = mem[A];
+      oar = crs[A];
       halt = 0;
       status = 0100000;
       unit = -1;
@@ -382,10 +382,10 @@ void devdisk (short class, short func, short device) {
 	  else if (order == 6)
 	    strcpy(ordertext,"Write");
 	  fprintf(stderr," %s, head=%d, track=%d, rec=%d, recsize=%d\n", ordertext, head, track, rec, recsize);
-	  dmanw = mem[dmachan];
+	  dmanw = get16(dmachan);
 	  dmanw = -(dmanw>>4);
-	  dmaaddr = mem[dmachan+1];
-	  fprintf(stderr, " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dmanch, dmachan, mem[dmachan], dmachan+1, mem[dmachan+1], dmanw);
+	  dmaaddr = get16(dmachan+1);
+	  fprintf(stderr, " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dmanch, dmachan, get16(dmachan), dmachan+1, dmaaddr, dmanw);
 	  if (devfd == -1) {
 	    fprintf(stderr," Unit not selected or not ready\n");
 	    status = 0100001;
@@ -407,8 +407,10 @@ void devdisk (short class, short func, short device) {
 	      perror("Unable to read drive file");
 	      exit(1);
 	    }
-	    mem[dmachan] = 0;
-	    mem[dmachan+1] += dmanw;
+	    put16(0,dmachan);
+	    m = get16(dmachan+1);
+	    m += dmanw;
+	    put16(m,dmachan+1);
 
 	  } else if (order == 6)
 	    fprintf(stderr," Write order not implemented\n");
@@ -442,13 +444,13 @@ void devdisk (short class, short func, short device) {
 	  break;
 	case 9: /* DSTAT = Store status to memory */
 	  memaddr = mem[oar+1];
-	  fprintf(stderr, " store status to '%o\n", memaddr);
+	  fprintf(stderr, " store status='%o to '%o\n", status, memaddr);
 	  mem[memaddr] = status;
 	  oar += 2;
 	  break;
 	case 11: /* DOAR = Store OAR to memory (2 words) */
 	  memaddr = mem[oar+1];
-	  fprintf(stderr, " store OAR to '%o\n", memaddr);
+	  fprintf(stderr, " store OAR='%o to '%o\n", oar, memaddr);
 	  mem[memaddr] = oar;
 	  oar += 2;
 	  break;
@@ -473,7 +475,7 @@ void devdisk (short class, short func, short device) {
 	  exit(1);
 	}
       }	  
-      mem[P]++;
+      RPL++;
     } else {
       fprintf(stderr," unimplemented OTA device '%02o function\n", device);
       exit(1);
