@@ -61,7 +61,7 @@ typedef unsigned int ea_t;
 
 /* the live program counter register is aka microcode scratch register TR7 */
 
-#define PC regs.tr7;
+#define RP regs.sym.tr7
 #define RPH regs.u16[14]
 #define RPL regs.u16[15]
 
@@ -80,14 +80,14 @@ typedef unsigned int ea_t;
     crs[KEYS] |= 0200;
 
 #define SETCC_L \
-  crs[KEYS] & ~0300; \
+  crs[KEYS] &= ~0300; \
   if (*(int *)(crs+L) == 0) \
     crs[KEYS] |= 0100; \
   else if (*(int *)(crs+L) < 0) \
     crs[KEYS] |= 0200;
   
 #define SETCC_F \
-  crs[KEYS] & ~0300; \
+  crs[KEYS] &= ~0300; \
   if (*(short *)(crs+FLTH) < 0) \
     crs[KEYS] |= 0200; \
   else if (*(int *)(crs+FLTH) == 0 && *(short *)(crs+FEXP) == 0) \
@@ -103,6 +103,11 @@ typedef unsigned int ea_t;
    print something when they're encountered */
 
 unsigned short gen0tab[] = {
+  001172,          /* ? */
+  000764,          /* ? */
+  000615,          /* ITLB */
+  001367,          /* ? */
+  000024,          /* STPM */
   000503,          /* EMCM */
   000501,          /* LMCM */
   001304,          /* MDEI */
@@ -120,6 +125,11 @@ unsigned short gen0tab[] = {
 #define GEN0TABSIZE sizeof(gen0tab)/sizeof(unsigned short)
 
 char gen0nam[][5] = {
+  "1172",
+  "764",
+  "ITLB",
+  "1367",
+  "STPM",
   "EMCM",
   "LMCM",
   "MDEI",
@@ -140,7 +150,13 @@ char gen0nam[][5] = {
    but eventually should be the system's physical memory
 */
 
-unsigned short mem[07776*64*1024];   /* 4095 segments of 64K words each */
+/* NOTE: Primos II gives "NOT FOUND" on startup 2460 if sense switches
+   are set to 014114.  But DIAGS like this sense switch setting. :( */
+
+unsigned short sswitch = 0;
+
+#define MEMSIZE 07776*64*1024
+unsigned short mem[MEMSIZE];   /* 4095 segments of 64K words each */
 
 unsigned int bitmask32[33] = {0,
 			    0x80000000, 0x40000000, 0x20000000, 0x10000000,
@@ -161,25 +177,42 @@ unsigned int bitmask16[17] = {0,
 unsigned short prevpc;          /* program counter, prev pc, keys */
 
 unsigned short amask;                /* address mask */
-#define faultamask 0100000           /* fault bit */
-#define ringamask 060000             /* ring bits */
-#define extamask 010000              /* E-bit */
-#define segamask 07777               /* segment number */
+#define FAULTMASK32 0x80000000       /* fault bit */
+#define RINGMASK32 0x60000000        /* ring bits */
+#define EXTMASK32 0x10000000         /* E-bit */
+#define SEGMASK32 0x0FFF0000         /* segment number */
+#define RINGMASK16 0x6000            /* ring bits */
 
 int verbose;
 int domemdump;                         /* -memdump arg */
 int boot;                            /* true if reading a boot record */
+int diag;                            /* true if running a diag (start@1001) */
 
 /* XXX: needs to check for restricted addresses */
 
 unsigned short get16(ea_t ea) {
-  if (ea == 7)                   /* PC */
-    return RPL;
-  if (ea <= 017)                 /* CRS */
-    return crs[memtocrs[ea]];
-  if (ea <= 037)                 /* DMX */
-    return regs.sym.regdmx[((ea & 036) < 1) | (ea & 1)];
-  return mem[ea];
+
+  /* check for live register access */
+
+  if (ea & 0x80000000) {
+    ea = ea & 0x7FFFFFFF;
+    if (ea < 7)
+      return crs[memtocrs[ea]];
+    if (ea == 7)                   /* PC */
+      return RPL;
+    restrict();
+    if (ea <= 017)                 /* CRS */
+      return crs[memtocrs[ea]];
+    if (ea <= 037)                 /* DMX */
+      return regs.sym.regdmx[((ea & 036) << 1) | (ea & 1)];
+    printf(" Live register address %o too big!\n", ea);
+    exit(1);
+  }
+  if (ea <= MEMSIZE)
+    return mem[ea];
+  printf(" get16: Memory address %o (%o/%o) is out of range!\n", ea, ea>.16, ea & 0xffff);
+  exit(1);
+  /* NOTE: should take missing memory fault here instead */
 }
 
 unsigned int get32(ea_t ea) {
@@ -191,14 +224,30 @@ double get64(ea_t ea) {
 }
 
 put16(unsigned short value, ea_t ea) {
-  if (ea == 7)                        /* PC */
-    RPL = value;
-  else if (ea <= 017)                 /* CRS */
-    crs[memtocrs[ea]] = value;
-  else if (ea <= 037)                 /* DMX */
-    regs.sym.regdmx[((ea & 036) < 1) | (ea & 1)] = value;
-  else
+  if (ea & 0x80000000) {         /* flag for live register address */
+    ea = ea & 0x7FFFFFFF;
+    if (ea < 7)
+      crs[memtocrs[ea]] = value;
+    else if (ea == 7)
+      RPL = value;
+    else {
+      restrict();
+      if (ea <= 017)                      /* CRS */
+	crs[memtocrs[ea]] = value;
+      else if (ea <= 037)                 /* DMX */
+	regs.sym.regdmx[((ea & 036) << 1) | (ea & 1)] = value;
+      else {
+	printf(" Live register store address %o too big!\n", ea);
+	exit(1);
+      }
+    }
+  } else if (ea < MEMSIZE)
     mem[ea] = value;
+  else {
+    printf(" put16: Memory address %o (%o/%o) is out of range!\n", ea, ea>.16, ea & 0xffff);
+    exit(1);
+    /* NOTE: should take missing memory fault here instead */
+  }
 }
 
 put32(unsigned int value, ea_t ea) {
@@ -209,6 +258,14 @@ put64(double value, ea_t ea) {
   *(double *)(mem+ea) = value;
 }
 
+restrict() {
+  if (!(RP & RINGMASK32))
+    return 0;
+  printf(" Restricted instruction fault\n");
+  exit(1);
+}
+
+    
 /* I/O device map table, containing function pointers to handle device I/O */
 
 #include "emdev.h"
@@ -255,18 +312,16 @@ newkeys (unsigned short new) {
     amask = 077777;
     break;
   case 4:                     /* 32I */
-    fprintf(stderr,"Entering 32I mode, keys=%o\n", crs[KEYS]);
+    printf("Entering 32I mode, keys=%o\n", crs[KEYS]);
     amask = 0177777;
     exit(1);
     break;
   case 6:                     /* 64V */
     fprintf(stderr,"Entering 64V mode, keys=%o\n", crs[KEYS]);
     amask = 0177777;
-    memdump(0,0177777);
-    exit(1);
     break;
   default:                    /* invalid */
-    fprintf(stderr,"Invalid CPU mode: %o\n", crs[KEYS]);
+    printf("Invalid CPU mode: %o\n", crs[KEYS]);
     exit(1);
   }
 }
@@ -275,7 +330,7 @@ newkeys (unsigned short new) {
 
 /* NOTE: This code is untested! */
 
-unsigned short ea16s (unsigned short inst, short i, short x) {
+ea_t ea16s (unsigned short inst, short i, short x) {
   
   unsigned short ea,m;
 
@@ -288,18 +343,23 @@ unsigned short ea16s (unsigned short inst, short i, short x) {
       ea += crs[X];
     if (!i)                                      /* not indirect */
       break;
-    m = get16(ea);                               /* get indirect word */
+    if (ea < 040)
+      m = get16(0x80000000|ea);
+    else
+      m = get16(ea);
     i = m & 0100000;
     x = m & 040000;
     ea = m & 037777;                             /* go indirect */
   }
+  if (ea < 037)                                  /* flag live register ea */
+    return ea | 0x80000000;
   return ea;
 }
 
 
 /* NOTE: This code is untested! */
 
-unsigned short ea32s (unsigned short inst, short i, short x) {
+ea_t ea32s (unsigned short inst, short i, short x) {
   
   unsigned short ea,m;
 
@@ -313,13 +373,19 @@ unsigned short ea32s (unsigned short inst, short i, short x) {
     }
   }
   while (i) {
-    m = get16(ea);
+    if (ea < 040)
+      m = get16(0x80000000|ea);
+    else
+      m = get16(ea);
     i = m & 0100000;
     ea = m & 077777;                             /* go indirect */
   }
   if (x)                                         /* postindex */
     ea += crs[X];
-  return ea & amask;
+  ea &= amask;
+  if (ea < 037)                                  /* flag live register ea */
+    return ea | 0x80000000;
+  return ea;
 }
 
 
@@ -327,7 +393,7 @@ unsigned short ea32s (unsigned short inst, short i, short x) {
    bit, is that 32R indirect words have an indirect bit for multi-level
    indirects */
 
-unsigned short ea32r64r (unsigned short inst, short i, short x, short *opcode) {
+ea_t ea32r64r (unsigned short inst, short i, short x, short *opcode) {
 
   short class;
   unsigned short ea,m;
@@ -351,7 +417,10 @@ unsigned short ea32r64r (unsigned short inst, short i, short x, short *opcode) {
     }
   }
   while (i) {
-    m = get16(ea);
+    if (ea < 040)
+      m = get16(0x80000000|ea);
+    else
+      m = get16(ea);
     fprintf(stderr," Indirect, old ea=%o, [ea]=%o\n", ea, m);
     if ((crs[KEYS] & 016000) == 06000)
       i = m & 0100000;
@@ -365,7 +434,10 @@ unsigned short ea32r64r (unsigned short inst, short i, short x, short *opcode) {
     ea += crs[X];
     fprintf(stderr," Postindex, new ea=%o\n", ea);
   }
-  return ea & amask;
+  ea &= amask;
+  if (ea < 037)                                  /* flag live register ea */
+    return ea | 0x80000000;
+  return ea;
 
 special:
   class = inst & 3;                              /* class bits = 15 & 16 */
@@ -383,7 +455,10 @@ special:
       fprintf(stderr," Preindex, new ea=%o\n", ea);
     }
     while (i) {
-      m = get16(ea);
+      if (ea < 040)
+	m = get16(0x80000000|ea);
+      else
+	m = get16(ea);
       fprintf(stderr," Indirect, old ea=%o, [ea]=%o\n", ea, m);
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
@@ -400,7 +475,10 @@ special:
     if (class == 3)
       ea += (short) crs[S];
     while (i) {
-      m = get16(ea);
+      if (ea < 040)
+	m = get16(0x80000000|ea);
+      else
+	m = get16(ea);
       fprintf(stderr," Indirect, ea=%o, [ea]=%o\n", ea, m);
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
@@ -420,13 +498,19 @@ special:
       ea = --crs[S];
     fprintf(stderr," Class 2/3, new ea=%o, new S=%o\n", ea, crs[S]);
     if (x) {
-      m = get16(ea);
+      if (ea < 040)
+	m = get16(0x80000000|ea);
+      else
+	m = get16(ea);
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
       ea = m & amask;
     }
     while (i) {
-      m = get16(ea);
+      if (ea < 040)
+	m = get16(0x80000000|ea);
+      else
+	m = get16(ea);
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
       else
@@ -436,20 +520,36 @@ special:
     if (x)
       ea += crs[X];
   }
-  return ea & amask;
+  ea &= amask;
+  if (ea < 037)                                  /* flag live register ea */
+    return ea | 0x80000000;
+  return ea;
 }
 
-unsigned int ea64v (unsigned short inst, short i, short x, short *opcode) {
 
+#define MAKEVA(seg,word) (((int)(seg))<<16) | (word)
+
+ea_t ea64v (unsigned short inst, short i, short x, short *opcode) {
+
+  ea_t ea;                                       /* full seg/word va */
   unsigned short ea_s;                           /* eff address segno */
   unsigned short ea_r;                           /* eff address ring */
   unsigned short ea_w;                           /* eff address wordno */
-  unsigned short r;                              /* true if same ring */
-  unsigned int ea;                               /* full seg/word va */
+  unsigned short br;
+  unsigned short live;                           /* max live register addr */
+  unsigned short y;
+  unsigned short xx;
+  unsigned short a;
+  unsigned short ixy;
+  unsigned short m;
+
+  if (crs[MODALS] & 4)
+    live = 010;
+  else
+    live = 040;
 
   ea_s = RPH;
   ea_w = RPL;
-  ea_r = 1;
   if (inst & 001000)                             /* sector bit 7 set? */
     if ((inst & 0740) != 0400) {                 /* PC relative? */
       ea_w = RPL + (((short) (inst << 7)) >> 7);   /* yes, sign extend D */
@@ -470,26 +570,115 @@ unsigned int ea64v (unsigned short inst, short i, short x, short *opcode) {
     goto labA;
 
   if (i) {
-    fprintf(stderr," Indirect, old ea=%o, [ea]=%o\n", ea, mem[ea]);
-    ea = mem[ea] & amask;                       /* go indirect */
-    fprintf(stderr," Indirect, new i=%d, new ea=%o\n", i!=0, ea);
+    if (ea_w < live) {
+      fprintf(stderr," Indirect through live register '%o\n", ea_w);
+      ea_w = get16(0x80000000 | ea_w);
+    } else {
+      fprintf(stderr," Indirect, ea_s=%o, ea_w=%o\n", ea_s, ea_w);
+      ea_w = get16(MAKEVA(ea_s, ea_w));
+    }
+    fprintf(stderr," After indirect, new ea_w=%o\n", ea_w);
   }
   if (x) {
-    fprintf(stderr," Postindex, old ea=%o, X='%o/%d\n", ea, crs[X], *(short *)(crs+X));
-    ea += crs[X];
-    fprintf(stderr," Postindex, new ea=%o\n", ea);
+    fprintf(stderr," Postindex, old ea_w=%o, X='%o/%d\n", ea_w, crs[X], *(short *)(crs+X));
+    ea_w += crs[X];
+    fprintf(stderr," Postindex, new ea_w=%o\n", ea_w);
   }
-  return ea;
+#if 0
+  if (ea_w < live) {
+    fprintf(stderr," Live register '%o\n", ea_w);
+    return 0x80000000 | ea_w;
+  }
+#endif
+  return MAKEVA(ea_s, ea_w);
+
 
 labA:
+  ea_w = (inst & 0777);
+  if (x) {
+    fprintf(stderr," Postindex, old ea_w=%o, X='%o/%d\n", ea_w, crs[X], *(short *)(crs+X));
+    ea_w += crs[X];
+    fprintf(stderr," Postindex, new ea_w=%o\n", ea_w);
+  }
+  if ((inst & 0777) >= 0400) {
+    ea_s = crs[LBH] | (ea_s & RINGMASK16);
+    ea_w += crs[LBL];
+    fprintf(stderr," Short LB relative, LB=%o/%o\n", crs[LBH], crs[LBL]);
+    return MAKEVA(ea_s, ea_w);
+  }
+  if (ea_w < live) {
+    fprintf(stderr," Live register '%o\n", ea_w);
+    return 0x80000000 | ea_w;
+  }
+  ea_s = crs[SBH] | (ea_s & RINGMASK16);
+  ea_w += crs[SBL];
+  fprintf(stderr," Short SB relative, SB=%o/%o\n", crs[SBH], crs[SBL]);
+  return MAKEVA(ea_s, ea_w);
+  
+
+  /* here for long, 2-word, V-mode memory reference */
+
 labB:
-  return ea;
+  fprintf(stderr," 2-word format\n");
+  y = (inst & 020);
+  *opcode = *opcode | ((inst >> 2) & 3);         /* opcode extension */
+  br = (inst & 3);
+  a = get16(RP);
+  ixy = ((i != 0)<<2) | ((x != 0)<<1) | (y != 0);
+  fprintf(stderr," new opcode=%5#0o, y=%d, br=%d, ixy=%d, a=%o\n", *opcode, (y != 0), br, ixy, a);
+  RPL++;
+
+  ea_s = crs[PBH+br*2] | (ea_s & RINGMASK16);
+  ea_w = crs[PBL+br*2] + a;
+
+  if (ixy == 1 || ixy == 4)
+    ea_w += crs[Y];
+  else if (ixy == 2 || ixy == 6)
+    ea_w += crs[X];
+
+  if (ixy >= 3) {
+    ea = MAKEVA(ea_s, ea_w);
+    fprintf(stderr," Long indirect, ea=%o/%o, ea_s=%o, ea_w=%o\n", ea>>16, ea&0xFFFF, ea_s, ea_w);
+    m = get16(ea);
+    if (m & 0x8000) {
+      printf(" Pointer fault, ea_s=%o, ea_w=%o, [ea]=%o\n", ea_s, ea_w, m);
+      exit(1);
+    }
+    ea_s = m | (ea_s & RINGMASK16);
+    ea_w = get16(ea+1);              /* XXX: should do 16-bit add */
+    fprintf(stderr," After indirect, ea_s=%o, ea_w=%o\n", ea_s, ea_w);
+    if (ixy == 5)
+      ea_w += crs[Y];
+    else if (ixy == 7)
+      ea_w += crs[X];
+  }
+  return MAKEVA(ea_s, ea_w);
 }
 
 unsigned int ea32i (unsigned short inst, short i, short x) {
   fprintf(stderr,"Mode 32I not implemented\n");
 }
 
+
+ea_t apea() {
+  unsigned short ibr, ea_s, ea_w;
+  ea_t ea;
+
+  ibr = get16(RP);
+  RPL++;
+  fprintf(stderr," AP br=%d, i=%d, bitno=%d\n", ((ibr >> 8) & 3), (ibr & 0x004000) != 0, (ibr >> 12) & 0xF);
+  ea_s = crs[PBH + 2*((ibr >> 8) & 3)];
+  ea_w = crs[PBL + 2*((ibr >> 8) & 3)];
+  ea_w += get16(RP);
+  RPL++;
+  ea = MAKEVA(ea_s, ea_w);
+  fprintf(stderr," AP ea = %o/%o\n", ea_s, ea_w);
+  if (ibr & 0x004000) {
+    ea = get32(ea);
+    fprintf(stderr," After indirect, AP ea = %o/%o\n", ea>>16, ea & 0xFFFF);
+  }
+  return ea;
+}
 
 /* exception handler types:
 
@@ -572,12 +761,11 @@ main (int argc, char **argv) {
   double tempd,tempd1,tempd2;
   unsigned short tempda[4],tempda1[4];
   unsigned int ea32;                   /* full V/I mode eff address */
-  unsigned short ea;                   /* effective address (word) */
+  ea_t ea,easave;                      /* effective address */
   unsigned short opcode;
-  short i,x;
+  short i,j,x;
+  unsigned short savemask;
   unsigned short class;
-  unsigned short xx;
-  int d;                               /* displacement */
   int nw;
   unsigned short rvec[9];    /* SA, EA, P, A, B, X, keys, dummy, dummy */
   unsigned short inst;
@@ -588,6 +776,7 @@ main (int argc, char **argv) {
 
   /* master clear:
      - clear all registers
+     - set register set to 2
      - set P to '1000
      - 16S mode, single precision
      - interrupts and machine checks inhibited
@@ -597,11 +786,14 @@ main (int argc, char **argv) {
   for (i=0; i < 32*REGSETS; i++)
     regs.u32[i] = 0;
   crs = (void *)regs.rs[2];
+  crs[MODALS] = 000100;         /* boot w/ CURREG=2 (current register set) */
+  newkeys(0);
   RPL = 01000;
 
   verbose = 0;
   domemdump = 0;
   boot = 0;
+  diag = 0;
 
   /* check args */
 
@@ -612,8 +804,17 @@ main (int argc, char **argv) {
       verbose = 1;
     else if (strcmp(argv[i],"--memdump") == 0)
       domemdump = 1;
-    else if (strcmp(argv[i],"--boot") == 0)
+    else if (strcmp(argv[i],"--ss") == 0) {
+      if (i+1 < argc && argv[i+1][0] != '-') {
+	sscanf(argv[i+1],"%o", &templ);
+	sswitch = templ;
+      } else
+	sswitch = 0;
+      fprintf(stderr,"Sense switches set to %o\n", sswitch);
+    } else if (strcmp(argv[i],"--boot") == 0)
       boot = 1;
+    else if (strcmp(argv[i],"--diag") == 0)
+      diag = 1;
     else if (argv[i][0] == '-' && argv[i][1] == '-')
       fprintf(stderr,"Unrecognized argument: %s\n", argv[i]);
   }
@@ -635,7 +836,7 @@ main (int argc, char **argv) {
     fprintf(stderr,"SA=%o, EA=%o, P=%o, A=%o, B=%o, X=%o, K=%o\n\n", rvec[0], rvec[1],
 	    rvec[2], rvec[3], rvec[4], rvec[5], rvec[6]);
     if (rvec[2] > rvec[1]) {
-      fprintf(stderr,"Program start > EA: runfile is trashed\n");
+      printf("Program start > EA: runfile is trashed\n");
       exit(1);
     }
   }
@@ -650,12 +851,14 @@ main (int argc, char **argv) {
 
   /* setup execution (registers, keys, address mask, etc.) from rvec */
 
-  crs[MODALS] = 0;
   crs[A] = rvec[3];
   crs[B] = rvec[4];
   crs[X] = rvec[5];
   newkeys(rvec[6]);
-  RPL = rvec[2];
+  if (diag && rvec[2] == 01000)
+    RPL = 01001;
+  else
+    RPL = rvec[2];
 
   if (RPL == 0161000)      /* hack for *DOS64; P is off by 3?? */
     RPL = 0161003;
@@ -668,14 +871,14 @@ main (int argc, char **argv) {
   while (1) {
     
     if (RPL > rvec[1]) {       /* hack for testing */
-      fprintf(stderr,"\nOOPS! Program counter %o > EA %o\n", RPL, rvec[1]);
+      printf("\nOOPS! Program counter %o > EA %o\n", RPL, rvec[1]);
       exit(1);
     }
 
     prevpc = RPL;
-    inst = get16(RPL);
+    inst = get16(RP);
     instcount++;
-    fprintf(stderr,"\n%o: %o		A='%o/%:0d B='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d	#%d\n", RPL, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&040000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, instcount);
+    fprintf(stderr,"\n%o: %o		A='%o/%:0d B='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d	#%d\n", RP, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&040000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, instcount);
     RPL++;
 
     /* generic? */
@@ -747,7 +950,10 @@ main (int argc, char **argv) {
 		ea += crs[X];
 	      if (!i)                          /* not indirect */
 		break;
-	      m = get16(ea);
+	      if (ea < 040)
+		m = get16(0x80000000|ea);
+	      else
+		m = get16(ea);
 	      i = m & 0100000;
 	      x = m & 040000;
 	      ea = m & 037777;                 /* go indirect */
@@ -757,7 +963,11 @@ main (int argc, char **argv) {
 	  case 1:                       /* 32S */
 	  case 3:                       /* 32R */
 	    while (crs[A] & 0100000) {
-	      crs[A] = get16(crs[A] & 077777);
+	      ea = crs[A] & 077777;
+	      if (ea < 040)
+		crs[A] = get16(0x80000000|ea);
+	      else
+		crs[A] = get16(ea);
 	    }
 	  }
 	  continue;
@@ -765,7 +975,7 @@ main (int argc, char **argv) {
 
 	if (inst == 000000) {
 	  fprintf(stderr," HLT\n");
-	  fprintf(stderr,"\nProgram halt at %o\n", prevpc);
+	  printf("\nProgram halt at %o\n", prevpc);
 	  exit(1);
 	}
 
@@ -808,13 +1018,16 @@ main (int argc, char **argv) {
 	  continue;
 	}
 
+	/* NOTE: this should do 16-bit adds on RPL in get16 calls
+	   rather than 32-bit adds */
+
 	if (inst == 001314) {
 	  fprintf(stderr," CGT\n");
-	  tempa = get16(RPL);              /* get number of words */
+	  tempa = get16(RP);              /* get number of words */
 	  if (1 <= crs[A] && crs[A] <= tempa)
-	    RPL = get16(RPL+crs[A]);
+	    RPL = get16(RP+crs[A]);
 	  else
-	    RPL = get16(RPL+tempa+1);
+	    RPL = get16(RP+tempa+1);
 	  continue;
 	}
 
@@ -893,6 +1106,47 @@ main (int argc, char **argv) {
 	  continue;
 	}
 
+	if (inst == 000715) {
+	  fprintf(stderr," RSAV\n");
+	  ea = apea();
+	  j = 1;
+	  savemask = 0;
+	  for (i = 11; i >= 0; i--) {
+	    utempl = *(((unsigned int *)crs)+i);
+	    if (utempl != 0) {
+	      fprintf(stderr," crsl + %d saved, value=%o\n", i, utempl);
+	      put32(utempl, ea+j);
+	      j += 2;
+	      savemask |= bitmask16[16-i];
+	    }
+	  }
+	  put32(*(int *)(crs+XB), ea+j);
+	  j += 2;
+	  put16(savemask, ea);
+	  fprintf(stderr," Saved, mask=%o, j=%d\n", savemask, j);
+	  continue;
+	}
+
+	if (inst == 000717) {
+	  fprintf(stderr," RRST\n");
+	  ea = apea();
+	  savemask = get16(ea);
+	  fprintf(stderr," Save mask=%o\n", savemask);
+	  j = 1;
+	  for (i = 11; i >= 0; i--) {
+	    if (savemask & bitmask16[16-i]) {
+	      templ = get32(ea+j);
+	      *(((unsigned int *)crs)+i) = templ;
+	      fprintf(stderr," crsl + %d restored, value=%o\n", i, templ);
+	      j += 2;
+	    }
+	  }
+	  utempl = get32(ea+j);
+	  *(unsigned int *)(crs+XB) = utempl;
+	  fprintf(stderr," XB restored, value=%o/%o\n", crs[XBH], crs[XBL]);
+	  continue;
+	}
+
 	if (inst == 000101) {
 	  fprintf(stderr," NRM\n");
 	  crs[VSC] = 0;
@@ -930,6 +1184,28 @@ main (int argc, char **argv) {
 	  continue;
 	}
 
+	if (inst == 01200) {
+	  fprintf(stderr," STAC\n");
+	  ea = apea();
+	  if (get16(ea) == crs[B]) {
+	    put16(crs[A], ea);
+	    crs[KEYS] |= 0100;       /* set EQ */
+	  } else 
+	    crs[KEYS] &= ~0100;      /* reset EQ */
+	  continue;
+	}
+
+	if (inst == 01204) {
+	  fprintf(stderr," STLC\n");
+	  ea = apea();
+	  if (get32(ea) == *(int *)(crs+E)){
+	    put32(*(int *)(crs+L), ea);
+	    crs[KEYS] |= 0100;       /* set EQ */
+	  } else 
+	    crs[KEYS] &= ~0100;      /* reset EQ */
+	  continue;
+	}
+
 	if (inst == 000415) {
 	  fprintf(stderr," ESIM\n");
 	  crs[MODALS] &= ~040000;
@@ -939,6 +1215,16 @@ main (int argc, char **argv) {
 	if (inst == 000417) {
 	  fprintf(stderr," EVIM\n");
 	  crs[MODALS] |= 040000;
+	  continue;
+	}
+
+	if (inst == 000711) {
+	  fprintf(stderr," LPSW\n");
+	  ea = apea();
+	  RPH = get16(ea);
+	  RPL = get16(ea+1);
+	  newkeys(get16(ea+2));
+	  crs[MODALS] = get16(ea+3);
 	  continue;
 	}
 
@@ -954,6 +1240,8 @@ main (int argc, char **argv) {
 	  continue;
 
 	fprintf(stderr," unrecognized generic class 0 instruction!\n");
+	printf(" unrecognized generic class 0 instruction %o!\n", inst);
+#if 0
 	m = get16(066);
 	if (m != 0) {
 	  fprintf(stderr," JST* '66 [%o]\n", m);
@@ -961,7 +1249,7 @@ main (int argc, char **argv) {
 	  RPL = m+1;
 	  continue;
 	}
-
+#endif
 	exit(1);
 	
       }
@@ -973,7 +1261,7 @@ main (int argc, char **argv) {
 	  fprintf(stderr," BCLT\n");
 bclt:
 	  if (crs[KEYS] & 0200)
-	    RPL = get16(RPL);
+	    RPL = get16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -983,7 +1271,7 @@ bclt:
 	  fprintf(stderr," BCLE\n");
 bcle:
 	  if (crs[KEYS] & 0300)
-	    RPL = get16(RPL);
+	    RPL = get16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -993,7 +1281,7 @@ bcle:
 	  fprintf(stderr," BCEQ\n");
 bceq:
 	  if (crs[KEYS] & 0100)
-	    RPL = get16(RPL);
+	    RPL = get16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -1003,7 +1291,7 @@ bceq:
 	  fprintf(stderr," BCNE\n");
 bcne:
 	  if (!(crs[KEYS] & 0100))
-	    RPL = get16(RPL);
+	    RPL = get16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -1013,7 +1301,7 @@ bcne:
 	  fprintf(stderr," BCGE\n");
 bcge:
 	  if (!(crs[KEYS] & 0200))
-	    RPL = get16(RPL);
+	    RPL = get16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -1023,7 +1311,7 @@ bcge:
 	  fprintf(stderr," BCGT\n");
 bcgt:
 	  if (!(crs[KEYS] & 0300))
-	    RPL = get16(RPL);
+	    RPL = get16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -1032,7 +1320,7 @@ bcgt:
 	if (inst == 0141705) {
 	  fprintf(stderr," BCR\n");
 	  if (!(crs[KEYS] & 0100000))
-	    RPL = get16(RPL);
+	    RPL = get16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -1041,7 +1329,7 @@ bcgt:
 	if (inst == 0141704) {
 	  fprintf(stderr," BCS\n");
 	  if (crs[KEYS] & 0100000)
-	    RPL = get16(RPL);
+	    RPL = get16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -1049,9 +1337,8 @@ bcgt:
 
 	if (inst == 0141707) {
 	  fprintf(stderr," BLR\n");
-	  exit(1);
 	  if (!(crs[KEYS] & 020000))
-	    RPL = get16(RPL);
+	    RPL = get16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -1059,9 +1346,8 @@ bcgt:
 
 	if (inst == 0141706) {
 	  fprintf(stderr," BLS\n");
-	  exit(1);
 	  if (crs[KEYS] & 020000)
-	    RPL = get16(RPL);
+	    RPL = get16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -1168,8 +1454,8 @@ bcgt:
 	  fprintf(stderr," BIX\n");
 	  crs[X]++;
 bidx:
-	  if (crs[X] == 0)
-	    RPL = get16(RPL);
+	  if (crs[X] != 0)
+	    RPL = get16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -1179,8 +1465,8 @@ bidx:
 	  fprintf(stderr," BIY\n");
 	  crs[Y]++;
 bidy:
-	  if (crs[Y] == 0)
-	    RPL = get16(RPL);
+	  if (crs[Y] != 0)
+	    RPL = get16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -1295,10 +1581,16 @@ bidy:
 	  continue;
 	}
 
+	/* is this supposed to set C, L, and CC? */
+
 	if (inst == 0140214) {                /* CAZ */
 	  fprintf(stderr," CAZ\n");
 	  SETCC_A;
-	  goto compskip;
+compskip:
+	  if (crs[KEYS] & 0200)
+	    RPL += 2;
+	  else if (crs[KEYS] & 0100)
+	    RPL++;
 	  continue;
 	}
 
@@ -1542,7 +1834,7 @@ lcgt:
 	  goto lcgt;
 	}
 
-	if (inst == 0140511) {
+	if (inst == 0141511) {
 	  fprintf(stderr," LLLE\n");
 	  SETCC_L;
 	  goto lcle;
@@ -1637,9 +1929,8 @@ lcgt:
 	  continue;
 	}
 
-	if (inst == 0140000) {
+	if (inst == 0141000) {
 	  fprintf(stderr," ADLL\n");
-	  exit(1);
 	  if (crs[KEYS] & 020000)
 	    (*(int *)(crs+A))++;
 	  continue;
@@ -1788,6 +2079,7 @@ lcgt:
 	}
 
 	fprintf(stderr," unrecognized generic class 3 instruction!\n");
+	printf(" unrecognized generic class 3 instruction %o!\n", inst);
 	exit(1);
 	
       }
@@ -1796,196 +2088,199 @@ lcgt:
       if (class == 1) {
 	fprintf(stderr," shift group\n");
 	scount = -inst & 077;
-	if (scount > 0)
-	  switch (inst & 01700) {
+	if (scount == 0)
+	  scount = 0100;
+	switch (inst & 01700) {
 
-	  case 00000: /* LRL */
-	    fprintf(stderr," LRL %d\n", scount);
-	    if (scount <= 32) {
-	      utempl = *(unsigned int *)(crs+A);
-	      SETC(utempl & bitmask32[33-scount]);
-	      utempl = utempl >> scount;
-	      *(unsigned int *)(crs+A) = utempl;
-	    } else {
-	      *(unsigned int *)(crs+A) = 0;
-	      SETC(0);
-	    }
-	    break;
-
-	  case 00100: /* LRS (different in R & V modes) */
-	    fprintf(stderr," LRS %d\n", scount);
-	    if (crs[KEYS] & 010000) {          /* V/I mode */
-	      if (scount <= 32) {
-		templ = *(int *)(crs+A);
-		SETC(templ & bitmask32[33-scount]);
-		templ = templ >> scount;
-		*(int *)(crs+A) = templ;
-	      } else if (crs[A] & 0x8000) {
-		*(int *)(crs+A) = 0xFFFFFFFF;
-		SETC(1);
-	      } else {
-		*(int *)(crs+A) = 0;
-		SETC(0);
-	      }
-	    } else {
-	      if (scount <= 31) {
-		templ = crs[A];
-		templ = (templ<<16) | (crs[B]<<1);
-		SETC(templ & bitmask32[32-scount]);
-		templ = templ >> (scount+1);
-		crs[A] = templ >> 15;
-		crs[B] = templ & 0x7FFF;
-	      } else if (crs[A] & 0x8000) {
-		*(int *)(crs+A) = 0xFFFF7FFF;
-		SETC(1);
-	      } else {
-		*(int *)(crs+A) = 0;
-		SETC(0);
-	      }
-	    }
-	    break;
-
-	  case 00200: /* LRR */
-	    fprintf(stderr," LRR %d\n", scount);
-	    if (scount > 32)
-	      scount = scount - 32;
+	case 00000: /* LRL */
+	  fprintf(stderr," LRL %d\n", scount);
+	  if (scount <= 32) {
 	    utempl = *(unsigned int *)(crs+A);
 	    SETC(utempl & bitmask32[33-scount]);
-	    utempl = (utempl >> scount) | (utempl << (32-scount));
+	    utempl = utempl >> scount;
 	    *(unsigned int *)(crs+A) = utempl;
-	    break;
+	  } else {
+	    *(unsigned int *)(crs+A) = 0;
+	    SETC(0);
+	  }
+	  break;
 
-	  case 00400: /* ARL */
-	    fprintf(stderr," ARL %d\n", scount);
-	    if (scount <= 16) {
-	      utempa = crs[A];
-	      SETC(utempa & bitmask16[17-scount]);
-	      utempa = utempa >> scount;
-	      crs[A] = utempa;
-	    } else {
-	      crs[A] = 0;
-	      SETC(0);
-	    }
-	    break;
-
-	  case 00500: /* ARS */
-	    fprintf(stderr," ARS %d\n", scount);
-	    if (scount <= 16) {
-	      tempa = *(short *)(crs+A);
-	      SETC(tempa & bitmask16[17-scount]);
-	      tempa = tempa >> scount;
-	      *(short *)(crs+A) = tempa;
+	case 00100: /* LRS (different in R & V modes) */
+	  fprintf(stderr," LRS %d\n", scount);
+	  if (crs[KEYS] & 010000) {          /* V/I mode */
+	    if (scount <= 32) {
+	      templ = *(int *)(crs+A);
+	      SETC(templ & bitmask32[33-scount]);
+	      templ = templ >> scount;
+	      *(int *)(crs+A) = templ;
 	    } else if (crs[A] & 0x8000) {
-	      *(short *)(crs+A) = 0xFFFF;
+	      *(int *)(crs+A) = 0xFFFFFFFF;
 	      SETC(1);
 	    } else {
-	      *(short *)(crs+A) = 0;
+	      *(int *)(crs+A) = 0;
 	      SETC(0);
 	    }
-	    break;
-
-	  case 00600: /* ARR */
-	    fprintf(stderr," ARR %d\n", scount);
-	    scount = ((scount-1)%16)+1;   /* make scount 1-16 */
-	    SETC(crs[A] & bitmask16[17-scount]);
-	    crs[A] = (crs[A] >> scount) | (crs[A] << (16-scount));
-	    break;
-
-	  case 01000: /* LLL */
-	    fprintf(stderr," LLL %d\n", scount);
-	    if (scount <= 32) {
-	      utempl = *(unsigned int *)(crs+A);
-	      SETC(utempl & bitmask32[scount]);
-	      utempl = utempl << scount;
-	      *(unsigned int *)(crs+A) = utempl;
+	  } else {
+	    utempa = crs[B] & 0x8000;        /* save B bit 1 */
+	    if (scount <= 31) {
+	      templ = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
+	      SETC(templ & bitmask32[32-scount]);
+	      templ = templ >> (scount+1);
+	      crs[A] = templ >> 15;
+	      crs[B] = (templ & 0x7FFF) | utempa;
+	    } else if (crs[A] & 0x8000) {
+	      *(int *)(crs+A) = 0xFFFF7FFF | utempa;
+	      SETC(1);
 	    } else {
-	      *(unsigned int *)(crs+A) = 0;
+	      *(int *)(crs+A) = utempa;
 	      SETC(0);
 	    }
-	    break;
+	  }
+	  break;
 
-	  case 01100: /* LLS (different in R/V modes) */
-	    fprintf(stderr," LLS %d\n", scount);
-	    if (crs[KEYS] & 010000) {          /* V/I mode */
-	      if (scount < 32) {
-		templ = 0x80000000;
-		templ = templ >> scount;         /* create mask */
-		templ = templ & *(int *)(crs+A); /* grab bits */
-		templ = templ >> (31-scount);    /* extend them */
-		SETC(!(templ == -1 || templ == 0));
-		*(int *)(crs+A) = *(int *)(crs+A) << scount;
-	      } else {
-		*(int *)(crs+A) = 0;
-		SETC(0);
-	      }
-	    } else {
-              if (scount < 31) {
-                templ = crs[A];
-                templ = (templ<<16) | (crs[B]<<1);
-		templ2 = 0x80000000;
-		templ2 = templ2 >> scount;         /* create mask */
-		templ2 = templ2 & templ;           /* grab bits */
-		templ2 = templ2 >> (31-scount);    /* extend them */
-		SETC(!(templ2 == -1 || templ2 == 0));
-                templ = templ << scount;
-                crs[A] = templ >> 16;
-                crs[B] = (templ >> 1) & 0x7FFF;
-              } else {
-                *(int *)(crs+A) = 0;
-                SETC(0);
-              }
-	    }
-	    break;
+	case 00200: /* LRR */
+	  fprintf(stderr," LRR %d\n", scount);
+	  if (scount > 32)
+	    scount = scount - 32;
+	  utempl = *(unsigned int *)(crs+A);
+	  SETC(utempl & bitmask32[33-scount]);
+	  utempl = (utempl >> scount) | (utempl << (32-scount));
+	  *(unsigned int *)(crs+A) = utempl;
+	  break;
 
-	  case 01200: /* LLR */
-	    fprintf(stderr," LLR %d\n", scount);
-	    if (scount > 32)
-	      scount = scount - 32;
+	case 00400: /* ARL */
+	  fprintf(stderr," ARL %d\n", scount);
+	  if (scount <= 16) {
+	    utempa = crs[A];
+	    SETC(utempa & bitmask16[17-scount]);
+	    utempa = utempa >> scount;
+	    crs[A] = utempa;
+	  } else {
+	    crs[A] = 0;
+	    SETC(0);
+	  }
+	  break;
+
+	case 00500: /* ARS */
+	  fprintf(stderr," ARS %d\n", scount);
+	  if (scount <= 16) {
+	    tempa = *(short *)(crs+A);
+	    SETC(tempa & bitmask16[17-scount]);
+	    tempa = tempa >> scount;
+	    *(short *)(crs+A) = tempa;
+	  } else if (crs[A] & 0x8000) {
+	    *(short *)(crs+A) = 0xFFFF;
+	    SETC(1);
+	  } else {
+	    *(short *)(crs+A) = 0;
+	    SETC(0);
+	  }
+	  break;
+
+	case 00600: /* ARR */
+	  fprintf(stderr," ARR %d\n", scount);
+	  scount = ((scount-1)%16)+1;   /* make scount 1-16 */
+	  SETC(crs[A] & bitmask16[17-scount]);
+	  crs[A] = (crs[A] >> scount) | (crs[A] << (16-scount));
+	  break;
+
+	case 01000: /* LLL */
+	  fprintf(stderr," LLL %d\n", scount);
+	  if (scount <= 32) {
 	    utempl = *(unsigned int *)(crs+A);
 	    SETC(utempl & bitmask32[scount]);
-	    utempl = (utempl << scount) | (utempl >> (32-scount));
+	    utempl = utempl << scount;
 	    *(unsigned int *)(crs+A) = utempl;
-	    break;
-
-	  case 01400: /* ALL */
-	    fprintf(stderr," ALL %d\n", scount);
-	    if (scount <= 16) {
-	      SETC(crs[A] & bitmask16[scount]);
-	      crs[A] = crs[A] << scount;
-	    } else {
-	      crs[A] = 0;
-	      SETC(0);
-	    }
-	    break;
-
-	  case 01500: /* ALS */
-	    fprintf(stderr," ALS %d\n", scount);
-	    if (scount <= 15) {
-	      tempa = 0100000;
-	      tempa = tempa >> scount;         /* create mask */
-	      tempa = tempa & crs[A];          /* grab bits */
-	      tempa = tempa >> (15-scount);    /* extend them */
-	      SETC(!(tempa == -1 || tempa == 0));
-	      crs[A] = crs[A] << scount;
-	    } else if (crs[A] == 0) {
-	      SETC(0);
-	    } else {
-	      crs[A] = 0;
-	      SETC(1);
-	    }
-	    break;
-
-	  case 01600: /* ALR */
-	    fprintf(stderr," ALR %d\n", scount);
-	    scount = ((scount-1)%16)+1;   /* make scount 1-16 */
-	    SETC(crs[A] & bitmask16[scount]);
-	    crs[A] = (crs[A] << scount) | (crs[A] >> (16-scount));
-	    break;
-
-	  default:
-	    fprintf(stderr," unrecognized shift instruction\n");
-	    exit(1);
+	  } else {
+	    *(unsigned int *)(crs+A) = 0;
+	    SETC(0);
 	  }
+	  break;
+
+	case 01100: /* LLS (different in R/V modes) */
+	  fprintf(stderr," LLS %d\n", scount);
+	  if (crs[KEYS] & 010000) {          /* V/I mode */
+	    if (scount < 32) {
+	      templ = 0x80000000;
+	      templ = templ >> scount;         /* create mask */
+	      templ = templ & *(int *)(crs+A); /* grab bits */
+	      templ = templ >> (31-scount);    /* extend them */
+	      SETC(!(templ == -1 || templ == 0));
+	      *(int *)(crs+A) = *(int *)(crs+A) << scount;
+	    } else {
+	      SETC(*(int *)(crs+A) != 0);
+	      *(int *)(crs+A) = 0;
+	    }
+	  } else {
+	    utempa = crs[B] & 0x8000;            /* save B bit 1 */
+	    if (scount < 31) {
+	      utempl = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
+	      templ2 = 0x80000000;
+	      templ2 = templ2 >> scount;         /* create mask */
+	      templ2 = templ2 & utempl;          /* grab bits */
+	      templ2 = templ2 >> (31-scount);    /* sign extend them */
+	      SETC(!(templ2 == -1 || templ2 == 0));
+	      //printf(" before: A=%x, B=%x, utempl=%x, ", crs[A], crs[B], utempl);
+	      utempl = utempl << scount;
+	      crs[A] = utempl >> 16;
+	      crs[B] = ((utempl >> 1) & 0x7FFF) | utempa;
+	      //printf(" after: A=%x, B=%x, utempl=%x\n", crs[A], crs[B], utempl);
+	    } else {
+	      SETC(*(unsigned int *)(crs+A) != 0);
+	      *(unsigned int *)(crs+A) = utempa;
+	    }
+	  }
+	  break;
+
+	case 01200: /* LLR */
+	  fprintf(stderr," LLR %d\n", scount);
+	  if (scount > 32)
+	    scount = scount - 32;
+	  utempl = *(unsigned int *)(crs+A);
+	  SETC(utempl & bitmask32[scount]);
+	  utempl = (utempl << scount) | (utempl >> (32-scount));
+	  *(unsigned int *)(crs+A) = utempl;
+	  break;
+
+	case 01400: /* ALL */
+	  fprintf(stderr," ALL %d\n", scount);
+	  if (scount <= 16) {
+	    SETC(crs[A] & bitmask16[scount]);
+	    crs[A] = crs[A] << scount;
+	  } else {
+	    crs[A] = 0;
+	    SETC(0);
+	  }
+	  break;
+
+	case 01500: /* ALS */
+	  fprintf(stderr," ALS %d\n", scount);
+	  if (scount <= 15) {
+	    tempa = 0100000;
+	    tempa = tempa >> scount;         /* create mask */
+	    tempa = tempa & crs[A];          /* grab bits */
+	    tempa = tempa >> (15-scount);    /* extend them */
+	    SETC(!(tempa == -1 || tempa == 0));
+	    crs[A] = crs[A] << scount;
+	  } else if (crs[A] == 0) {
+	    SETC(0);
+	  } else {
+	    crs[A] = 0;
+	    SETC(1);
+	  }
+	  break;
+
+	case 01600: /* ALR */
+	  fprintf(stderr," ALR %d\n", scount);
+	  scount = ((scount-1)%16)+1;   /* make scount 1-16 */
+	  SETC(crs[A] & bitmask16[scount]);
+	  crs[A] = (crs[A] << scount) | (crs[A] >> (16-scount));
+	  break;
+
+	default:
+	  printf(" unrecognized shift instruction\n");
+	  exit(1);
+	}
 	continue;
       }
 
@@ -2087,22 +2382,30 @@ lcgt:
 	  continue;
 	}
 
-	fprintf(stderr," unrecognized skip instruction\n");
+	if ((inst & 0177760) == 0100240) {
+	  fprintf(stderr," SNR %d\n", (inst & 017)+1);
+	  if (!(sswitch & bitmask16[(inst & 017)+1]))
+	    RPL++;
+	  continue;
+	}
+
+	if ((inst & 0177760) == 0101240) {
+	  fprintf(stderr," SNS %d\n", (inst & 017)+1);
+	  if (sswitch & bitmask16[(inst & 017)+1])
+	    RPL++;
+	  continue;
+	}
+
+	printf(" unrecognized skip instruction\n");
 	exit(1);
 
       }
     }
 
     /* here for non-generic instructions: memory references or pio */
+    /* pio can only occur in S/R modes */
 
-    if (crs[KEYS] & 010000) {
-      fprintf(stderr," VI-mode MR decode\n");
-      exit(1);
-    }
-
-    /* pio? */
-
-    if ((inst & 036000) == 030000) {
+    if (!(crs[KEYS] & 010000) && (inst & 036000) == 030000) {
       pio(inst);
       continue;
     }
@@ -2137,7 +2440,7 @@ lcgt:
 	 x=1, opcode='15 03 -> jsx (RV) (aka '35 03)
     */
     
-    if (opcode == 01500) {          /* '15 = ldx/stx form, depending on X */
+    if (opcode == 01500) {
       opcode = opcode | ((inst & 040000)>>4);   /* if X set, expand opcode */
       x = 0;                        /* clear X bit (these can't be indexed) */
       fprintf(stderr," ldx/stx opcode adjusted\n");
@@ -2158,14 +2461,14 @@ lcgt:
       break;
     case 4:  /* 32I */
       ea = ea32i(inst, i, x);
+      printf("32I not supported\n");
       exit(1);
       break;
     case 6:  /* 64V */
       ea = ea64v(inst, i, x, &opcode);
-      exit(1);
       break;
     default:
-      fprintf(stderr,"Bad CPU mode in EA calculation, keys = %o\n", crs[KEYS]);
+      printf("Bad CPU mode in EA calculation, keys = %o\n", crs[KEYS]);
       exit(1);
     }
 
@@ -2267,17 +2570,17 @@ lcgt:
       continue;
     }
 
+    /* this should set the C and L bits, and is implemented in u-code
+       with a subtract.  However, that operation can overflow and give
+       the wrong result */
+
     if (opcode == 01100) {
       fprintf(stderr," CAS\n");
-      utempa = crs[A];
-      crs[A] -= get16(ea);
-      SETCC_A;
-      crs[A] = utempa;
-compskip:
-      if (crs[KEYS] & 0200)
-	RPL += 2;
-      else if (crs[KEYS] & 0100)
+      m = get16(ea);
+      if (crs[A] == m)
 	RPL++;
+      else if (*(short *)(crs+A) < *(short *)&m)
+	RPL += 2;
       continue;
     }
 
@@ -2368,7 +2671,7 @@ compskip:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	fprintf(stderr," LDL\n");
 	crs[A] = get16(ea);
-	crs[B] = get16(ea);
+	crs[B] = get16(ea+1);
       } else {
 	fprintf(stderr," JEQ\n");
 	if (*(short *)(crs+A) == 0)
@@ -2394,10 +2697,10 @@ compskip:
 
     if (opcode == 01002) {
       if (crs[KEYS] & 010000) {          /* V/I mode */
-	fprintf(stderr," PCL\n");
+	printf(" PCL\n");
 	exit(1);
       } else {
-	fprintf(stderr," CREP\n");
+	printf(" CREP\n");
 	exit(1);
       }
       continue;
@@ -2473,26 +2776,35 @@ compskip:
     if (opcode == 03502) {
       fprintf(stderr," STY\n");
       put16(crs[Y],ea);
+      printf("executed STY, Y=%o, ea=%o\n", crs[Y], ea);
       continue;
     }
 
     if (opcode == 01503) {
-      fprintf(stderr," JIX\n");
-      crs[X]++;
-      if (crs[X] != 0)
-	RPL = ea;
+      if (crs[KEYS] & 010000) {          /* V/I mode */
+	fprintf(stderr," QFLX\n");
+	crs[X] = get16(ea) * 8;
+      } else {
+	fprintf(stderr," JIX\n");
+	crs[X]++;
+	if (crs[X] != 0)
+	  RPL = ea;
+      }
       continue;
     }
 
     if (opcode == 01501) {
       fprintf(stderr," FLX\n");
+      printf("FLX, RPL=%o, inst=%o, next word=%o, X=%o, ea=%o, [ea]=%o\n", RPL-1, inst, get16(RP), crs[X], ea, get16(ea));
       crs[X] = get16(ea) * 2;
+      printf("executed FLX, X=%o\n", crs[X]);
       continue;
     }
 
     if (opcode == 03501) {
       fprintf(stderr," LDY\n");
       crs[Y] = get16(ea);
+      printf("executed LDY, Y=%o, ea=%o\n", crs[Y], ea);
       continue;
     }
 
@@ -2739,12 +3051,74 @@ compskip:
       continue;
     }
 
+    if (opcode == 01202) {
+      fprintf(stderr," EAXB\n");
+      *(ea_t *)(crs+XB) = ea;
+      continue;
+    }
+
+    if (opcode == 01302) {
+      fprintf(stderr," EALB\n");
+      *(ea_t *)(crs+LB) = ea;
+      continue;
+    }
+
+    if (opcode == 0101) {
+      fprintf(stderr," EAL\n");
+      *(ea_t *)(crs+L) = ea;
+      continue;
+    }
+
+    if (opcode == 0301) {
+      fprintf(stderr," STLR\n");
+      utempa = ea;                 /* word number portion only */
+      if (utempa & 040000) {       /* absolute RF addressing */
+	if (restrict()) break;
+	regs.s32[utempa & 0377] = *(int *)(crs+L);
+      } else {
+	utempa &= 037;
+	if (utempa > 020 && restrict()) break;
+	*(((int *)crs)+utempa) = *(int *)(crs+L);
+      }
+      continue;
+    }
+
+    if (opcode == 0501) {
+      fprintf(stderr," LDLR\n");
+      utempa = ea;                 /* word number portion only */
+      if (utempa & 040000) {       /* absolute RF addressing */
+	if (restrict()) break;
+	*(int *)(crs+L) = regs.s32[utempa & 0377];
+      } else {
+	utempa &= 037;
+	if (utempa > 020 && restrict()) break;
+	*(int *)(crs+L) = *(((int *)crs)+utempa);
+      }
+      continue;
+    }
+
+    if (opcode == 01401) {
+      fprintf(stderr," EIO\n");
+      if (restrict()) break;
+      crs[KEYS] &= ~0100;      /* reset EQ */
+      pio(ea & 0xFFFF);
+      continue;
+    }
+
+    if (opcode == 00102) {
+      fprintf(stderr," XEC\n");
+      continue;
+    }
+
+#if 0
     if (mem[066] != 0) {
       fprintf(stderr," JST* '66 [%o]\n", mem[066]);
       mem[mem[066]] = RPL;
       RPL = mem[066]+1;
       continue;
     }
+#endif
+    printf("Unknown memory reference opcode: %o\n", opcode);
     fprintf(stderr," UNKNOWN OPCODE: %o\n", opcode);
     exit(1);
   }
@@ -3046,7 +3420,7 @@ svc() {
     goto badsvc;
 
   if (svcinfo[class][func].locargs != 0) {
-    fprintf(stderr," Can't handle LOC() args\n");
+    printf(" Can't handle LOC() args\n");
     exit(1);
   }
 
@@ -3349,7 +3723,7 @@ svc() {
 
 unimp:
 
-  fprintf(stderr," svc not implemented\n", class, func);
+  printf(" svc not implemented, class=%o, func=%o\n", class, func);
   exit(1);
 
   /* here on a bad svc; if the bounce bit (bit 2) is set in the code word,
@@ -3364,7 +3738,7 @@ badsvc:
     return;
   }
   
-  fprintf(stderr," halting on bad svc, class=%o, func=%o\n", class, func);
+  printf(" halting on bad svc, class=%o, func=%o\n", class, func);
   exit(1);
 }
 
@@ -3387,7 +3761,7 @@ pio(unsigned int inst) {
   if (devmap[device])
     devmap[device](class, func, device);
   else {
-    fprintf(stderr," no handler for device\n");
+    printf(" no handler for device '%o\n", device);
     exit(1);
   }
 }

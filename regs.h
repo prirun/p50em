@@ -7,10 +7,15 @@
 #define L 4
 #define E 6
 
-#define S 10
-#define Y 10
-
-#define X 14
+#if 1
+  #define S 10
+  #define Y 10
+  #define X 14
+#else
+  #define S 11
+  #define Y 11
+  #define X 15
+#endif
 
 /* XXX: is the floating pt register really split like this? */
 
@@ -90,19 +95,19 @@ unsigned short *crs;
 /* define mapping between memory addresses and the current register set */
 
 unsigned short memtocrs[] = {
-  14,     /* 0 = X */
-  4,      /* 1 = A */
-  5,      /* 2 = B */
-  10,     /* 3 = Y */
-  20,     /* 4 = FAC1/FLTH */
-  21,     /* 5 = FAC1/FLTL */
-  22,     /* 6 = FAC1/FEXP */
+  X,      /* 0 = X */
+  A,      /* 1 = A */
+  B,      /* 2 = B */
+  Y,      /* 3 = Y */
+  FLTH,   /* 4 = FAC1/FLTH */
+  FLTL,   /* 5 = FAC1/FLTL */
+  FEXP,   /* 6 = FAC1/FEXP */
   -1,     /* 7 = PC (this is in the microcode scratch register set - TR7) */
   32,     /* 10 = unnamed */
-  44,     /* 11 = FCODE */
-  47,     /* 12 = FADDR */
+  FCODE,  /* 11 = FCODE */
+  FADDR,  /* 12 = FADDR */
   16,     /* 13 = unnamed */
-  26,     /* 14 = unnamed (SB seg) */
-  27,     /* 15 = unnamed (SB word) */
-  28,     /* 16 = unnamed (LB seg) */
-  29};    /* 17 = unnamed (LB word) */
+  SBH,    /* 14 = unnamed (SB seg) */
+  SBL,    /* 15 = unnamed (SB word) */
+  LBH,    /* 16 = unnamed (LB seg) */
+  LBL};    /* 17 = unnamed (LB word) */

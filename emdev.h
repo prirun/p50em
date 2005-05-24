@@ -53,7 +53,25 @@
 */
 
 #include <fcntl.h>
+#include <sys/time.h>
+#include <sys/select.h>
 #include <unistd.h>
+
+/* this macro is used when I/O is successful.  In VI modes, it sets
+   the EQ condition code bit.  In SR modes, it does a skip */
+
+#define IOSKIP \
+  if (crs[KEYS] & 010000) \
+    crs[KEYS] |= 0100; \
+  else \
+    RPL++
+
+/* macro to detect if an I/O instruction is followed by JMP *-1 (SR modes)
+   or BCNE *-2 (VI modes) */
+
+#define BLOCKIO \
+  (get16(RP) == 03776 || (get16(RP) == 0141603 && get16(RP+1) == RPL-2))
+
 
 void devnull (short class, short func, short device) {
 
@@ -72,7 +90,7 @@ void devnull (short class, short func, short device) {
   case 1:
     fprintf(stderr," SKS '%02o%02o\n", func, device);
     if (func == 0)
-      RPL++;                     /* assume it's always ready */
+      IOSKIP;                     /* assume it's always ready */
     else {
       fprintf(stderr," unimplemented SKS device '%02o function\n", device);
       exit(1);
@@ -92,7 +110,7 @@ void devnull (short class, short func, short device) {
   case 3:
     fprintf(stderr," OTA '%02o%02o\n", func, device);
     if (func == 0 | func == 1) {
-      RPL++;                     /* OTA '0004 always works on Unix */
+      IOSKIP;                     /* OTA '0004 always works on Unix */
     } else {
       fprintf(stderr," unimplemented OTA device '%02o function\n", device);
       exit(1);
@@ -106,19 +124,66 @@ void devnull (short class, short func, short device) {
 
    OCP '0004 = initialize for input only, echoplex, 110 baud, 8-bit, no parity
    OCP '0104 = same, but for output only
+   OCP '0204 = set receive interrupt mask
+   OCP '0304 = enable receive DMA/C
+   OCP '0404 = reset receive interrupt mask and DMA/C enable
+   OCP '0504 = set transmit interrupt mask
+   OCP '0604 = enable transmit DMA/C
+   OCP '0704 = reset transmit interrupt mask and DMA/C enable
    OCP '1004 = Full duplex; software must echo
+   OCP '1104 = output a sync pulse (diagnostics) 
    OCP '1204 = Prime normal, independent xmit and recv w/echoplex
    OCP '1304 = Self test mode (internally connects transmitter to receiver)
-   OCP '1704 = same as above, but clears interrupt masks and dma/c enables
+   OCP '1504 = Set both xmit & rcv interrupt masks
+   OCP '1604 = Reset both xmit & rcv interrupt masks
+   OCP '1704 = same as '0004, but clears interrupt masks and dma/c enables
+               (this is the state after Master Clear)
 
+   SKS '0004 = skip if either receive or xmit ready, whichever are enabled
+   SKS '0104 = skip if not busy
+   SKS '0204 = skip if receiver not interrupting
+   SKS '0304 = skip if control registers valid
+   SKS '0404 = skip if neither xmit nor recv are interrupting
+   SKS '0504 = skip if xmit not interrupting
+   SKS '0604 = skip is xmit ready (can accept a character)
+   SKS '0704 = skip if recv ready (character present)
+   SKS '1104-'1404 = skip if input bit 1/2/3/4 marking
+   SKS '1504 = skip if parity error
+   SKS '1604 = skip if character overrun
+   SKS '1704 = skip if framing error
+
+   INA '0004 = "or" character into right byte of A, not modifying left byte
+   INA '0404 = input receive control register 1 (always works)
+   INA '0504 = input receive control register 2 (always works)
+   INA '0604 = input xmit control register 1 (always works)
+   INA '0704 = input xmit control register 2 (always works)
+   INA '1004 = like '0004, but clear A first
+   INA '1104 = input device ID
+   INA '1404 = input recv DMA/C channel address (these last 4 always work)
+   INA '1504 = input xmit DMA/C channel address
+   INA '1604 = input recv interrupt vector
+   INA '1704 = input xmit interrupt vector
+
+   OTA '0004 = xmit character from A; fails if inited for recv only
+   OTA '0404 = output rcv CR 1
+   OTA '0504 = output rcv CR 2
+   OTA '0604 = output xmit CR 1
+   OTA '0704 = output xmit CR 2
+   OTA '1404 = output recv DMA/C channel address (these last 4 always work)
+   OTA '1504 = output xmit DMA/C channel address
+   OTA '1604 = output recv interrupt vector
+   OTA '1704 = output xmit interrupt vector
 
 */
 
 void devasr (short class, short func, short device) {
 
   static int ttydev=-1;
+  static int ttyflags;
+  fd_set readfds;
+  struct timeval timeout;
   unsigned char ch;
-  int ttyflags, newflags;
+  int newflags;
   int n;
 
   if (ttydev < 0) {
@@ -127,6 +192,12 @@ void devasr (short class, short func, short device) {
       perror(" error opening /dev/tty");
       exit(1);
     }
+    if (fcntl(ttydev, F_GETFL, ttyflags) == -1) {
+      perror(" unable to get tty flags");
+      exit(1);
+    }
+    FD_ZERO(&readfds);
+    FD_SET(ttydev, &readfds);
   }
 
   switch (class) {
@@ -137,29 +208,28 @@ void devasr (short class, short func, short device) {
 
   case 1:
     fprintf(stderr," SKS '%02o%02o\n", func, device);
-    if (func <= 7)
-      RPL++;                     /* assume it's always ready */
-    else {
-      fprintf(stderr," unimplemented SKS '04 function\n");
-      exit(1);
+    if (func < 7)
+      IOSKIP;                     /* assume it's always ready */
+    else if (func == 7) {         /* skip if received a char */
+      timeout.tv_sec = 0;
+      timeout.tv_usec = 100000;
+      if (select(1, &readfds, NULL, NULL, &timeout) == 1)
+	IOSKIP;
     }
     break;
 
   case 2:
     fprintf(stderr," INA '%02o%02o\n", func, device);
     if (func == 0 || func == 010) {
-      if (fcntl(ttydev, F_GETFL, ttyflags) == -1) {
-	perror(" unable to get tty flags");
-	exit(1);
-      }
-      if (get16(RPL) == 03776)       /* JMP *-1 -> blocking read */
+      if (BLOCKIO)
 	newflags = ttyflags & ~O_NONBLOCK;
       else
 	newflags = ttyflags | O_NONBLOCK;
-      if (fcntl(ttydev, F_SETFL, newflags) == -1) {
+      if (newflags != ttyflags && fcntl(ttydev, F_SETFL, newflags) == -1) {
 	perror(" unable to set tty flags");
 	exit(1);
       }
+      ttyflags = newflags;
       n = read(ttydev, &ch, 1);
       if (n < 0) {
 	if (errno != EAGAIN) {
@@ -170,17 +240,18 @@ void devasr (short class, short func, short device) {
 	if (func >= 010)
 	  crs[A] = 0;
 	crs[A] = crs[A] | ch | 0x80;
-	RPL++;
+	fprintf(stderr," character read=%o: %c\n", crs[A], crs[A]);
+	IOSKIP;
       } else  if (n != 0) {
 	fprintf(stderr," unexpected error reading from tty, n=%d", n);
 	exit(1);
       }
     } else if (func == 011) {    /* read device id? */
       crs[A] = 4;
-      RPL++;
+      IOSKIP;
     } else if (func == 012) {    /* read control word */
       crs[A] = 04110;
-      RPL++;
+      IOSKIP;
     } else {
       fprintf(stderr," unimplemented INA '04 function\n");
       exit(1);
@@ -190,12 +261,15 @@ void devasr (short class, short func, short device) {
   case 3:
     fprintf(stderr," OTA '%02o%02o\n", func, device);
     if (func == 0) {
-      fprintf(stderr," char to write=%o\n", crs[A]);
-      putchar(crs[A] & 0x7f);
-      fflush(stdout);
-      RPL++;                     /* OTA '0004 always works on Unix */
-    } else if (func == 1) {         /* write control word */
-      RPL++;
+      ch = crs[A] & 0x7f;
+      fprintf(stderr," char to write=%o: %c\n", crs[A], ch);
+      if (ch > 0) {
+	putchar(crs[A] & 0x7f);
+	fflush(stdout);
+      }
+      IOSKIP;                     /* OTA '0004 always works on Unix */
+    } else if (func == 1) {       /* write control word */
+      IOSKIP;
     } else {
       fprintf(stderr," unimplemented OTA '04 function\n");
       exit(1);
@@ -224,7 +298,7 @@ void devmt (short class, short func, short device) {
 
   case 2:
     fprintf(stderr," INA '%02o%02o\n", func, device);
-    if (get16(RPL) == 03776) {       /* JMP *-1 -> blocking read */
+    if (BLOCKIO) {
       fprintf(stderr," Device not supported, so I/O hangs\n");
       exit(1);
     }
@@ -232,7 +306,7 @@ void devmt (short class, short func, short device) {
 
   case 3:
     fprintf(stderr," OTA '%02o%02o\n", func, device);
-    if (get16(RPL) == 03776) {       /* JMP *-1 -> blocking read */
+    if (BLOCKIO) {
       fprintf(stderr," Device not supported, so I/O hangs\n");
       exit(1);
     }
@@ -267,7 +341,7 @@ void devcp (short class, short func, short device) {
   case 2:
     fprintf(stderr," INA '%02o%02o\n", func, device);
     if (func == 016) {
-      crs[A] = 014114;
+      crs[A] = sswitch;
     } else {
       fprintf(stderr," unimplemented INA device '%02o function\n", device);
       exit(1);
@@ -277,7 +351,7 @@ void devcp (short class, short func, short device) {
   case 3:
     fprintf(stderr," OTA '%02o%02o\n", func, device);
     if (func == 017) {           /* write lights */
-      RPL++;
+      IOSKIP;
     } else {
       fprintf(stderr," unimplemented OTA device '%02o function\n", device);
       exit(1);
@@ -309,7 +383,6 @@ void devcp (short class, short func, short device) {
  */
 
 void devdisk (short class, short func, short device) {
-  unsigned short m;
   unsigned short oar;
   unsigned short status;       /* actual status */
   unsigned short teststatus;   /* status for order testing */
@@ -318,13 +391,14 @@ void devdisk (short class, short func, short device) {
   short halt;
   short unit;
   short head, track, rec, recsize, nwords;
-  unsigned short dmachan, dmanch, dmaaddr;
+  unsigned short dmachan, dmanch, dmaaddr, dmareg;
   short dmanw;
   char ordertext[8];
   char devfile[8];
   char devopened[8];        /* device file that is open on devfd */
   static int devfd=-1;      /* device file descriptor */
   int theads, spt, phyra;
+
   switch (class) {
 
   case 0:
@@ -343,7 +417,11 @@ void devdisk (short class, short func, short device) {
       crs[A] |= device;
     else if (func == 017)    /* read status */
       crs[A] = 0100000;
-    RPL++;
+    else {
+      fprintf(stderr," unimplemented INA device '%02o function\n", device);
+      exit(1);
+    }
+    IOSKIP;
     break;
 
   case 3:
@@ -382,10 +460,11 @@ void devdisk (short class, short func, short device) {
 	  else if (order == 6)
 	    strcpy(ordertext,"Write");
 	  fprintf(stderr," %s, head=%d, track=%d, rec=%d, recsize=%d\n", ordertext, head, track, rec, recsize);
-	  dmanw = get16(dmachan);
+	  dmareg = ((dmachan & 036) << 1) | (dmachan & 1);
+	  dmanw = regs.sym.regdmx[dmareg];
 	  dmanw = -(dmanw>>4);
-	  dmaaddr = get16(dmachan+1);
-	  fprintf(stderr, " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dmanch, dmachan, get16(dmachan), dmachan+1, dmaaddr, dmanw);
+	  dmaaddr = regs.sym.regdmx[dmareg+1];
+	  fprintf(stderr, " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dmanch, dmachan, regs.sym.regdmx[dmareg], dmachan+1, dmaaddr, dmanw);
 	  if (devfd == -1) {
 	    fprintf(stderr," Unit not selected or not ready\n");
 	    status = 0100001;
@@ -407,10 +486,8 @@ void devdisk (short class, short func, short device) {
 	      perror("Unable to read drive file");
 	      exit(1);
 	    }
-	    put16(0,dmachan);
-	    m = get16(dmachan+1);
-	    m += dmanw;
-	    put16(m,dmachan+1);
+	    regs.sym.regdmx[dmareg] = 0;
+	    regs.sym.regdmx[dmareg+1] += dmanw;
 
 	  } else if (order == 6)
 	    fprintf(stderr," Write order not implemented\n");
@@ -475,7 +552,7 @@ void devdisk (short class, short func, short device) {
 	  exit(1);
 	}
       }	  
-      RPL++;
+      IOSKIP;
     } else {
       fprintf(stderr," unimplemented OTA device '%02o function\n", device);
       exit(1);
