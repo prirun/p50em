@@ -85,19 +85,46 @@ typedef unsigned int ea_t;
     crs[KEYS] |= 0100; \
   else if (*(int *)(crs+L) < 0) \
     crs[KEYS] |= 0200;
+
+#define SETCC_LE \
+  crs[KEYS] &= ~0300; \
+  if (*(int *)(crs+L) == 0 && *(int *)(crs+E) == 0) \
+    crs[KEYS] |= 0100; \
+  else if (*(int *)(crs+L) < 0) \
+    crs[KEYS] |= 0200;
+
+/* NOTE: in previous versions, exponent must be zero for 0.0, but DIAG
+   test CPU.FLOAT.V consideres a zero fraction and non-zero exponent to
+   also be 0.0 */
   
 #define SETCC_F \
   crs[KEYS] &= ~0300; \
   if (*(short *)(crs+FLTH) < 0) \
     crs[KEYS] |= 0200; \
-  else if (*(int *)(crs+FLTH) == 0 && *(short *)(crs+FEXP) == 0) \
+  else if (*(int *)(crs+FLTH) == 0) \
     crs[KEYS] |= 0100;
 
 #define SETCC_D SETCC_F
 
+/* XSETC is a dummy to indicate that the C-bit may not be set correctly */
+
+#define XSETC(onoff) \
+  if ((onoff)) crs[KEYS] |= 0100000; \
+  else crs[KEYS] &= 077777;
+
 #define SETC(onoff) \
   if ((onoff)) crs[KEYS] |= 0100000; \
   else crs[KEYS] &= 077777;
+
+/* XSETL is a dummy to indicate that the L-bit may not be set correctly */
+
+#define XSETL(onoff) \
+  if ((onoff)) crs[KEYS] |= 020000; \
+  else crs[KEYS] &= ~020000;
+
+#define SETL(onoff) \
+  if ((onoff)) crs[KEYS] |= 020000; \
+  else crs[KEYS] &= ~020000;
 
 /* Table for unusual instructions that aren't implemented but we want to
    print something when they're encountered */
@@ -314,7 +341,6 @@ newkeys (unsigned short new) {
   case 4:                     /* 32I */
     printf("Entering 32I mode, keys=%o\n", crs[KEYS]);
     amask = 0177777;
-    exit(1);
     break;
   case 6:                     /* 64V */
     fprintf(stderr,"Entering 64V mode, keys=%o\n", crs[KEYS]);
@@ -538,7 +564,7 @@ ea_t ea64v (unsigned short inst, short i, short x, short *opcode) {
   unsigned short br;
   unsigned short live;                           /* max live register addr */
   unsigned short y;
-  unsigned short xx;
+  unsigned short xok;
   unsigned short a;
   unsigned short ixy;
   unsigned short m;
@@ -620,21 +646,25 @@ labA:
 
 labB:
   fprintf(stderr," 2-word format\n");
+  // x = inst & 040000;            /* get real bit 2 again for ixy */
   y = (inst & 020);
+  ixy = ((i != 0)<<2) | ((x != 0)<<1) | (y != 0);
+  xok = ((*opcode & 03700) != 01500);        /* true if indexing is okay */
+
   *opcode = *opcode | ((inst >> 2) & 3);         /* opcode extension */
   br = (inst & 3);
   a = get16(RP);
-  ixy = ((i != 0)<<2) | ((x != 0)<<1) | (y != 0);
-  fprintf(stderr," new opcode=%5#0o, y=%d, br=%d, ixy=%d, a=%o\n", *opcode, (y != 0), br, ixy, a);
+  fprintf(stderr," new opcode=%5#0o, y=%d, br=%d, ixy=%d, xok=%d, a=%o\n", *opcode, (y != 0), br, ixy, xok, a);
   RPL++;
 
   ea_s = crs[PBH+br*2] | (ea_s & RINGMASK16);
   ea_w = crs[PBL+br*2] + a;
 
-  if (ixy == 1 || ixy == 4)
-    ea_w += crs[Y];
-  else if (ixy == 2 || ixy == 6)
-    ea_w += crs[X];
+  if (xok)
+    if (ixy == 1 || ixy == 4)
+      ea_w += crs[Y];
+    else if (ixy == 2 || ixy == 6)
+      ea_w += crs[X];
 
   if (ixy >= 3) {
     ea = MAKEVA(ea_s, ea_w);
@@ -647,10 +677,11 @@ labB:
     ea_s = m | (ea_s & RINGMASK16);
     ea_w = get16(ea+1);              /* XXX: should do 16-bit add */
     fprintf(stderr," After indirect, ea_s=%o, ea_w=%o\n", ea_s, ea_w);
-    if (ixy == 5)
-      ea_w += crs[Y];
-    else if (ixy == 7)
-      ea_w += crs[X];
+    if (xok)
+      if (ixy == 5)
+	ea_w += crs[Y];
+      else if (ixy == 7)
+	ea_w += crs[X];
   }
   return MAKEVA(ea_s, ea_w);
 }
@@ -752,10 +783,10 @@ memdump(int start, int end) {
 
 main (int argc, char **argv) {
 
-  signed short tempa,tempa1,tempa2;
+  short tempa,tempa1,tempa2;
   unsigned short utempa;
-  signed int templ,templ1,templ2;
-  signed long long ll;
+  int templ,templ1,templ2;
+  long long templl;
   unsigned int utempl;
   float tempf,tempf1,tempf2;
   double tempd,tempd1,tempd2;
@@ -769,7 +800,7 @@ main (int argc, char **argv) {
   int nw;
   unsigned short rvec[9];    /* SA, EA, P, A, B, X, keys, dummy, dummy */
   unsigned short inst;
-  unsigned short m;
+  unsigned short m,m1,m2;
   int scount;                          /* shift count */
   int instcount=0;
 
@@ -870,13 +901,16 @@ main (int argc, char **argv) {
 
   while (1) {
     
+#if 0
     if (RPL > rvec[1]) {       /* hack for testing */
       printf("\nOOPS! Program counter %o > EA %o\n", RPL, rvec[1]);
       exit(1);
     }
+#endif
 
     prevpc = RPL;
     inst = get16(RP);
+    crs[PBH] = RPH;
     instcount++;
     fprintf(stderr,"\n%o: %o		A='%o/%:0d B='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d	#%d\n", RP, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&040000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, instcount);
     RPL++;
@@ -975,7 +1009,7 @@ main (int argc, char **argv) {
 
 	if (inst == 000000) {
 	  fprintf(stderr," HLT\n");
-	  printf("\nProgram halt at %o\n", prevpc);
+	  printf("\nProgram halt at %o, keys=%o\n", prevpc, crs[KEYS]);
 	  exit(1);
 	}
 
@@ -1024,10 +1058,10 @@ main (int argc, char **argv) {
 	if (inst == 001314) {
 	  fprintf(stderr," CGT\n");
 	  tempa = get16(RP);              /* get number of words */
-	  if (1 <= crs[A] && crs[A] <= tempa)
+	  if (1 <= crs[A] && crs[A] < tempa)
 	    RPL = get16(RP+crs[A]);
 	  else
-	    RPL = get16(RP+tempa+1);
+	    RPL = get16(RP+tempa);
 	  continue;
 	}
 
@@ -1040,19 +1074,22 @@ main (int argc, char **argv) {
 	if (inst == 000305) {
 	  fprintf(stderr," PIDL\n");
 	  *(int *)(crs+E) = *(int *)(crs+L);
-	  *(int *)(crs+L) = (*(int *)(crs+L)) >> 16;
+	  *(int *)(crs+L) = (int)(*(int *)(crs+L) & 0x80000000) >> 31;
 	  continue;
 	}
 
-	/* XXX: how does PIMA affect registers when overflow occurs? */
+	/* XXX: how does PIMA affect registers when overflow occurs?
+	   NOTE: PMA manual says copy B reg to A reg, but DIAG seems
+	   to indicate a swap */
 
 	if (inst == 000015) {
 	  fprintf(stderr," PIMA\n");
-	  if (crs[A] == 0 | crs[A] == 0177777) {
+	  tempa = crs[B];
+	  crs[B] = crs[A];
+	  crs[A] = tempa;
+	  if (crs[B] == 0 || crs[B] == 0177777) {
 	    SETC(0);
-	    crs[A] = crs[B];
 	  } else {
-	    crs[A] = crs[B];
 	    cpuexception('i');
 	  }
 	  continue;
@@ -1078,26 +1115,33 @@ main (int argc, char **argv) {
 
 	if (inst == 000043) {
 	  fprintf(stderr," INK\n");
-	  crs[A] = (crs[KEYS] & 0xFF00) | (crs[VSC] & 0xFF);
+	  crs[A] = (crs[KEYS] & 0176000) | (crs[VSC] & 0xFF);
 	  continue;
 	}
 
 	if (inst == 001005) {
 	  fprintf(stderr," TKA\n");
+	  //printf("TKA: %o -> A\n", crs[KEYS]);
 	  crs[A] = crs[KEYS];
 	  continue;
 	}
 
 	if (inst == 000405) {
 	  fprintf(stderr," OTK\n");
-	  newkeys(crs[A] & 0xFF00);
+#if 1
+	  newkeys((crs[A] & 0176000) | (crs[KEYS] & 01777));
+	  crs[VSC] = (crs[VSC] & 0xFF00) | (crs[A] & 0xFF);
+#else
+	  newkeys(crs[A]);
 	  crs[VSC] = crs[A] & 0xFF;
+#endif
 	  continue;
 	}
 
 	if (inst == 001015) {
 	  fprintf(stderr," TAK\n");
-	  newkeys(crs[A]);
+	  //printf("TAK: %o -> KEYS\n", crs[A]);
+	  newkeys(crs[A] & 0177760);
 	  continue;
 	}
 
@@ -1489,6 +1533,7 @@ bidy:
 	  crs[A]++;
 	  SETC(crs[A] == 32768);
 	  SETCC_A;
+	  XSETL(0);
 	  continue;
 	}
 
@@ -1497,17 +1542,24 @@ bidy:
 	  crs[A] += 2;
 	  SETC(*(short *)(crs+A) <= -32767);
 	  SETCC_A;
+	  XSETL(0);
 	  continue;
 	}
+
+	/* NOTE: confusion here about what changes on overflow */
 
 	if (inst == 0141216) {                /* ACA */
 	  fprintf(stderr," ACA\n");
 	  if (crs[KEYS] & 0100000) {
 	    crs[A]++;
-	    SETC(crs[A] == 32768);
+	    if (crs[A] == 0100000)
+	      cpuexception('i');
+	    else
+	      SETC(0);
 	  } else 
 	    SETC(0);
 	  SETCC_A;
+	  XSETL(0);
 	  continue;
 	}
 
@@ -1516,6 +1568,7 @@ bidy:
 	  crs[A]--;
 	  SETC(crs[A] == 32767);
 	  SETCC_A;
+	  XSETL(0);
 	  continue;
 	}
 
@@ -1524,6 +1577,7 @@ bidy:
 	  crs[A] -= 2;
 	  SETC(*(short *)(crs+A) >= -32766);
 	  SETCC_A;
+	  XSETL(0);
 	  continue;
 	}
 
@@ -1586,6 +1640,7 @@ bidy:
 	if (inst == 0140214) {                /* CAZ */
 	  fprintf(stderr," CAZ\n");
 	  SETCC_A;
+	  XSETL(0);
 compskip:
 	  if (crs[KEYS] & 0200)
 	    RPL += 2;
@@ -1699,8 +1754,12 @@ compskip:
 	  fprintf(stderr," TCA\n");
 	  *(short *)(crs+A) = - (*(short *)(crs+A));
 	  SETCC_A;
-	  if (crs[A] == 0x8000)
+	  if (crs[A] != 0x8000) {
+	    SETC(0);
+	  } else {
 	    cpuexception('i');
+	  }
+	  XSETL(0);
 	  continue;
 	}
 
@@ -1708,8 +1767,12 @@ compskip:
 	  fprintf(stderr," TCL\n");
 	  *(int *)(crs+L) = - (*(int *)(crs+L));
 	  SETCC_L;
-	  if (*(unsigned int *)(crs+L) == 0x80000000)
+	  XSETL(0);
+	  if (*(unsigned int *)(crs+L) != 0x80000000) {
+	    SETC(0);
+	  } else {
 	    cpuexception('i');
+	  }
 	  continue;
 	}
 
@@ -1903,6 +1966,7 @@ lcgt:
 	  crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
 	  crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
 	  crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
+	  SETCC_L;
 	  continue;
 	}
 
@@ -1925,7 +1989,7 @@ lcgt:
 	  crs[FLTL] = tempda[1];
 	  crs[FLTD] = tempda[2];
 	  crs[FEXP] = tempda[3];
-	  SETC(0);
+	  XSETC(0);
 	  continue;
 	}
 
@@ -1933,6 +1997,8 @@ lcgt:
 	  fprintf(stderr," ADLL\n");
 	  if (crs[KEYS] & 020000)
 	    (*(int *)(crs+A))++;
+	  XSETC(0);
+	  XSETL(0);
 	  continue;
 	}
 
@@ -1946,20 +2012,20 @@ lcgt:
 	  crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
 	  crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
 	  crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
-	  SETC(0);
+	  XSETC(0);
 	  continue;
 	}
 
 	if (inst == 0140510) {
 	  fprintf(stderr," FSZE\n");
-	  if (*(int *)(crs+FLTH) == 0 && crs[FEXP] == 0)
+	  if (*(int *)(crs+FLTH) == 0)
 	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0140511) {
 	  fprintf(stderr," FSNZ\n");
-	  if (*(int *)(crs+FLTH) != 0 || crs[FEXP] != 0)
+	  if (*(int *)(crs+FLTH) != 0)
 	    RPL++;
 	  continue;
 	}
@@ -1980,14 +2046,14 @@ lcgt:
 
 	if (inst == 0140514) {
 	  fprintf(stderr," FSLE\n");
-	  if (*(int *)(crs+FLTH) < 0 || (*(int *)(crs+FLTH) == 0 && crs[FEXP] == 0))
+	  if (*(int *)(crs+FLTH) < 0 || *(int *)(crs+FLTH) == 0)
 	    RPL++;
 	  continue;
 	}
 
 	if (inst == 0140515) {
 	  fprintf(stderr," FSGT\n");
-	  if (*(int *)(crs+FLTH) >= 0 && (*(int *)(crs+FLTH) != 0 || crs[FEXP] != 0))
+	  if (*(int *)(crs+FLTH) > 0)
 	    RPL++;
 	  continue;
 	}
@@ -1997,9 +2063,48 @@ lcgt:
 	  *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
 	  prieee4(&tempf);
 	  templ = tempf;
+	  SETC(tempf > 1073741823 || tempf < -1073741824);
 	  crs[B] = templ & 0x7FFF;
 	  crs[A] = templ >> 15;
 	  continue;
+	}
+
+	if (inst == 0140531) {
+	  fprintf(stderr," INTA\n");
+	  *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
+	  prieee4(&tempf);
+	  tempa = tempf;
+	  SETC(tempf > 32767 || tempf < -32768);
+	  continue;
+	}
+
+	if (inst == 0140532) {
+	  fprintf(stderr," FLTA\n");
+	  tempf = *(short *)(crs+A);
+	  ieeepr4(&tempf);
+	  crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
+	  crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
+	  crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
+	  SETC(0);
+	}
+
+	if (inst == 0140533) {
+	  fprintf(stderr," INTL\n");
+	  *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
+	  prieee4(&tempf);
+	  templ = tempf;
+	  SETC(tempf > 2147483647 || tempf < -2147483648);
+	  continue;
+	}
+
+	if (inst == 0140535) {
+	  fprintf(stderr," FLTL\n");
+	  tempf = *(int *)(crs+L);
+	  ieeepr4(&tempf);
+	  crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
+	  crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
+	  crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
+	  SETC(0);
 	}
 
 	if (inst == 0141414) {
@@ -2521,6 +2626,7 @@ lcgt:
 	SETCC_A;
       }
       SETC(((~utempa ^ m) & (utempa ^ crs[A])) & 0x8000);
+      XSETL(0);
       continue;
     }
 
@@ -2542,6 +2648,7 @@ lcgt:
 	SETCC_A;
       }
       SETC(((~utempa ^ m) & (utempa ^ crs[A])) & 0x8000);
+      XSETL(0);
       continue;
     }
 
@@ -2570,17 +2677,22 @@ lcgt:
       continue;
     }
 
-    /* this should set the C and L bits, and is implemented in u-code
+    /* this should set the CC and L bits, and is implemented in u-code
        with a subtract.  However, that operation can overflow and give
        the wrong result */
 
     if (opcode == 01100) {
       fprintf(stderr," CAS\n");
       m = get16(ea);
-      if (crs[A] == m)
+      crs[KEYS] &= ~0300;
+      if (crs[A] == m) {
 	RPL++;
-      else if (*(short *)(crs+A) < *(short *)&m)
+	crs[KEYS] |= 0100;
+      } else if (*(short *)(crs+A) < *(short *)&m) {
 	RPL += 2;
+	crs[KEYS] |= 0200;
+      }
+      XSETL(0);
       continue;
     }
 
@@ -2609,6 +2721,14 @@ lcgt:
       continue;
     }
 
+    if (opcode == 01402) {
+      fprintf(stderr," JSXB\n");
+      //printf("RP=%o/%o, ea=%o/%o\n", RPH, RPL, ea>>16, ea&0xFFFF);
+      *(unsigned int *)(crs+XB) = RP;
+      RP = ea;
+      continue;
+    }
+
     if (opcode == 01500) {
       fprintf(stderr," STX\n");
       put16(crs[X],ea);
@@ -2622,9 +2742,20 @@ lcgt:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	*(int *)(crs+L) = templ;
       } else {                      /* R/S mode */
+	SETC(templ > 1073741823 || templ < -1073741824);
 	crs[A] = (templ >> 15);
 	crs[B] = templ & 077777;
       }
+      SETCC_L;
+      continue;
+    }
+
+    if (opcode == 01603) {
+      fprintf(stderr," MPL\n");
+      templ = (get16(ea)<<16) | get16(ea+1);
+      templl = (long long)(*(int *)(crs+L)) * (long long)templ;
+      *(long long *)(crs+L) = templl;
+      SETCC_LE;
       continue;
     }
 
@@ -2637,8 +2768,25 @@ lcgt:
 	templ = crs[B] | (templ<<15);
       }
       m = get16(ea);
-      crs[A] = templ / *(short *)&m;
-      crs[B] = templ % *(short *)&m;
+      if (m != 0) {
+	crs[A] = templ / *(short *)&m;
+	crs[B] = templ % *(short *)&m;
+	SETC(0);
+      } else
+	SETC(1);
+      continue;
+    }
+
+    if (opcode == 01703) {
+      fprintf(stderr," DVL\n");
+      templl = *(long long *)(crs+L);
+      templ = (get16(ea)<<16) | get16(ea+1);
+      if (templ != 0) {
+	*(int *)(crs+L) = templl / templ;
+	*(int *)(crs+E) = templl % templ;
+	SETC(0);
+      } else
+	SETC(1);
       continue;
     }
 
@@ -2683,10 +2831,11 @@ lcgt:
     if (opcode == 00703) {
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	fprintf(stderr," SBL\n");
-	m = get16(ea);
-	templ = m<<16 | get16(ea+1);
+	utempl = *(unsigned int *)(crs+L);
+	templ = get16(ea)<<16 | get16(ea+1);
 	*(int *)(crs+L) -= templ;
-	/* NOTE: need to set C bit here! */
+	SETC(((~utempl ^ templ) & (utempl ^ *(int *)(crs+L))) & 0x80000000);
+	XSETL(0);
       } else {
 	fprintf(stderr," JGE\n");
 	if (*(short *)(crs+A) >= 0)
@@ -2735,8 +2884,11 @@ lcgt:
     if (opcode == 00603) {
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	fprintf(stderr," ADL\n");
+	utempl = *(unsigned int *)(crs+L);
 	templ = get16(ea)<<16 | get16(ea+1);
 	*(int *)(crs+A) += templ;
+	SETC(((~utempl ^ templ) & (utempl ^ *(int *)(crs+L))) & 0x80000000);
+	XSETL(0);
       } else {
 	fprintf(stderr," JLT\n");
 	if (*(short *)(crs+A) < 0)
@@ -2775,15 +2927,18 @@ lcgt:
 
     if (opcode == 03502) {
       fprintf(stderr," STY\n");
+      //      printf("STY, RPL=%o, inst=%o, next word=%o, Y=%o, ea=%o, [ea]=%o\n", RPL-1, inst, get16(RP), crs[Y], ea, get16(ea));
       put16(crs[Y],ea);
-      printf("executed STY, Y=%o, ea=%o\n", crs[Y], ea);
+      //      printf("executed STY, [ea]=%o\n", get16(ea));
       continue;
     }
 
     if (opcode == 01503) {
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	fprintf(stderr," QFLX\n");
+	//	printf("QFLX, RPL=%o, inst=%o, next word=%o, X=%o, ea=%o, [ea]=%o\n", RPL-1, inst, get16(RP), crs[X], ea, get16(ea));
 	crs[X] = get16(ea) * 8;
+	//	printf("executed QFLX, X=%o\n", crs[X]);
       } else {
 	fprintf(stderr," JIX\n");
 	crs[X]++;
@@ -2795,16 +2950,17 @@ lcgt:
 
     if (opcode == 01501) {
       fprintf(stderr," FLX\n");
-      printf("FLX, RPL=%o, inst=%o, next word=%o, X=%o, ea=%o, [ea]=%o\n", RPL-1, inst, get16(RP), crs[X], ea, get16(ea));
+      //      printf("FLX, RPL=%o, inst=%o, next word=%o, X=%o, ea=%o, [ea]=%o\n", RPL-1, inst, get16(RP), crs[X], ea, get16(ea));
       crs[X] = get16(ea) * 2;
-      printf("executed FLX, X=%o\n", crs[X]);
+      //      printf("executed FLX, X=%o\n", crs[X]);
       continue;
     }
 
     if (opcode == 03501) {
       fprintf(stderr," LDY\n");
+      //      printf("LDY, RPL=%o, inst=%o, next word=%o, Y=%o, ea=%o, [ea]=%o\n", RPL-1, inst, get16(RP), crs[Y], ea, get16(ea));
       crs[Y] = get16(ea);
-      printf("executed LDY, Y=%o, ea=%o\n", crs[Y], ea);
+      //      printf("executed LDY, Y=%o\n", crs[Y]);
       continue;
     }
 
@@ -2815,14 +2971,20 @@ lcgt:
       continue;
     }
 
+    /* this should set the C and L bits, and is implemented in u-code
+       with a subtract.  However, that operation can overflow and give
+       the wrong result */
+
     if (opcode == 01103) {
       fprintf(stderr," CLS\n");
-      utempl = *(unsigned int *)(crs+L);
       templ = get16(ea)<<16 | get16(ea+1);
-      *(int *)(crs+L) -= templ;
-      SETCC_L;
-      *(unsigned int *)(crs+L) = utempl;
-      goto compskip;
+      if (*(int *)(crs+L) == templ)
+	RPL++;
+      else if (*(int *)(crs+L) < templ)
+	RPL += 2;
+      XSETC(0);
+      XSETL(0);
+      continue;
     }
 
     if (opcode == 00601) {
@@ -2838,7 +3000,7 @@ lcgt:
       crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
       crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
       crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
-      SETC(0);
+      XSETC(0);
       continue;
     }
 
@@ -2848,15 +3010,17 @@ lcgt:
       fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
       *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
       prieee4(&tempf);
-      *(int *)&tempf1 = get16(ea)<<16 | get16(ea+1);
+      *(int *)&tempf1 = get32(ea);
       prieee4(&tempf1);
-      tempf -= tempf1;
       crs[KEYS] &= ~0300;
-      if (tempf < 0.0)
-	crs[KEYS] |= 0200;
-      else if (tempf == 0.0)
+      if (tempf == tempf1) {
+	RPL++;
 	crs[KEYS] |= 0100;
-      goto compskip;
+      } else if (tempf < tempf1) {
+	RPL += 2;
+	crs[KEYS] |= 0200;
+      }
+      continue;
     }
 
     if (opcode == 01701) {
@@ -2872,7 +3036,7 @@ lcgt:
       crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
       crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
       crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
-      SETC(0);
+      XSETC(0);
       continue;
     }
 
@@ -2898,7 +3062,7 @@ lcgt:
       crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
       crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
       crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
-      SETC(0);
+      XSETC(0);
       continue;
     }
 
@@ -2915,7 +3079,7 @@ lcgt:
       crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
       crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
       crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
-      SETC(0);
+      XSETC(0);
       continue;
     }
 
@@ -2945,28 +3109,58 @@ lcgt:
       crs[FLTL] = tempda[1];
       crs[FLTD] = tempda[2];
       crs[FEXP] = tempda[3];
-      SETC(0);
+      XSETC(0);
       continue;
     }
 
     if (opcode == 01102) {
-      fprintf(stderr," DFCS\n");
-      fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
-      fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
+      fprintf(stderr, " DFCS\n");
+      m = get16(ea);
+      if ((crs[FLTH] & 0x8000) == (m & 0x8000)) {
+	m1 = get16(ea+3);
+	if (m1 == crs[FEXP]) {
+	  if (m == crs[FLTH]) {
+	    utempl = get32(ea+1);
+	    if ((unsigned int)((crs[FLTL]<<16) | crs[FLTD]) == utempl) {
+	      RPL += 1;
+	      crs[KEYS] |= 0100;
+	    } else if ((unsigned int)((crs[FLTL]<<16) | crs[FLTD]) < utempl) {
+	      RPL += 2;
+	      crs[KEYS] |= 0200;
+	    }
+	  } else if (crs[FLTH] < m) {
+	    RPL += 2;
+	    crs[KEYS] |= 0200;
+	  }
+	} else if (crs[FEXP] < m1) {       /* this line breaks CPU.FLOAT.V */
+	  RPL += 2;
+	  crs[KEYS] |= 0200;
+	}
+      } else if (crs[FLTH] & 0x8000) {   /* DAC < mem */
+	RPL += 2;
+	crs[KEYS] |= 0200;
+      }
+
+#if 0
       tempda[0] = crs[FLTH];
       tempda[1] = crs[FLTL];
       tempda[2] = crs[FLTD];
       tempda[3] = crs[FEXP];
       prieee8(tempda);
+      printf(" FLTH=%x FLTL=%x FLTD=%x FEXP=%x, value=%e\n", crs[FLTH], crs[FLTL], crs[FLTD], crs[FEXP], *(double *)tempda);
       tempd = get64(ea);
       prieee8(&tempd);
-      *(double *)tempda -= tempd;
+      printf(" ea H=%x ea L=%x ea D=%x ea X=%x, value=%e\n", get16(ea), get16(ea+1), get16(ea+2), get16(ea+3), tempd);
       crs[KEYS] &= ~0300;
-      if (*(double *)tempda < 0.0)
-	crs[KEYS] |= 0200;
-      else if (*(double *)tempda == 0.0)
+      if (*(double *)tempda == tempd) {
+	RPL++;
 	crs[KEYS] |= 0100;
-      goto compskip;
+      } else if (*(double *)tempda < tempd) {
+	RPL += 2;
+	crs[KEYS] |= 0200;
+      }
+#endif
+      continue;
     }
 
     if (opcode == 01702) {
@@ -2986,7 +3180,7 @@ lcgt:
       crs[FLTL] = tempda[1];
       crs[FLTD] = tempda[2];
       crs[FEXP] = tempda[3];
-      SETC(0);
+      XSETC(0);
       continue;
     }
 
@@ -3017,7 +3211,7 @@ lcgt:
       crs[FLTL] = tempda[1];
       crs[FLTD] = tempda[2];
       crs[FEXP] = tempda[3];
-      SETC(0);
+      XSETC(0);
       continue;
     }
 
@@ -3038,7 +3232,7 @@ lcgt:
       crs[FLTL] = tempda[1];
       crs[FLTD] = tempda[2];
       crs[FEXP] = tempda[3];
-      SETC(0);
+      XSETC(0);
       continue;
     }
 
