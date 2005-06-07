@@ -1,23 +1,15 @@
 #define REGSETS 8
 
-/* these are offsets from into crs (current register set) */
+/* these are 16-bit offsets into crs (current register set) */
 
 #define A 4
 #define B 5
 #define L 4
 #define E 6
 
-#if 1
-  #define S 10
-  #define Y 10
-  #define X 14
-#else
-  #define S 11
-  #define Y 11
-  #define X 15
-#endif
-
-/* XXX: is the floating pt register really split like this? */
+#define S 10
+#define Y 10
+#define X 14
 
 #define FLTH 20
 #define FLTL 21
@@ -53,8 +45,27 @@
 #define OWNERH 42
 #define OWNERL 43
 #define FCODE 44
-#define FADDR 47
+#define FADDR 46
 #define TIMER 48
+
+/* these are 32-bit offsets into crsl (current register set long) */
+
+#define GR0 0
+#define GR1 1
+#define GR2 2
+#define GR3 3
+#define GR4 4
+#define GR5 5
+#define GR6 6
+#define GR7 7
+#define FAR0 8
+#define FLR0 9
+#define FAR1 10
+#define FLR1 11
+#define FAC0H 8
+#define FAC0L 9
+#define FAC1H 10
+#define FAC1L 11
 
   union {
     int rs[REGSETS][32];
@@ -91,6 +102,7 @@
   } regs;
 
 unsigned short *crs;
+unsigned int *crsl;
 
 /* define mapping between memory addresses and the current register set */
 
@@ -105,7 +117,7 @@ unsigned short memtocrs[] = {
   -1,     /* 7 = PC (this is in the microcode scratch register set - TR7) */
   32,     /* 10 = unnamed */
   FCODE,  /* 11 = FCODE */
-  FADDR,  /* 12 = FADDR */
+  FADDR+1,/* 12 = FADDR (word) */
   16,     /* 13 = unnamed */
   SBH,    /* 14 = unnamed (SB seg) */
   SBL,    /* 15 = unnamed (SB word) */
