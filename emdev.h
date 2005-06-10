@@ -82,7 +82,7 @@ void devnull (short class, short func, short device) {
     if (func == 0) {
       ;
     } else {
-      if (T_INST) fprintf(stderr," unimplemented OCP device '%02o function\n", device);
+      printf("Unimplemented OCP device '%02o function '%02o\n", device, func);
       fatal(NULL);
     }
     break;
@@ -92,7 +92,7 @@ void devnull (short class, short func, short device) {
     if (func == 0)
       IOSKIP;                     /* assume it's always ready */
     else {
-      if (T_INST) fprintf(stderr," unimplemented SKS device '%02o function\n", device);
+      printf("Unimplemented SKS device '%02o function '%02o\n", device, func);
       fatal(NULL);
     }
     break;
@@ -102,7 +102,7 @@ void devnull (short class, short func, short device) {
     if (func == 0) {
       ;
     } else {
-      if (T_INST) fprintf(stderr," unimplemented INA device '%02o function\n", device);
+      printf("Unimplemented INA device '%02o function '%02o\n", device, func);
       fatal(NULL);
     }
     break;
@@ -112,7 +112,7 @@ void devnull (short class, short func, short device) {
     if (func == 0 | func == 1) {
       IOSKIP;                     /* OTA '0004 always works on Unix */
     } else {
-      if (T_INST) fprintf(stderr," unimplemented OTA device '%02o function\n", device);
+      printf("Unimplemented OTA device '%02o function '%02o\n", device, func);
       fatal(NULL);
     }
     break;
@@ -238,7 +238,8 @@ readasr:
 	}
       } else if (n == 1) {
 	if (ch == '') {
-	  traceflags = ~traceflags;
+	  traceflags = ~TB_MAP;
+	  traceflags = -1;
 	  goto readasr;
 	}
 	if (func >= 010)
@@ -247,7 +248,7 @@ readasr:
 	if (T_INST) fprintf(stderr," character read=%o: %c\n", crs[A], crs[A]);
 	IOSKIP;
       } else  if (n != 0) {
-	if (T_INST) fprintf(stderr," unexpected error reading from tty, n=%d", n);
+	printf("Unexpected error reading from tty, n=%d", n);
 	fatal(NULL);
       }
     } else if (func == 011) {    /* read device id? */
@@ -257,7 +258,7 @@ readasr:
       crs[A] = 04110;
       IOSKIP;
     } else {
-      if (T_INST) fprintf(stderr," unimplemented INA '04 function\n");
+      printf("Unimplemented INA '04 function '%02o\n", func);
       fatal(NULL);
     }
     break;
@@ -275,7 +276,7 @@ readasr:
     } else if (func == 1) {       /* write control word */
       IOSKIP;
     } else {
-      if (T_INST) fprintf(stderr," unimplemented OTA '04 function\n");
+      printf("Unimplemented OTA '04 function '%02o\n", func);
       fatal(NULL);
     }
     break;
@@ -303,7 +304,7 @@ void devmt (short class, short func, short device) {
   case 2:
     if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
     if (BLOCKIO) {
-      if (T_INST) fprintf(stderr," Device not supported, so I/O hangs\n");
+      printf("Device '%o not supported, so I/O hangs\n", device);
       fatal(NULL);
     }
     break;
@@ -311,7 +312,7 @@ void devmt (short class, short func, short device) {
   case 3:
     if (T_INST) fprintf(stderr," OTA '%02o%02o\n", func, device);
     if (BLOCKIO) {
-      if (T_INST) fprintf(stderr," Device not supported, so I/O hangs\n");
+      printf("Device '%o not supported, so I/O hangs\n", device);
       fatal(NULL);
     }
     break;
@@ -319,11 +320,37 @@ void devmt (short class, short func, short device) {
 }
 
 
-/* Device '20: control panel switches and lights
+/* Device '20: control panel switches and lights, and realtime clock
 
+   OCP '0020 = start Line Frequency Clock, enable mem increment, ack previous overflow
+   OCP '0120 = ack PIC interrupt
+   OCP '0220 = stop LFC, disable mem increment, ack previous overflow
+   OCP '0420 = select LFC for memory increment
+   OCP '0520 = select external clock for memory increment
+   OCP '0620 = starts a new 50-ms watchdog timeout interval
+   OCP '0720 = stops the watchdog timer
+   OCP '1520 = set interrupt mask
+   OCP '1620 = reset interrupt mask
+   OCP '1720 = initialize as in Master Clear
+
+   SKS '0020 = skip if clock IS interrupting
+   SKS '0220 = skip if clock IS NOT interrupting
+   SKS '0520 = skip if WDT timed out
+   SKS '0720 = skip if WDT caused external interrupt (loc '60)
+
+   OTA '0220 = set PIC Interval register (negative, interrupts on incr to zero)
+   OTA '0720 = set control register
+   OTA '1220 = set Memory Increment Cell address
+   OTA '1320 = set interrupt vector address
    OTA '1720 = write to lights (sets CP fetch address)
+
+   INA '0220 = read PIC Interval register
+   INA '1120 = read device ID, don't clear A first
+   INA '1220 = read Memory Increment Cell address
+   INA '1320 = read interrupt vector address
    INA '1420 = read location from CP ROM (not implemented, used to boot)
-   INA '1620 = read control panel switches
+   INA '1620 = read control panel up switches
+   INA '1720 = read control panel down switches
 */
 
 void devcp (short class, short func, short device) {
@@ -332,34 +359,43 @@ void devcp (short class, short func, short device) {
 
   case 0:
     if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
-    if (T_INST) fprintf(stderr," unimplemented OCP device '%02o function\n", device);
-    fatal(NULL);
+    printf("OCP '%02o%02o\n", func, device);
+    //printf("Unimplemented OCP device '%02o function '%02o\n", device, func);
+    //fatal(NULL);
     break;
 
   case 1:
     if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
-    if (T_INST) fprintf(stderr," unimplemented SKS device '%02o function\n", device);
+    printf("Unimplemented SKS device '%02o function '%02o\n", device, func);
     fatal(NULL);
     break;
 
   case 2:
     if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
-    if (func == 016) {
+    if (func == 011) {             /* input ID, don't clear A first */
+      crs[A] |= 0120;              /* this is the SOC board */
+    } else if (func == 016) {
       crs[A] = sswitch;
     } else if (func == 017) {      /* read switches in momentary down position */
       crs[A] = 0;
     } else {
-      if (T_INST) fprintf(stderr," unimplemented INA device '%02o function\n", device);
+      printf("Unimplemented INA device '%02o function '%02o\n", device, func);
       fatal(NULL);
     }
     break;
 
   case 3:
     if (T_INST) fprintf(stderr," OTA '%02o%02o\n", func, device);
-    if (func == 017) {           /* write lights */
+    if (func == 02) {            /* set PIC interval */
+      printf("Clock PIC interval set to %d\n", *(short *)(crs+A));
+    } else if (func == 07) {
+      printf("Clock control register set to '%o\n", crs[A]);
+    } else if (func == 013) {
+      printf("Clock interrupt vector address = '%o\n", crs[A]);
+    } else if (func == 017) {           /* write lights */
       IOSKIP;
     } else {
-      if (T_INST) fprintf(stderr," unimplemented OTA device '%02o function\n", device);
+      printf("Unimplemented OTA device '%02o function '%02o\n", device, func);
       fatal(NULL);
     }
     break;
@@ -428,7 +464,7 @@ void devdisk (short class, short func, short device) {
     else if (func == 017)    /* read status */
       crs[A] = 0100000;
     else {
-      if (T_INST || T_DIO) fprintf(stderr," unimplemented INA device '%02o function\n", device);
+      printf("Unimplemented INA device '%02o function '%02o\n", device, func);
       fatal(NULL);
     }
     IOSKIP;
@@ -474,7 +510,8 @@ void devdisk (short class, short func, short device) {
 	    if (T_INST || T_DIO) fprintf(stderr," Unit not selected or not ready\n");
 	    status = 0100001;
 	  } else if (order == 2) {
-	    if (T_INST || T_DIO) fprintf(stderr," Format order not implemented\n");
+	    if (T_INST || T_DIO) fprintf(stderr," Format order\n");
+	    fatal("DFORMAT channel order not implemented");
 	  } else if (order == 5) {
 
 	    /* translate head/track/sector to drive record address */
@@ -526,8 +563,7 @@ void devdisk (short class, short func, short device) {
 	    }
 
 	  } else if (order == 6) {
-	    printf(" Write order not implemented\n");
-	    exit(1);
+	    fatal("DWRITE channel order not implemented");
 	  }
 	  oar += 3;
 	  break;
@@ -578,6 +614,7 @@ void devdisk (short class, short func, short device) {
 	case 14: /* DINT = generate interrupt through vector address */
 	  memaddr = mem[oar+1];
 	  if (T_INST || T_DIO) fprintf(stderr, " interrupt through '%o\n", memaddr);
+	  printf("DINT not supported (emdev.h)\n");
 	  fatal(NULL);
 	  oar += 2;
 	  break;
@@ -586,13 +623,13 @@ void devdisk (short class, short func, short device) {
 	  if (T_INST || T_DIO) fprintf(stderr, " jump to '%o\n", oar);
 	  break;
 	default:
-	  if (T_INST || T_DIO) fprintf(stderr, " unrecognized channel order = %d\n", order);
+	  printf("Unrecognized channel order = %d\n", order);
 	  fatal(NULL);
 	}
       }	  
       IOSKIP;
     } else {
-      if (T_INST || T_DIO) fprintf(stderr," unimplemented OTA device '%02o function\n", device);
+      printf("Unimplemented OTA device '%02o function '%02o\n", device, func);
       fatal(NULL);
     }
     break;

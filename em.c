@@ -31,9 +31,7 @@
 
    - not all C-bit, L-bit, and condition code updates are correct
 
-   - restricted-mode instruction checking is missing, as well as all
-   restricted-mode instructions and environment (for example, no page
-   mapping)
+   - restricted-mode instruction checking is missing
 
 */
 
@@ -223,12 +221,19 @@ unsigned int instcount=0;
 
 jmp_buf jmpbuf;
 
-/* mem is 1 user's virtual memory address space in this version,
-   but eventually should be the system's physical memory
-*/
+/* define a 4 million 16-bit word system memory; later systems seem to
+   have had more memory, like 32MB, but I'm not sure how this was
+   implemented since it would require more bits in the page map entry
+   for the physical page number.  If the page size was made larger,
+   like 8K instead of 2K, the number of entries in a page table would
+   change from 64 to 16, which also seems drastic... */
 
+#if 0
 #define MEMSIZE 07776*64*1024
-unsigned short mem[MEMSIZE];   /* 4095 segments of 64K words each */
+#else
+#define MEMSIZE 4*1024*1024
+#endif
+unsigned short mem[MEMSIZE];   /* system's physical memory */
 
 unsigned int bitmask32[33] = {0,
 			    0x80000000, 0x40000000, 0x20000000, 0x10000000,
@@ -318,7 +323,7 @@ pa_t mapva(ea_t ea, short intacc, short *access) {
     if (T_MAP) fprintf(stderr,"MAP: ea=%o/%o, seg=%o, dtar=%o, nsegs=%d, relseg=%d, page=%d\n", ea>>16, ea&0xFFFF, seg, dtar, nsegs, relseg, PAGENO(ea));
     if (relseg >= nsegs)
       fault(SEGFAULT, 1, ea);   /* fcode = segment too big */
-    staddr = (dtar & 0x003F0000) | ((dtar & 0xFFFF)<<1);
+    staddr = (dtar & 0x003F0000) | ((dtar & 0x7FFF)<<1);
     sdw = *(unsigned int *)(mem+staddr+relseg*2);
     if (T_MAP) fprintf(stderr,"  staddr=%o, sdw=%o\n", staddr, sdw);
     if (sdw & 0x8000)
@@ -344,7 +349,7 @@ pa_t mapva(ea_t ea, short intacc, short *access) {
       mem[pmaddr] &= ~020000;    /* reset unmodified bit */
     pa = ((pte & 0xFFF) << 10) | (ea & 0x3FF);
   } else {
-    pa = ea & 0xFFFFFFF;  /* should probably truncate this... */
+    pa = ea & 0x3FFFFF;
   }
   if (pa <= MEMSIZE)
     return pa;
@@ -354,7 +359,6 @@ pa_t mapva(ea_t ea, short intacc, short *access) {
 }
 
 
-/* XXX: needs to check for restricted addresses */
 /* Can V-mode do JMP# 4 to start executing from the register file?
    Might need to "or" 0x80000000 with PBH to indicate this?? */ 
 
@@ -384,17 +388,33 @@ unsigned short get16(ea_t ea) {
 unsigned int get32(ea_t ea) {
   pa_t pa;
   unsigned short access;
+  unsigned short m[2];
 
   pa = mapva(ea, RACC, &access);
-  return *(unsigned int *)(mem+pa);
+  if ((pa & 01777) <= 01776)
+    return *(unsigned int *)(mem+pa);
+  else {
+    m[0] = mem[pa];
+    m[1] = get16(ea+1);
+    return *(unsigned int *)m;
+  }
 }
 
 double get64(ea_t ea) {
   pa_t pa;
   unsigned short access;
+  unsigned short m[4];
 
   pa = mapva(ea, RACC, &access);
-  return *(double *)(mem+pa);
+  if ((pa & 01777) <= 01774)
+    return *(double *)(mem+pa);
+  else {
+    m[0] = mem[pa];
+    m[1] = get16(ea+1);
+    m[2] = get16(ea+2);
+    m[3] = get16(ea+3);
+    return *(double *)m;
+  }
 }
 
 
@@ -428,32 +448,56 @@ put16(unsigned short value, ea_t ea) {
 put32(unsigned int value, ea_t ea) {
   pa_t pa;
   unsigned short access;
+  unsigned short *m;
 
   pa = mapva(ea, WACC, &access);
-  *(unsigned int *)(mem+pa) = value;
+  if ((pa & 01777) <= 01776)
+    *(unsigned int *)(mem+pa) = value;
+  else {
+    m = (void *)&value;
+    mem[pa] = m[0];
+    put16(m[1], ea+1);
+  }
 }
 
 put64(double value, ea_t ea) {
   pa_t pa;
   unsigned short access;
+  unsigned short *m;
 
   pa = mapva(ea, WACC, &access);
-  *(double *)(mem+pa) = value;
+  if ((pa & 01777) <= 01774)
+    *(double *)(mem+pa) = value;
+  else {
+    m = (void *)&value;
+    mem[pa] = m[0];
+    put16(m[1], ea+1);
+    put16(m[2], ea+2);
+    put16(m[3], ea+3);
+  }
 }
 
 void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
   unsigned short m;
   ea_t faultrp;
-  
+
   if (fvec == PROCESSFAULT || fvec == SVCFAULT || fvec == ARITHFAULT)
     faultrp = RP;
   else
     faultrp = prevpc;
-  printf("fault '%o, fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", fvec, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
+
+  /* save RP and keys in regfile */
+
+  regs.sym.pswpb = faultrp;
+  regs.sym.pswkeys = crs[KEYS];
+  
+  printf("#%d: fault '%o, fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", instcount, fvec, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
   fprintf(stderr,"fault '%o, fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", fvec, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
   crs[FCODE] = fcode;
   *(unsigned int *)(crs+FADDR) = faddr;
-  if (!(crs[MODALS] & 010)) {   /* process exchange is disabled */
+  if (crs[MODALS] & 010) {   /* process exchange is enabled */
+    fatal("fault: fault '%o at RP=%o/%o with PX enabled\n", fvec, RPH, RPL);
+  } else {                   /* process exchange is disabled */
     m = get16(fvec);
     if (m != 0) {
       if (1 || T_FLOW) fprintf(stderr," JST* '%o [%o]\n", fvec, m);
@@ -463,9 +507,8 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
       longjmp(jmpbuf, 1);
       fatal("fault: returned after longjmp\n");
     }
-    fatal("fault: JST vector '%o not set, RP=%o/%o\n", fvec, RPH, RPL);
-  } else {
-    fatal("fault: fault '%o at RP=%o/%o with PX enabled\n", fvec, RPH, RPL);
+    printf("#%d: fault '%o, fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", instcount, fvec, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
+    fatal("Fault vector is zero, process exchange is disabled.");
   }
 }
 
@@ -563,6 +606,7 @@ ea_t ea16s (unsigned short inst, short i, short x) {
       ea += crs[X];
     if (!i)                                      /* not indirect */
       break;
+    /* NOTE: this test is already in get16... */
     if (ea < 040)
       m = get16(0x80000000|ea);
     else
@@ -899,18 +943,19 @@ unsigned int ea32i (ea_t earp, unsigned short inst, short i, short x) {
 
 
 ea_t apea(unsigned short *bitarg) {
-  unsigned short ibr, ea_s, ea_w, bit;
+  unsigned short ibr, ea_s, ea_w, bit, br;
   ea_t ea;
   
   ibr = get16(RP);
   RPL++;
   bit = (ibr >> 12) & 0xF;
-  if (T_EAAP) fprintf(stderr," AP ibr=%o, br=%d, i=%d, bit=%d\n", ibr, ((ibr >> 8) & 3), (ibr & 004000) != 0, bit);
+  br = (ibr >> 8) & 3;
+  if (T_EAAP) fprintf(stderr," AP ibr=%o, br=%d, i=%d, bit=%d\n", ibr, br, (ibr & 004000) != 0, bit);
 
   /* XXX: should ea ring be weakened with RP ring? */
 
-  ea_s = crs[PBH + 2*((ibr >> 8) & 3)];
-  ea_w = crs[PBL + 2*((ibr >> 8) & 3)];
+  ea_s = crs[PBH + 2*br];
+  ea_w = crs[PBL + 2*br];
   ea_w += get16(RP);
   RPL++;
   ea = MAKEVA(ea_s, ea_w);
@@ -1051,37 +1096,75 @@ C
 
 
 ea_t pclea(ea_t *rp, unsigned short *bitarg, short *store, short *lastarg) {
-  unsigned short ibr, ea_s, ea_w, bit, a;
+  unsigned short ibr, br, ea_s, ea_w, bit, a;
   ea_t xbsave;
-  ea_t ea;
-  
+  ea_t ea, newea;
+
   xbsave = *(unsigned int *)(crs+XB);
   *store = 0;
   while (!*store && !*lastarg) {
     ibr = get16(*rp);
     (*rp)++;
     a = get16(*rp);
+    (*rp)++;
     bit = (ibr >> 12) & 0xF;
     *store = ibr & 0100;
     *lastarg = ibr & 0200;
-    if (T_PCL) fprintf(stderr," PCLAP ibr=%o, br=%d, i=%d, bit=%d, store=%d, lastarg=%d, a=%o\n", ibr, ((ibr >> 8) & 3), (ibr & 004000) != 0, bit, (*store != 0), (*lastarg != 0), a);
-
-    /* XXX: should ea ring be weakened with RP ring? */
-
-    ea_s = crs[PBH + 2*((ibr >> 8) & 3)];
-    ea_w = crs[PBL + 2*((ibr >> 8) & 3)];
+    br = (ibr >> 8) & 3;
+    if (T_PCL) fprintf(stderr," PCLAP ibr=%o, br=%d, i=%d, bit=%d, store=%d, lastarg=%d, a=%o\n", ibr, br, (ibr & 004000) != 0, bit, (*store != 0), (*lastarg != 0), a);
+    ea_s = crs[PBH + 2*br] | (RPH & RINGMASK16);
+    ea_w = crs[PBL + 2*br];
     ea_w += a;
-    (*rp)++;
+#if 1
+    /* this hack is for CPU.PCL Case 32:
+4000/26434: PCL 4000/26543
+ ecb @ 4000/26543, access=7
+ ecb.pb: 4000/26532
+ ecb.framesize: 16
+ ecb.stackroot 4000
+ ecb.argdisp: 12
+ ecb.nargs: 1
+ ecb.lb: 4000/60000
+ ecb.keys: 14000
+ stack free pointer: 4000/70000, current ring=0
+ PCLAP ibr=11000, br=2, i=0, bit=1, store=0, lastarg=0, a=0
+ PCLAP ea = 0/0
+ PCLAP ibr=1700, br=3, i=0, bit=0, store=1, lastarg=1, a=0
+ PCLAP ea = 10000/0
+ new RP=4000/26533
+    */
+    if (br == 3 && (crs[XB] & EXTMASK16)) {
+      bit += crs[X];
+      if (bit > 15) {
+	bit -= 16;
+	ea_w++;
+      }
+      if (bit == 0)
+	ea_s &= ~EXTMASK16;
+    }
+#endif
     ea = MAKEVA(ea_s, ea_w);
+    if (bit)
+      ea |= EXTMASK32;
     if (T_PCL) fprintf(stderr," PCLAP ea = %o/%o\n", ea_s, ea_w);
     if (ibr & 004000) {
       if (ea & 0x80000000)
 	fault(POINTERFAULT, ea>>16, 0);
-      ea = get32(ea);
+      newea = get32(ea) | (RP & RINGMASK32);
+      if (T_PCL) fprintf(stderr," Indirect pointer is %o/%o\n", newea>>16, newea & 0xFFFF);
+#if 1
+      /* Case 37 doesn't like this, Cases 35 & 36 seem to want it.  Looks wrong to me */
+      if ((newea & 0x80000000) && (newea>>16) != 0x8000)
+	fault(POINTERFAULT, newea>>16, ea);
+#endif
+      ea = newea;
+      bit = 0;
+#if 0
+      /* CPU.PCL Case 33 shows that the bit field is not stored in the stack frame
+	 for a 3-word indirect pointer, even though the E bit remains set */
       if (ea & EXTMASK32)
 	bit = get16(ea+2) >> 12;
-      else
-	bit = 0;
+#endif
       if (T_PCL) fprintf(stderr," After indirect, PCLAP ea = %o/%o, bit=%d\n", ea>>16, ea & 0xFFFF, bit);
     }
     if (!*store)
@@ -1106,7 +1189,7 @@ ea_t pclea(ea_t *rp, unsigned short *bitarg, short *store, short *lastarg) {
 pcl (ea_t ea) {
   short i;
   short access;
-  short ecb[9];
+  unsigned short ecb[9];
   short bit;                  /* bit offset for args */
   ea_t newrp;                 /* start of new proc */
   ea_t rp;                    /* return pointer */
@@ -1126,31 +1209,35 @@ pcl (ea_t ea) {
   pa = mapva(ea, PACC, &access);
   if (T_PCL) fprintf(stderr," ecb @ %o/%o, access=%d\n", ea>>16, ea&0xFFFF, access);
 
-  /* gates must be aligned on a 16-word boundary */
+  /* get a copy of the ecb.  gates must be aligned on a 16-word
+     boundary, therefore can't cross a page boundary, and mapva has
+     already ensured that the ecb page is resident.  For a non-gate
+     ecb, use individual memory accesses instead of memcpy.  (Could be
+     optimized later by checking to see if the ecb crosses a page,
+     accessing the last word, then doing the memcpy.) */
 
-  if (access == 1 && (ea & 0xF) != 0)
-    fault(ACCESSFAULT, 0, ea);
+  if (access == 1) {
+    if ((ea & 0xF) != 0)
+      fault(ACCESSFAULT, 0, ea);
+    memcpy(ecb,mem+pa,sizeof(ecb));
+  } else {
+    for (i=0; i<9; i++)
+      ecb[i]=get16(ea+i);
+  }
 
-  /* get a copy of the ecb and determine new RP
-
-     NOTE: can't just memcpy ecb, because it may cross a page
-     if this isn't a gate PCL
-
-     XXX: P400 docs say "no ring change takes place if not a
+  /* XXX: P400 docs say "no ring change takes place if not a
      gate"; does that mean that if R0 calls a R3 ecb, it's
-     still in R0, or should it be weakened to the ecb ring?  */
-
-  for (i=0; i<9; i++)
-    ecb[i]=get16(ea+i);
+     still in R0, or should it be weakened to the ecb ring?
+     (Case 24 of CPU.PCL indicates it should be weakened) */
 
   if (T_PCL) fprintf(stderr," ecb.pb: %o/%o\n ecb.framesize: %d\n ecb.stackroot %o\n ecb.argdisp: %o\n ecb.nargs: %d\n ecb.lb: %o/%o\n ecb.keys: %o\n", ecb[0], ecb[1], ecb[2], ecb[3], ecb[4], ecb[5], ecb[6], ecb[7], ecb[8]);
 
   newrp = *(unsigned int *)(ecb+0);
   if (access != 1)
 #if 0
-    newrp = (newrp & ~RINGMASK32) | (RP & RINGMASK32);
+    newrp = (newrp & ~RINGMASK32) | (RP & RINGMASK32);  /* no ring change */
 #else
-    newrp = newrp | (RP & RINGMASK32);    /* Case 24 */
+    newrp = newrp | (RP & RINGMASK32);    /* Case 24 indicates to weaken ring */
 #endif
 
   /* setup stack frame */
@@ -1219,12 +1306,11 @@ pcl (ea_t ea) {
       if (storedargs < ecb[5] && store) {
 	put32(ea, argp);
 	if (ea & EXTMASK32)
-	  put16(bit, argp+2);
+	  put16(bit<<12, argp+2);
 	argp += 3;
 	storedargs++;
       }
     }
-    //*(unsigned int *)(crs+XB) = xbsave;
 
     /* since proc has args, advance newrp past ARGT */
 
@@ -1251,10 +1337,22 @@ pcl (ea_t ea) {
 
   /* load new execution state from ecb */
 
+  if (T_PCL) fprintf(stderr," before update, stackfp=%o/%o, SB=%o/%o\n", stackfp>>16, stackfp&0xFFFF, crs[SBH], crs[SBL]);
+#if 0
   if (access == 1)
+    /* NOTE: Case 21 shows that SB(r) should be 3 when calling from R1 to R3, but
+       Case 24 shows that SB(r) should be 0 when calling from R0 to R1 (??) */
+
     *(unsigned int *)(crs+SB) = stackfp;
   else
     *(unsigned int *)(crs+SB) = stackfp |= newrp & RINGMASK32;
+#else
+  if (access == 1)
+    *(unsigned int *)(crs+SB) = stackfp;
+  else
+    *(unsigned int *)(crs+SB) = (stackfp & ~RINGMASK32) | (RP & RINGMASK32);
+#endif
+  if (T_PCL) fprintf(stderr," new SB=%o/%o\n", crs[SBH], crs[SBL]);
   *(unsigned int *)(crs+LB) = *(unsigned int *)(ecb+6);
   newkeys(ecb[8] & 0177760);
   RP = newrp;
@@ -1427,16 +1525,14 @@ main (int argc, char **argv) {
 
   /* main instruction decode loop */
 
-  trapaddr = 02360;
+  trapaddr = 0144003;
   trapvalue = -12345;
   trapaddr = 0;
 
   if (setjmp(jmpbuf))
-    goto fetch;
+    ;
 
   while (1) {
-
-fetch:    
 
     if (trapaddr != 0 && mem[trapaddr] != trapvalue) {
       printf("TRAP: at #%d, old value of '%o was %o; new value is %o\n", instcount, trapaddr, trapvalue, mem[trapaddr]);
@@ -1450,7 +1546,8 @@ fetch:
     prevpc = RP;
     inst = get16(RP);
     RPL++;
-    m = get16(RP);   /* this is dangerous and should be removed! */
+    //m = get16(RP);   /* this is dangerous and should be removed! */
+    m = -1;
 
     /* while a process is running, RP is the real program counter, PBH
        is the active procedure segment, and PBL is zero.  When a
@@ -1519,7 +1616,11 @@ xec:
 
 	if (inst == 000505) {                 /* SVC */
 	  if (T_FLOW) fprintf(stderr," SVC\n");
+#if 1
+	  fault(SVCFAULT, 0, 0);
+#else
 	  svc();
+#endif
 	  continue;
 	}
 
@@ -1612,7 +1713,7 @@ xec:
 	  if (1 <= crs[A] && crs[A] < tempa)
 	    RPL = get16(RP+crs[A]);
 	  else
-	    RPL = get16(RP+tempa);
+	    RPL += tempa;
 	  continue;
 	}
 
@@ -2046,9 +2147,19 @@ stfa:
 	  RPL = get16(ea+1);
 	  newkeys(get16(ea+2));
 	  crs[MODALS] = get16(ea+3);
-	  if (T_INST) fprintf(stderr," RPH=%o, RPL=%o, keys=%o, modals=%o\n", RPH, RPL, crs[KEYS], crs[MODALS]);
-	  if (crs[MODALS] & 010)
-	    printf("Process exchange enabled\n");
+	  if (1 || T_INST) fprintf(stderr," RPH=%o, RPL=%o, keys=%o, modals=%o\n", RPH, RPL, crs[KEYS], crs[MODALS]);
+	  if (crs[MODALS] & 010) {
+	    printf("Process exchange enabled:\n");
+	    traceflags = -1;
+	    printf(" OWNERH=%o, PLA=%o, PCBA=%o, PLB=%o, PCBB=%o\n", crs[OWNERH], regs.sym.pla, regs.sym.pcba, regs.sym.plb, regs.sym.pcbb);
+	    for (i=regs.sym.pla;; i += 2) {
+	      ea = MAKEVA(crs[OWNERH], i);
+	      utempa = get16(ea);
+	      printf(" Level %o: BOL=%o, EOL=%o\n", i, utempa, get16(ea+1));
+	      if (utempa == 1)
+		break;
+	    }
+	  }
 	  if (crs[MODALS] & 020)
 	    printf("Mapped I/O enabled\n");
 	  if (crs[MODALS] & 4) {
@@ -2073,6 +2184,21 @@ stfa:
 	  if (m == 0)
 	    fatal("RTN stack underflow");
 	  crs[S] = get16(crs[S]);
+	  continue;
+	}
+
+	/* Decimal and character instructions */
+
+	if (001100 <= inst && inst <= 001146) {
+	  //traceflags = -1;
+	  if (T_FLOW) fprintf(stderr," X/Z UII %o\n", inst);
+	  fault(UIIFAULT, RPL, 0);
+	  continue;
+	}
+
+	if (inst == 001702) {
+	  if (T_FLOW) fprintf(stderr," IDLE?\n", inst);
+	  fatal("IDLE loop");
 	  continue;
 	}
 
@@ -3091,6 +3217,13 @@ lcgt:
 
 	if (T_INST) fprintf(stderr," unrecognized generic class 3 instruction!\n");
 	printf(" unrecognized generic class 3 instruction %o!\n", inst);
+
+	/* XXX: these are hacks for CPU.FAULT; not sure how to determine whether
+	   an instruction is illegal or unimplemented... */
+	if (inst == 0141700)
+	  fault(ILLINSTFAULT, RPL, 0);
+	else
+	  fault(UIIFAULT, RPL, 0);
 	fatal(NULL);
 	
       }
@@ -3690,7 +3823,7 @@ lcgt:
 
     if (opcode == 01603) {
       if (T_FLOW) fprintf(stderr," MPL\n");
-      templ = (get16(ea)<<16) | get16(ea+1);
+      templ = get32(ea);
       templl = (long long)(*(int *)(crs+L)) * (long long)templ;
       *(long long *)(crs+L) = templl;
       SETCC_LE;
@@ -3723,7 +3856,7 @@ lcgt:
     if (opcode == 01703) {
       if (T_FLOW) fprintf(stderr," DVL\n");
       templl = *(long long *)(crs+L);
-      templ = (get16(ea)<<16) | get16(ea+1);
+      templ = get32(ea);
       if (templ != 0) {
 	*(int *)(crs+L) = templl / templ;
 	*(int *)(crs+E) = templl % templ;
@@ -3755,8 +3888,7 @@ lcgt:
     if (opcode == 00203) {
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	if (T_FLOW) fprintf(stderr," LDL\n");
-	crs[A] = get16(ea);
-	crs[B] = get16(ea+1);
+	*(unsigned int *)(crs+L) = get32(ea);
       } else {
 	if (T_FLOW) fprintf(stderr," JEQ\n");
 	if (*(short *)(crs+A) == 0)
@@ -3769,7 +3901,7 @@ lcgt:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	if (T_FLOW) fprintf(stderr," SBL\n");
 	utempl = *(unsigned int *)(crs+L);
-	utempl2 = get16(ea)<<16 | get16(ea+1);
+	utempl2 = get32(ea);
 	*(int *)(crs+L) -= *(int *)&utempl2;
 	crs[KEYS] &= ~0300;
 	if (utempl == utempl2) {
@@ -3800,7 +3932,8 @@ lcgt:
 
     if (opcode == 01002) {
       if (crs[KEYS] & 010000) {          /* V/I mode */
-	if (T_FLOW || T_PCL) fprintf(stderr,"%o/%o: PCL %o/%o\n", RPH, RPL, ea>>16, ea&0xFFFF);
+	//traceflags = ~TB_MAP;
+	if (T_FLOW || T_PCL) fprintf(stderr,"%o/%o: PCL %o/%o\n", RPH, RPL-2, ea>>16, ea&0xFFFF);
 	pcl(ea);
       } else {
 	if (T_FLOW) fprintf(stderr," CREP\n");
@@ -3813,7 +3946,7 @@ lcgt:
     if (opcode == 00503) {
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	if (T_FLOW) fprintf(stderr," ERL\n");
-	templ = get16(ea)<<16 | get16(ea+1);
+	templ = get32(ea);
 	*(int *)(crs+A) ^= templ;
       } else {
 	if (T_FLOW) fprintf(stderr," JGT\n");
@@ -3826,8 +3959,7 @@ lcgt:
     if (opcode == 00403) {
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	if (T_FLOW) fprintf(stderr," STL\n");
-	put16(crs[A],ea);
-	put16(crs[B],ea+1);
+	put32(*(unsigned int *)(crs+L),ea);
       } else {
 	if (T_FLOW) fprintf(stderr," JLE\n");
 	if (*(short *)(crs+A) <= 0)
@@ -3840,7 +3972,7 @@ lcgt:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	if (T_FLOW) fprintf(stderr," ADL\n");
 	utempl = *(unsigned int *)(crs+L);
-	templ = get16(ea)<<16 | get16(ea+1);
+	templ = get32(ea);
 	*(int *)(crs+L) += templ;
 	EXPC(((~utempl ^ templ) & (utempl ^ *(int *)(crs+L))) & 0x80000000);
 	SETCC_L;
@@ -3862,8 +3994,7 @@ lcgt:
     if (opcode == 00303) {
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	if (T_FLOW) fprintf(stderr," ANL\n");
-	crs[A] &= get16(ea);
-	crs[B] &= get16(ea+1);
+	*(unsigned int *)(crs+L) &= get32(ea);
       } else {
 	if (T_FLOW) fprintf(stderr," JNE\n");
 	if (*(short *)(crs+A) != 0)
@@ -3889,9 +4020,9 @@ lcgt:
 
     if (opcode == 03502) {
       if (T_FLOW) fprintf(stderr," STY\n");
-      if (T_FLOW) printf("STY, RPL=%o, inst=%o, next word=%o, Y=%o, ea=%o, [ea]=%o\n", RPL-1, inst, get16(RP), crs[Y], ea, get16(ea));
+      //if (T_FLOW) printf("STY, RPL=%o, inst=%o, next word=%o, Y=%o, ea=%o, [ea]=%o\n", RPL-1, inst, get16(RP), crs[Y], ea, get16(ea));
       put16(crs[Y],ea);
-      if (T_FLOW) printf("executed STY, [ea]=%o\n", get16(ea));
+      //if (T_FLOW) printf("executed STY, [ea]=%o\n", get16(ea));
       continue;
     }
 
@@ -3939,7 +4070,7 @@ lcgt:
 
     if (opcode == 01103) {
       if (T_FLOW) fprintf(stderr," CLS\n");
-      templ = get16(ea)<<16 | get16(ea+1);
+      templ = get32(ea);
       if (*(int *)(crs+L) == templ)
 	RPL++;
       else if (*(int *)(crs+L) < templ)
@@ -3955,7 +4086,7 @@ lcgt:
       if (T_INST) fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
       *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
       prieee4(&tempf);
-      *(int *)&tempf1 = get16(ea)<<16 | get16(ea+1);
+      *(int *)&tempf1 = get32(ea);
       prieee4(&tempf1);
       tempf += tempf1;
       ieeepr4(&tempf);
@@ -3991,7 +4122,7 @@ lcgt:
       if (T_INST) fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
       *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
       prieee4(&tempf);
-      *(int *)&tempf1 = get16(ea)<<16 | get16(ea+1);
+      *(int *)&tempf1 = get32(ea);
       prieee4(&tempf1);
       tempf /= tempf1;
       ieeepr4(&tempf);
@@ -4017,7 +4148,7 @@ lcgt:
       if (T_INST) fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
       *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
       prieee4(&tempf);
-      *(int *)&tempf1 = get16(ea)<<16 | get16(ea+1);
+      *(int *)&tempf1 = get32(ea);
       prieee4(&tempf1);
       tempf *= tempf1;
       ieeepr4(&tempf);
@@ -4034,7 +4165,7 @@ lcgt:
       if (T_INST) fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
       *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
       prieee4(&tempf);
-      *(int *)&tempf1 = get16(ea)<<16 | get16(ea+1);
+      *(int *)&tempf1 = get32(ea);
       prieee4(&tempf1);
       tempf -= tempf1;
       ieeepr4(&tempf);
@@ -4148,7 +4279,7 @@ lcgt:
 
     if (opcode == 0202) {
       if (T_FLOW) fprintf(stderr," DFLD\n");
-      *(double *)tempda = *(double *)(mem+ea);
+      *(double *)tempda = get64(ea);
       crs[FLTH] = tempda[0];
       crs[FLTL] = tempda[1];
       crs[FLTD] = tempda[2];
@@ -4200,10 +4331,17 @@ lcgt:
 
     if (opcode == 0402) {
       if (T_FLOW) fprintf(stderr," DFST\n");
+      tempda[0] = crs[FLTH];
+      tempda[1] = crs[FLTL];
+      tempda[2] = crs[FLTD];
+      tempda[3] = crs[FEXP];
+      put64(*(double *)tempda, ea);
+#if 0
       put16(crs[FLTH], ea);
       put16(crs[FLTL], ea+1);
       put16(crs[FLTD], ea+2);
       put16(crs[FEXP], ea+3);
+#endif
       continue;
     }
 
