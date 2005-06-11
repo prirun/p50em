@@ -1095,6 +1095,42 @@ C
 }
 
 
+unsigned short dumppcb(unsigned short pcb) {
+  short i;
+  unsigned short nextpcb;
+  ea_t ea;
+
+  ea = MAKEVA(crs[OWNERH],pcb);
+  fprintf(stderr,"PCB %06o:\n", pcb);
+  fprintf(stderr,"  Level: %o\n", get16(ea+0));
+  nextpcb = get16(ea+1);
+  fprintf(stderr,"  Link: %o\n", nextpcb);
+  fprintf(stderr,"  Wait list: %o/%o\n", get16(ea+2), get16(ea+3));
+  fprintf(stderr,"  Abort flags: %o\n", get16(ea+4));
+  fprintf(stderr,"  CPU flags: %o\n", get16(ea+5));
+  fprintf(stderr,"  6,7 (reserved): %o %o\n", get16(ea+6), get16(ea+7));
+  fprintf(stderr,"  Elapsed timers: %d %d\n", get16(ea+8), get16(ea+9));
+  fprintf(stderr,"  DTAR 2 & 3: %o|%o  %o|%o\n", get16(ea+10), get16(ea+11), get16(ea+12), get16(ea+13));
+  fprintf(stderr,"  Process interval timer: %o\n", get16(ea+14));
+  fprintf(stderr,"  15 (reserved): %o\n", get16(ea+15));
+  fprintf(stderr,"  Save mask: %o\n", get16(ea+16));
+  fprintf(stderr,"  Keys: %o\n", get16(ea+17));
+  for (i=0; i<16; i++) {
+    fprintf(stderr,"  %06o %06o", get16(ea+18+2*i), get16(ea+19+2*i));
+    if (i==7 || i==15)
+      fprintf(stderr,"\n");
+  }
+  fprintf(stderr,"  R0 Fault vec: %o/%o\n", get16(ea+50), get16(ea+51));
+  fprintf(stderr,"  R1 Fault vec: %o/%o\n", get16(ea+52), get16(ea+53));
+  fprintf(stderr,"  R2 Fault vec: %o/%o\n", get16(ea+54), get16(ea+55));
+  fprintf(stderr,"  R3 Fault vec: %o/%o\n", get16(ea+56), get16(ea+57));
+  fprintf(stderr,"  PG Fault vec: %o/%o\n", get16(ea+58), get16(ea+59));
+  fprintf(stderr,"  Conc. Stack Hdr: %o %o %o\n", get16(ea+60), get16(ea+61), get16(ea+62));
+  fprintf(stderr,"\n");
+  return nextpcb;
+}
+
+
 ea_t pclea(ea_t *rp, unsigned short *bitarg, short *store, short *lastarg) {
   unsigned short ibr, br, ea_s, ea_w, bit, a;
   ea_t xbsave;
@@ -1111,28 +1147,10 @@ ea_t pclea(ea_t *rp, unsigned short *bitarg, short *store, short *lastarg) {
     *store = ibr & 0100;
     *lastarg = ibr & 0200;
     br = (ibr >> 8) & 3;
-    if (T_PCL) fprintf(stderr," PCLAP ibr=%o, br=%d, i=%d, bit=%d, store=%d, lastarg=%d, a=%o\n", ibr, br, (ibr & 004000) != 0, bit, (*store != 0), (*lastarg != 0), a);
+    if (T_PCL) printf(" PCLAP ibr=%o, br=%d, i=%d, bit=%d, store=%d, lastarg=%d, a=%o\n", ibr, br, (ibr & 004000) != 0, bit, (*store != 0), (*lastarg != 0), a);
     ea_s = crs[PBH + 2*br] | (RPH & RINGMASK16);
     ea_w = crs[PBL + 2*br];
     ea_w += a;
-#if 1
-    /* this hack is for CPU.PCL Case 32:
-4000/26434: PCL 4000/26543
- ecb @ 4000/26543, access=7
- ecb.pb: 4000/26532
- ecb.framesize: 16
- ecb.stackroot 4000
- ecb.argdisp: 12
- ecb.nargs: 1
- ecb.lb: 4000/60000
- ecb.keys: 14000
- stack free pointer: 4000/70000, current ring=0
- PCLAP ibr=11000, br=2, i=0, bit=1, store=0, lastarg=0, a=0
- PCLAP ea = 0/0
- PCLAP ibr=1700, br=3, i=0, bit=0, store=1, lastarg=1, a=0
- PCLAP ea = 10000/0
- new RP=4000/26533
-    */
     if (br == 3 && (crs[XB] & EXTMASK16)) {
       bit += crs[X];
       if (bit > 15) {
@@ -1142,16 +1160,15 @@ ea_t pclea(ea_t *rp, unsigned short *bitarg, short *store, short *lastarg) {
       if (bit == 0)
 	ea_s &= ~EXTMASK16;
     }
-#endif
     ea = MAKEVA(ea_s, ea_w);
     if (bit)
       ea |= EXTMASK32;
-    if (T_PCL) fprintf(stderr," PCLAP ea = %o/%o\n", ea_s, ea_w);
+    if (T_PCL) printf(" PCLAP ea = %o/%o, bit=%d\n", ea_s, ea_w, bit);
     if (ibr & 004000) {
       if (ea & 0x80000000)
 	fault(POINTERFAULT, ea>>16, 0);
       newea = get32(ea) | (RP & RINGMASK32);
-      if (T_PCL) fprintf(stderr," Indirect pointer is %o/%o\n", newea>>16, newea & 0xFFFF);
+      if (T_PCL) printf(" Indirect pointer is %o/%o\n", newea>>16, newea & 0xFFFF);
 #if 1
       /* Case 37 doesn't like this, Cases 35 & 36 seem to want it.  Looks wrong to me */
       if ((newea & 0x80000000) && (newea>>16) != 0x8000)
@@ -1165,7 +1182,7 @@ ea_t pclea(ea_t *rp, unsigned short *bitarg, short *store, short *lastarg) {
       if (ea & EXTMASK32)
 	bit = get16(ea+2) >> 12;
 #endif
-      if (T_PCL) fprintf(stderr," After indirect, PCLAP ea = %o/%o, bit=%d\n", ea>>16, ea & 0xFFFF, bit);
+      if (T_PCL) printf(" After indirect, PCLAP ea = %o/%o, bit=%d\n", ea>>16, ea & 0xFFFF, bit);
     }
     if (!*store)
       *(unsigned int *)(crs+XB) = ea;
@@ -1201,13 +1218,12 @@ pcl (ea_t ea) {
   ea_t argp;                  /* where to store next arg in new frame */
   ea_t stackfp;               /* new stack frame pointer */
   pa_t pa;                    /* physical address of ecb */
-  short extension;            /* true if extension pointer was used */
   ea_t xbsave;
 
   /* get segment access; mapva ensures either read or gate */
 
   pa = mapva(ea, PACC, &access);
-  if (T_PCL) fprintf(stderr," ecb @ %o/%o, access=%d\n", ea>>16, ea&0xFFFF, access);
+  if (T_PCL) printf(" ecb @ %o/%o, access=%d\n", ea>>16, ea&0xFFFF, access);
 
   /* get a copy of the ecb.  gates must be aligned on a 16-word
      boundary, therefore can't cross a page boundary, and mapva has
@@ -1230,7 +1246,7 @@ pcl (ea_t ea) {
      still in R0, or should it be weakened to the ecb ring?
      (Case 24 of CPU.PCL indicates it should be weakened) */
 
-  if (T_PCL) fprintf(stderr," ecb.pb: %o/%o\n ecb.framesize: %d\n ecb.stackroot %o\n ecb.argdisp: %o\n ecb.nargs: %d\n ecb.lb: %o/%o\n ecb.keys: %o\n", ecb[0], ecb[1], ecb[2], ecb[3], ecb[4], ecb[5], ecb[6], ecb[7], ecb[8]);
+  if (T_PCL) printf(" ecb.pb: %o/%o\n ecb.framesize: %d\n ecb.stackroot %o\n ecb.argdisp: %o\n ecb.nargs: %d\n ecb.lb: %o/%o\n ecb.keys: %o\n", ecb[0], ecb[1], ecb[2], ecb[3], ecb[4], ecb[5], ecb[6], ecb[7], ecb[8]);
 
   newrp = *(unsigned int *)(ecb+0);
   if (access != 1)
@@ -1245,30 +1261,28 @@ pcl (ea_t ea) {
   stackrootseg = ecb[3];
   if (stackrootseg == 0) {
     stackrootseg = get16((*(unsigned int *)(crs+SB)) + 1);
-    if (T_PCL) fprintf(stderr," stack root in ecb was zero, stack root from caller is %o\n", stackrootseg);
+    if (T_PCL) printf(" stack root in ecb was zero, stack root from caller is %o\n", stackrootseg);
   }
   if (stackrootseg == 0)
     fatal("Stack base register root segment is zero");
   stackfp = get32(MAKEVA(stackrootseg,0));
   if (stackfp == 0)
     fatal("Stack free pointer is zero");
-  if (T_PCL) fprintf(stderr," stack free pointer: %o/%o, current ring=%o\n", stackfp>>16, stackfp&0xFFFF, RPH&RINGMASK16);
+  if (T_PCL) printf(" stack free pointer: %o/%o, current ring=%o\n", stackfp>>16, stackfp&0xFFFF, RPH&RINGMASK16);
   stacksize = ecb[2];
 
   /* if there isn't room for this frame, check the stack extension
      pointer */
 
-  extension = 0;
   if ((stackfp & 0xFFFF) + stacksize > 0xFFFF) {
     stackfp = get32(MAKEVA(stackrootseg,2));
-    if (T_PCL) fprintf(stderr," no room for frame, extension pointer is %o/%o\n", stackfp>>16, stackfp&0xFFFF);
+    if (T_PCL) printf(" no room for frame, extension pointer is %o/%o\n", stackfp>>16, stackfp&0xFFFF);
 
     /* XXX: faddr may need to be the last segment tried when this is changed to loop.
        CPU.PCL Case 26 wants fault address word number to be 3 (?) */
 
     if (stackfp == 0 || (stackfp & 0xFFFF) + stacksize > 0xFFFF)
-      fault(STACKFAULT, 0, MAKEVA(stackrootseg,3) | (newrp & RINGMASK32));
-    extension = 1;
+      fault(STACKFAULT, 0, MAKEVA(stackrootseg,0) | (newrp & RINGMASK32));
   }
 
   /* setup the new stack frame at stackfp
@@ -1325,38 +1339,25 @@ pcl (ea_t ea) {
 
   /* update the stack free pointer; this has to wait until after all
      memory accesses, in case of stack page faults (PCL restarts).
-     The ring is stored only if the extension pointer was followed.
-     This is probably some goofy microcode bug: CPU.PCL Case 25 expects
-     no ring number, but Case 27 does. */
+     Some ucode versions incorrectly store the ring in the free
+     pointer if the extension pointer was followed.  Set EHDB to
+     suppress this spurious DIAG error. */
 
   ea = MAKEVA(stackrootseg,0) | (newrp & RINGMASK32);
-  if (extension)
-    put32(stackfp+stacksize, ea);
-  else
-    put32((stackfp+stacksize) & ~RINGMASK32, ea);
+  put32((stackfp+stacksize) & ~RINGMASK32, ea);
 
   /* load new execution state from ecb */
 
-  if (T_PCL) fprintf(stderr," before update, stackfp=%o/%o, SB=%o/%o\n", stackfp>>16, stackfp&0xFFFF, crs[SBH], crs[SBL]);
-#if 0
-  if (access == 1)
-    /* NOTE: Case 21 shows that SB(r) should be 3 when calling from R1 to R3, but
-       Case 24 shows that SB(r) should be 0 when calling from R0 to R1 (??) */
-
-    *(unsigned int *)(crs+SB) = stackfp;
-  else
-    *(unsigned int *)(crs+SB) = stackfp |= newrp & RINGMASK32;
-#else
+  if (T_PCL) printf(" before update, stackfp=%o/%o, SB=%o/%o\n", stackfp>>16, stackfp&0xFFFF, crs[SBH], crs[SBL]);
   if (access == 1)
     *(unsigned int *)(crs+SB) = stackfp;
   else
     *(unsigned int *)(crs+SB) = (stackfp & ~RINGMASK32) | (RP & RINGMASK32);
-#endif
-  if (T_PCL) fprintf(stderr," new SB=%o/%o\n", crs[SBH], crs[SBL]);
+  if (T_PCL) printf(" new SB=%o/%o\n", crs[SBH], crs[SBL]);
   *(unsigned int *)(crs+LB) = *(unsigned int *)(ecb+6);
   newkeys(ecb[8] & 0177760);
   RP = newrp;
-  if (T_PCL) fprintf(stderr," new RP=%o/%o\n", RPH, RPL);
+  if (T_PCL) printf(" new RP=%o/%o\n", RPH, RPL);
 }
 
 
@@ -1375,7 +1376,7 @@ void prtn() {
   *(unsigned int *)(crs+SB) = newsb;
   *(unsigned int *)(crs+LB) = newlb;
   crs[KEYS] = newkeys & 0177760;
-  if (T_INST) fprintf(stderr," Finished PRTN, RP=%o/%o\n", RPH, RPL);
+  if (T_INST) printf(" Finished PRTN, RP=%o/%o\n", RPH, RPL);
 }
 
 main (int argc, char **argv) {
@@ -1408,7 +1409,7 @@ main (int argc, char **argv) {
 
   /* master clear:
      - clear all registers
-     - set register set to 2
+     - register set is 2
      - set P to '1000
      - 16S mode, single precision
      - interrupts and machine checks inhibited
@@ -1417,9 +1418,8 @@ main (int argc, char **argv) {
 
   for (i=0; i < 32*REGSETS; i++)
     regs.u32[i] = 0;
-  crs = (void *)regs.rs[2];
+  crs = (void *)regs.rs[2];           /* boot w/register set 2 */
   crsl = (void *)crs;
-  crs[MODALS] = 000100;         /* boot w/ CURREG=2 (current register set) */
   newkeys(0);
   RPL = 01000;
 
@@ -1528,6 +1528,8 @@ main (int argc, char **argv) {
   trapaddr = 0144003;
   trapvalue = -12345;
   trapaddr = 0;
+
+  /* faults may longjmp here: the top of the instruction fetch loop */
 
   if (setjmp(jmpbuf))
     ;
@@ -2146,11 +2148,13 @@ stfa:
 	  RPH = get16(ea);
 	  RPL = get16(ea+1);
 	  newkeys(get16(ea+2));
-	  crs[MODALS] = get16(ea+3);
+	  m = get16(ea+3);
+	  if ((m & 0340) != (crs[MODALS] & 0340))
+	    printf("WARNING: LPSW changed current register set: current modals=%o, new modals=%o\n", crs[MODALS], m);
+	  crs[MODALS] = m;
 	  if (1 || T_INST) fprintf(stderr," RPH=%o, RPL=%o, keys=%o, modals=%o\n", RPH, RPL, crs[KEYS], crs[MODALS]);
 	  if (crs[MODALS] & 010) {
 	    printf("Process exchange enabled:\n");
-	    traceflags = -1;
 	    printf(" OWNERH=%o, PLA=%o, PCBA=%o, PLB=%o, PCBB=%o\n", crs[OWNERH], regs.sym.pla, regs.sym.pcba, regs.sym.plb, regs.sym.pcbb);
 	    for (i=regs.sym.pla;; i += 2) {
 	      ea = MAKEVA(crs[OWNERH], i);
@@ -2158,7 +2162,10 @@ stfa:
 	      printf(" Level %o: BOL=%o, EOL=%o\n", i, utempa, get16(ea+1));
 	      if (utempa == 1)
 		break;
+	      while (utempa > 0)
+		utempa = dumppcb(utempa);
 	    }
+	    traceflags = -1;
 	  }
 	  if (crs[MODALS] & 020)
 	    printf("Mapped I/O enabled\n");
@@ -3933,7 +3940,7 @@ lcgt:
     if (opcode == 01002) {
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	//traceflags = ~TB_MAP;
-	if (T_FLOW || T_PCL) fprintf(stderr,"%o/%o: PCL %o/%o\n", RPH, RPL-2, ea>>16, ea&0xFFFF);
+	if (T_FLOW || T_PCL) printf("#%d %o/%o: PCL %o/%o\n", instcount, RPH, RPL-2, ea>>16, ea&0xFFFF);
 	pcl(ea);
       } else {
 	if (T_FLOW) fprintf(stderr," CREP\n");
@@ -4393,7 +4400,6 @@ lcgt:
 
     if (opcode == 01401) {
       if (T_FLOW) fprintf(stderr," EIO\n");
-      if (restrict()) break;
       crs[KEYS] &= ~0100;      /* reset EQ */
       pio(ea & 0xFFFF);
       continue;
@@ -5058,6 +5064,7 @@ pio(unsigned int inst) {
   short func;
   short device;
 
+  restrict();
   class = inst >> 14;
   func = (inst >> 6) & 017;
   device = inst & 077;
