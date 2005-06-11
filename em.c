@@ -1130,28 +1130,36 @@ unsigned short dumppcb(unsigned short pcb) {
   return nextpcb;
 }
 
+/* NOTE: the brsave array contains copies of the PB, SB, and LB base
+   registers at the time of the PCL, to compute argument effective
+   addresses.  If the PCL faults during argument transfer, the ARGT
+   instruction will reload this array from the new stack frame
+   header. */
 
-ea_t pclea(ea_t *rp, unsigned short *bitarg, short *store, short *lastarg) {
+ea_t pclea(unsigned short brsave[6], ea_t rp, unsigned short *bitarg, short *store, short *lastarg) {
   unsigned short ibr, br, ea_s, ea_w, bit, a;
-  ea_t xbsave;
-  ea_t ea, newea;
+  unsigned int utempl;
+  ea_t ea, iwea;
 
-  xbsave = *(unsigned int *)(crs+XB);
+  iwea = 0;
   *store = 0;
-  while (!*store && !*lastarg) {
-    ibr = get16(*rp);
-    (*rp)++;
-    a = get16(*rp);
-    (*rp)++;
-    bit = (ibr >> 12) & 0xF;
-    *store = ibr & 0100;
-    *lastarg = ibr & 0200;
-    br = (ibr >> 8) & 3;
-    if (T_PCL) printf(" PCLAP ibr=%o, br=%d, i=%d, bit=%d, store=%d, lastarg=%d, a=%o\n", ibr, br, (ibr & 004000) != 0, bit, (*store != 0), (*lastarg != 0), a);
-    ea_s = crs[PBH + 2*br] | (RPH & RINGMASK16);
-    ea_w = crs[PBL + 2*br];
+  utempl = get32(rp);
+  ibr = utempl >> 16;
+  a = utempl & 0xFFFF;
+  bit = (ibr >> 12) & 0xF;
+  *store = ibr & 0100;
+  *lastarg = ibr & 0200;
+  br = (ibr >> 8) & 3;
+  if (T_PCL) printf(" PCLAP ibr=%o, br=%d, i=%d, bit=%d, store=%d, lastarg=%d, a=%o\n", ibr, br, (ibr & 004000) != 0, bit, (*store != 0), (*lastarg != 0), a);
+  if (br != 3) {
+    ea_s = brsave[2*br] | (RPH & RINGMASK16);
+    ea_w = brsave[2*br + 1];
     ea_w += a;
-    if (br == 3 && (crs[XB] & EXTMASK16)) {
+  } else {
+    ea_s = crs[XBH] | (RPH & RINGMASK16);
+    ea_w = crs[XBL];
+    ea_w += a;
+    if (crs[XB] & EXTMASK16) {
       bit += crs[X];
       if (bit > 15) {
 	bit -= 16;
@@ -1160,32 +1168,112 @@ ea_t pclea(ea_t *rp, unsigned short *bitarg, short *store, short *lastarg) {
       if (bit == 0)
 	ea_s &= ~EXTMASK16;
     }
-    ea = MAKEVA(ea_s, ea_w);
-    if (bit)
-      ea |= EXTMASK32;
-    if (T_PCL) printf(" PCLAP ea = %o/%o, bit=%d\n", ea_s, ea_w, bit);
-    if (ibr & 004000) {
-      if (ea & 0x80000000)
-	fault(POINTERFAULT, ea>>16, 0);
-      newea = get32(ea) | (RP & RINGMASK32);
-      if (T_PCL) printf(" Indirect pointer is %o/%o\n", newea>>16, newea & 0xFFFF);
+  }
+  ea = MAKEVA(ea_s, ea_w);
+  if (bit)
+    ea |= EXTMASK32;
+  if (T_PCL) printf(" PCLAP ea = %o/%o, bit=%d\n", ea_s, ea_w, bit);
+  if (ibr & 004000) {
+    if (ea & 0x80000000)
+      fault(POINTERFAULT, ea>>16, 0);
+    iwea = ea;
+    ea = get32(iwea) | (RP & RINGMASK32);
+    if (T_PCL) printf(" Indirect pointer is %o/%o\n", ea>>16, ea & 0xFFFF);
+
+    /* Case 35 wants a fault when the IP is 120000/0:
+
+	 #28307386 24000/27740: PCL 24000/30045
+	  ecb @ 24000/30045, access=7
+	  ecb.pb: 4000/30041
+	  ecb.framesize: 16
+	  ecb.stackroot 4000
+	  ecb.argdisp: 12
+	  ecb.nargs: 1
+	  ecb.lb: 4000/60000
+	  ecb.keys: 14000
+	  stack free pointer: 4000/70000, current ring=20000
+	  before update, stackfp=24000/70000, SB=0/0
+	  new SB=24000/70000
+	  new RP=24000/30041
+	 Entered ARGT
+	  Transferring arg, 1 left, Y=12
+	  PCLAP ibr=4300, br=0, i=1, bit=0, store=1, lastarg=1, a=27117
+	  PCLAP ea = 24000/27117, bit=0
+	  Indirect pointer is 120000/0
+	  After indirect, PCLAP ea = 120000/0, bit=0
+	  Storing arg, 1 left, Y=12
+	  Stored
+	 #29019968: fault '62, fcode=0, faddr=0/0, faultrp=24000/1356
+
+	 [ Failure Report ]
+
+		address           instruction         scope loop 
+	     024000/027740       021410/030045       024000/027547 
+
+	     Actual: NO POINTER FAULT
+	     Expected: POINTER FAULT 
+
+       But, Case 37 doesn't want a fault:
+
+	 #28891410 24000/30760: PCL 24000/31065
+	  ecb @ 24000/31065, access=7
+	  ecb.pb: 4000/31054
+	  ecb.framesize: 16
+	  ecb.stackroot 4000
+	  ecb.argdisp: 12
+	  ecb.nargs: 1
+	  ecb.lb: 4000/60000
+	  ecb.keys: 14000
+	  stack free pointer: 4000/70000, current ring=20000
+	  before update, stackfp=24000/70000, SB=0/0
+	  new SB=24000/70000
+	  new RP=24000/31054
+	 Entered ARGT
+	  Transferring arg, 1 left, Y=12
+	  PCLAP ibr=4300, br=0, i=1, bit=0, store=1, lastarg=1, a=27117
+	  PCLAP ea = 24000/27117, bit=0
+	  Indirect pointer is 120000/0
+	 #28891410: fault '77, fcode=120000, faddr=24000/27117, faultrp=24000/30760
+
+	 0003  Unexpected POINTER fault.  Returning to 030760
+    */
+
 #if 1
-      /* Case 37 doesn't like this, Cases 35 & 36 seem to want it.  Looks wrong to me */
-      if ((newea & 0x80000000) && (newea>>16) != 0x8000)
-	fault(POINTERFAULT, newea>>16, ea);
+    if (ea & 0x80000000)
+      if ((ea & 0xFFFF0000) != 0x80000000)
+	if ((ea & 0x1FFF0000) || ((RP & RINGMASK32) < (ea & RINGMASK32)))
+	  fault(POINTERFAULT, ea>>16, iwea);
 #endif
-      ea = newea;
-      bit = 0;
+    bit = 0;
 #if 0
-      /* CPU.PCL Case 33 shows that the bit field is not stored in the stack frame
-	 for a 3-word indirect pointer, even though the E bit remains set */
-      if (ea & EXTMASK32)
-	bit = get16(ea+2) >> 12;
+    /* CPU.PCL Case 33 shows that the bit field is not stored in the stack frame
+       for a 3-word indirect pointer, even though the E bit remains set */
+    if (ea & EXTMASK32)
+      bit = get16(ea+2) >> 12;
 #endif
-      if (T_PCL) printf(" After indirect, PCLAP ea = %o/%o, bit=%d\n", ea>>16, ea & 0xFFFF, bit);
-    }
-    if (!*store)
-      *(unsigned int *)(crs+XB) = ea;
+    if (T_PCL) printf(" After indirect, PCLAP ea = %o/%o, bit=%d\n", ea>>16, ea & 0xFFFF, bit);
+  }
+
+#if 0
+    if (ea & 0x80000000)
+      if ((ea & 0xFFFF0000) != 0x80000000)
+	if ((ea & 0x1FFF0000) || ((RP & RINGMASK32) < (ea & RINGMASK32)))
+	  fault(POINTERFAULT, ea>>16, iwea);
+#endif
+
+  if (!*store) {
+#if 1
+    /* Case 36 wants a pointer fault here... */
+    if (ea & 0x80000000)
+      if ((ea & 0xFFFF0000) != 0x80000000)
+	if ((ea & 0x1FFF0000) || ((RP & RINGMASK32) < (ea & RINGMASK32)))
+	  fault(POINTERFAULT, ea>>16, iwea);
+#if 0
+    if (ea & 0x80000000)
+      fault(POINTERFAULT, ea>>16, iwea);
+#endif
+#endif
+    *(unsigned int *)(crs+XB) = ea;
     crs[X] = bit;
   }
   if (bit) {
@@ -1194,21 +1282,17 @@ ea_t pclea(ea_t *rp, unsigned short *bitarg, short *store, short *lastarg) {
   } else {
     *bitarg = 0;
   }
-  /* NOTE: doing xb save/restore makes test 30 work, but 31 fails */
-#if 0
-  if (*store)
-    *(unsigned int *)(crs+XB) = xbsave;
-#endif
   return ea;
 }
 
 
-pcl (ea_t ea) {
+pcl (ea_t ecbea) {
   short i;
   short access;
   unsigned short ecb[9];
   short bit;                  /* bit offset for args */
   ea_t newrp;                 /* start of new proc */
+  ea_t ea;
   ea_t rp;                    /* return pointer */
   short stackrootseg;
   short stacksize;
@@ -1218,12 +1302,12 @@ pcl (ea_t ea) {
   ea_t argp;                  /* where to store next arg in new frame */
   ea_t stackfp;               /* new stack frame pointer */
   pa_t pa;                    /* physical address of ecb */
-  ea_t xbsave;
+  unsigned short brsave[6];   /* old PB,SB,LB */
 
   /* get segment access; mapva ensures either read or gate */
 
-  pa = mapva(ea, PACC, &access);
-  if (T_PCL) printf(" ecb @ %o/%o, access=%d\n", ea>>16, ea&0xFFFF, access);
+  pa = mapva(ecbea, PACC, &access);
+  if (T_PCL) printf(" ecb @ %o/%o, access=%d\n", ecbea>>16, ecbea&0xFFFF, access);
 
   /* get a copy of the ecb.  gates must be aligned on a 16-word
      boundary, therefore can't cross a page boundary, and mapva has
@@ -1233,12 +1317,12 @@ pcl (ea_t ea) {
      accessing the last word, then doing the memcpy.) */
 
   if (access == 1) {
-    if ((ea & 0xF) != 0)
-      fault(ACCESSFAULT, 0, ea);
+    if ((ecbea & 0xF) != 0)
+      fault(ACCESSFAULT, 0, ecbea);
     memcpy(ecb,mem+pa,sizeof(ecb));
   } else {
     for (i=0; i<9; i++)
-      ecb[i]=get16(ea+i);
+      ecb[i]=get16(ecbea+i);
   }
 
   /* XXX: P400 docs say "no ring change takes place if not a
@@ -1301,50 +1385,16 @@ pcl (ea_t ea) {
   put32(*(unsigned int *)(crs+LB), stackfp+6);
   put16(crs[KEYS], stackfp+8);
   put16(RPL, stackfp+9);
-  rp = RP;
 
-  /* transfer arguments if arguments are expected */
+#if 0
+  /* LATER: save caller's base registers for address calculations */
 
   if (ecb[5] > 0) {
-    xbsave = *(unsigned int *)(crs+XB);
-    storedargs = 0;
-    lastarg = 0;
-    argp = stackfp + ecb[4];
-    while (storedargs < ecb[5] || !lastarg) {
-      if (lastarg) {
-	ea = 0x80000000;
-	store = 1;
-      } else {
-	ea = pclea(&rp, &bit, &store, &lastarg) | (newrp & RINGMASK32);
-      }
-      if (storedargs < ecb[5] && store) {
-	put32(ea, argp);
-	if (ea & EXTMASK32)
-	  put16(bit<<12, argp+2);
-	argp += 3;
-	storedargs++;
-      }
-    }
-
-    /* since proc has args, advance newrp past ARGT */
-
-    if (get16(newrp) != 0605)
-      printf("WARNING: proc at %o/%o has %d args but doesn't start with ARGT\n", newrp>>16, newrp&0xFFFF, ecb[5]);
-    newrp++;
+    brsave[0] = RPH;       brsave[1] = 0;
+    brsave[2] = crs[SBH];  brsave[3] = crs[SBL];
+    brsave[4] = crs[LBH];  brsave[5] = crs[LBL];
   }
-
-  /* store possibly updated return pointer now */
-
-  put32(rp, stackfp+2);
-
-  /* update the stack free pointer; this has to wait until after all
-     memory accesses, in case of stack page faults (PCL restarts).
-     Some ucode versions incorrectly store the ring in the free
-     pointer if the extension pointer was followed.  Set EHDB to
-     suppress this spurious DIAG error. */
-
-  ea = MAKEVA(stackrootseg,0) | (newrp & RINGMASK32);
-  put32((stackfp+stacksize) & ~RINGMASK32, ea);
+#endif
 
   /* load new execution state from ecb */
 
@@ -1358,6 +1408,117 @@ pcl (ea_t ea) {
   newkeys(ecb[8] & 0177760);
   RP = newrp;
   if (T_PCL) printf(" new RP=%o/%o\n", RPH, RPL);
+
+  /* update the stack free pointer; this has to wait until after all
+     memory accesses, in case of stack page faults (PCL restarts).
+     Some ucode versions incorrectly store the ring in the free
+     pointer if the extension pointer was followed.  Set EHDB to
+     suppress this spurious DIAG error. */
+
+  ea = MAKEVA(stackrootseg,0) | (newrp & RINGMASK32);
+  put32((stackfp+stacksize) & ~RINGMASK32, ea);
+
+  /* transfer arguments if arguments are expected.
+     Y(high) = stack frame offset to store next argument
+     YL = number of arguments left to transfer */
+
+  if (ecb[5] > 0) {
+    crs[Y] = ecb[4];
+    crs[YL] = ecb[5];
+    argt();
+  }
+}
+
+/* for ARGT:
+   Registers:
+   - RP points to the ARGT instruction
+   - SB points to the new stack frame
+   - LB is for the called procedure
+   - Y is new frame offset of the next argument
+   - YL is the number of arguments left to transfer (HACK!)
+   Stack frame:
+   - PB points to the next argument template to be evaluated
+   - SB is the caller's saved SB
+   - LB is the caller's saved LB
+*/
+
+argt() {
+  unsigned short brsave[6];
+  unsigned short argsleft, argdisp, lastarg, store,bit;
+  unsigned int utempl;
+  unsigned short ecby;          /* last offset where ecb temp ea was stored */
+  ea_t ea, stackfp, rp, ecbea;
+  unsigned short advancepb, advancey;
+
+  if (T_PCL) printf("Entered ARGT\n");
+
+  /* stackfp is the new stack frame, rp is in the middle of
+     argument templates and is advanced after each transfer */
+
+  stackfp = *(unsigned int *)(crs+SB);
+  rp = get32(stackfp+2);
+
+  /* reload the caller's base registers for EA calculations */
+  
+  brsave[0] = rp >> 16;    brsave[1] = 0;
+  *(double *)(brsave+2) = get64(stackfp+4);
+  
+  argdisp = crs[Y];
+  argsleft = crs[YL];
+  lastarg = 0;         /* true when AP template with L bit is seen */
+  while (argsleft > 0 || !lastarg) {
+
+    if (T_PCL) printf(" Transferring arg, %d left, Y=%o\n", argsleft, crs[Y]);
+
+    advancey = 0;
+    if (lastarg) {
+      ea = 0x80000000;
+      store = 1;
+      advancepb = 0;
+    } else {
+      ea = pclea(brsave, rp, &bit, &store, &lastarg) | (RP & RINGMASK32);
+      advancepb = 1;
+    }
+    if (argsleft > 0 && store) {
+      if (T_PCL) printf(" Storing arg, %d left, Y=%o\n", argsleft, crs[Y]);
+
+      /* NOTE: some version of ucode only store 16 bits for omitted args.
+	 Set EHDB to prevent this error.
+	 Some tests want ring/E-bits stripped, others want ring bits left
+	 alone.  Sorry... */
+
+      if ((ea & 0x8FFF0000) == 0x80000000) {
+	ea = ea & 0x8FFFFFFF;      /* strip ring & E bits */
+	put32(ea, stackfp+crs[Y]);
+      } else {
+	put32(ea, stackfp+crs[Y]);
+	if (ea & EXTMASK32)
+	  put16(bit<<12, stackfp+crs[Y]+2);
+      }
+      if (T_PCL) printf(" Stored\n");
+      argsleft--;
+      advancey = 1;
+    }
+
+    /* advance rp/pb in new stack frame past this template, and
+       advance Y to the next arg displacement in the stack.  Y
+       has to be advanced last because the PB store may fault.
+       If it does, the ARGT starts over, and this argument will
+       have to be transferred again. */
+
+    if (advancepb) {
+      rp += 2;
+      put32(rp, stackfp+2);
+    }
+    if (advancey) {
+      crs[Y] += 3;
+      crs[YL]--;
+    }
+  }
+
+  /* after argument transfer, advance real RP past ARGT */
+
+  RPL++;
 }
 
 
@@ -2139,6 +2300,12 @@ stfa:
 	if (inst == 000417) {
 	  if (T_FLOW) fprintf(stderr," EVIM\n");
 	  crs[MODALS] |= 040000;
+	  continue;
+	}
+
+	if (inst == 000605) {
+	  if (T_FLOW || T_PCL) fprintf(stderr," ARGT\n");
+	  argt();
 	  continue;
 	}
 

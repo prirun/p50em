@@ -9,7 +9,12 @@
 
 #define S 10
 #define Y 10
+#define YH 10
+#define YL 11
+
 #define X 14
+#define XH 14
+#define XL 15
 
 #define FLTH 20
 #define FLTL 21
