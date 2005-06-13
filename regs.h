@@ -128,3 +128,25 @@ unsigned short memtocrs[] = {
   SBL,    /* 15 = unnamed (SB word) */
   LBH,    /* 16 = unnamed (LB seg) */
   LBL};    /* 17 = unnamed (LB word) */
+
+#define PCBLEV 0
+#define PCBLINK 1
+#define PCBWAIT 2
+#define PCBABT 4
+#define PCBCPU 5
+#define PCBPET 8
+#define PCBDTAR2 10
+#define PCBDTAR3 12
+#define PCBIT 14
+#define PCBMASK 16
+#define PCBKEYS 17
+#define PCBREGS 18
+#define PCBFVEC 50
+#define PCBFVR0 50
+#define PCBFVR1 52
+#define PCBFVR2 54
+#define PCBFVR3 56
+#define PCBFVPF 58
+#define PCBCSFIRST 60
+#define PCBCSNEXT 61
+#define PCBCSLAST 62

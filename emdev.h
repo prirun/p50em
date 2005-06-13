@@ -251,6 +251,9 @@ readasr:
 	printf("Unexpected error reading from tty, n=%d", n);
 	fatal(NULL);
       }
+    } else if (func == 04 || func == 05) {  /* read control register 1/2 */
+      crs[A] = 0;
+      IOSKIP;
     } else if (func == 011) {    /* read device id? */
       crs[A] = 4;
       IOSKIP;
