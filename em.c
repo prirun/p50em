@@ -135,7 +135,6 @@ unsigned short gen0tab[] = {
   000764,          /* ? */
   000615,          /* ITLB */
   001367,          /* ? */
-  000024,          /* STPM */
   000503,          /* EMCM */
   000501,          /* LMCM */
   001304,          /* MDEI */
@@ -157,7 +156,6 @@ char gen0nam[][5] = {
   "764",
   "ITLB",
   "1367",
-  "STPM",
   "EMCM",
   "LMCM",
   "MDEI",
@@ -185,6 +183,7 @@ char gen0nam[][5] = {
    T_MAP        segmentation
    T_PCL        PCL instructions
    T_FAULT      Faults
+   T_PX         Process exchange
 */
 
 #define TB_EAR 0x00000001
@@ -198,6 +197,7 @@ char gen0nam[][5] = {
 #define TB_MAP 0x00000100
 #define TB_PCL 0x00000200
 #define TB_FAULT 0x00000400
+#define TB_PX 0x00000800
 
 #define T_EAR  (traceflags & TB_EAR)
 #define T_EAV  (traceflags & TB_EAV)
@@ -210,6 +210,7 @@ char gen0nam[][5] = {
 #define T_MAP (traceflags & TB_MAP)
 #define T_PCL (traceflags & TB_PCL)
 #define T_FAULT (traceflags & TB_FAULT)
+#define T_PX (traceflags & TB_PX)
 
 int traceflags=0;                    /* each bit is a trace flag */
 
@@ -219,6 +220,8 @@ int traceflags=0;                    /* each bit is a trace flag */
    are set to 014114.  But DIAGS like this sense switch setting. :( */
 
 unsigned short sswitch = 0;
+
+unsigned short cpuid = 0;
 
 unsigned int instcount=0;
 
@@ -239,6 +242,11 @@ jmp_buf jmpbuf;
 unsigned short mem[MEMSIZE];   /* system's physical memory */
 
 #define MAKEVA(seg,word) (((int)(seg))<<16) | (word)
+
+/* returns the incremented value of a virtual address, wrapping to word
+   zero at the end of a segment (word portion = 0177777) */
+
+#define INCVA(ea,n) (((ea) & 0xFFFF0000) | ((ea)+(n)) & 0xFFFF)
 
 unsigned int bitmask32[33] = {0,
 			    0x80000000, 0x40000000, 0x20000000, 0x10000000,
@@ -396,11 +404,12 @@ unsigned int get32(ea_t ea) {
   unsigned short m[2];
 
   pa = mapva(ea, RACC, &access);
+
   if ((pa & 01777) <= 01776)
     return *(unsigned int *)(mem+pa);
   else {
     m[0] = mem[pa];
-    m[1] = get16(ea+1);
+    m[1] = get16(INCVA(ea,1));
     return *(unsigned int *)m;
   }
 }
@@ -415,9 +424,9 @@ double get64(ea_t ea) {
     return *(double *)(mem+pa);
   else {
     m[0] = mem[pa];
-    m[1] = get16(ea+1);
-    m[2] = get16(ea+2);
-    m[3] = get16(ea+3);
+    m[1] = get16(INCVA(ea,1));
+    m[2] = get16(INCVA(ea,2));
+    m[3] = get16(INCVA(ea,3));
     return *(double *)m;
   }
 }
@@ -461,7 +470,7 @@ put32(unsigned int value, ea_t ea) {
   else {
     m = (void *)&value;
     mem[pa] = m[0];
-    put16(m[1], ea+1);
+    put16(m[1], INCVA(ea,1));
   }
 }
 
@@ -476,9 +485,9 @@ put64(double value, ea_t ea) {
   else {
     m = (void *)&value;
     mem[pa] = m[0];
-    put16(m[1], ea+1);
-    put16(m[2], ea+2);
-    put16(m[3], ea+3);
+    put16(m[1], INCVA(ea,1));
+    put16(m[2], INCVA(ea,2));
+    put16(m[3], INCVA(ea,3));
   }
 }
 
@@ -979,7 +988,6 @@ labA:
 
 labB:
   if (T_EAV) fprintf(stderr," 2-word format\n");
-  //  x = inst & 040000;            /* get real bit 2 again for ixy?? */
   y = (inst & 020);
   ixy = ((i != 0)<<2) | ((x != 0)<<1) | (y != 0);
   xok = ((*opcode & 01700) != 01500);        /* true if indexing is okay */
@@ -1008,9 +1016,9 @@ labB:
       fault(POINTERFAULT, m, ea);
     }
     ea_s = m | (ea_s & RINGMASK16);
-    ea_w = get16(ea+1);              /* XXX: should do 16-bit add */
+    ea_w = get16(INCVA(ea,1));
     if (ea_s & EXTMASK16)
-      *bit = get16(ea+2) >> 12;
+      *bit = get16(INCVA(ea,2)) >> 12;
     if (T_EAV) fprintf(stderr," After indirect, ea_s=%o, ea_w=%o, bit=%d\n", ea_s, ea_w, *bit);
     if (xok)
       if (ixy == 5)
@@ -1049,7 +1057,7 @@ ea_t apea(unsigned short *bitarg) {
       fault(POINTERFAULT, ea>>16, 0);
     ea = get32(ea);
     if (ea & EXTMASK32)
-      bit = get16(ea+2) >> 12;
+      bit = get16(INCVA(ea,2)) >> 12;
     else
       bit = 0;
     if (T_EAAP) fprintf(stderr," After indirect, AP ea = %o/%o, bit=%d\n", ea>>16, ea & 0xFFFF, bit);
@@ -1641,12 +1649,6 @@ pxregsave() {
   if (crs[OWNERL] == 0 || (crs[KEYS] & 1))
     return;
 
-  /* if this process was the currently running process, copy RP
-     to PB */
-
-  if (crs[PBL] == 0)
-    *(unsigned int *)(crs+PB) = RP;
-
   pcbp = *(unsigned int *)(crs+OWNERH);
   regp = pcbp+PCBREGS;
   mask = 0;
@@ -1662,14 +1664,17 @@ pxregsave() {
   put16(crs[KEYS], pcbp+PCBKEYS);
 }
 
-/* pxregload: load pcbp's registers from their pcb to the
-   current register set
-   NOTE: this doesn't update RP!  */
+/* pxregload: load pcbp's registers from their pcb to the current
+   register set, set OWNERL
+
+   NOTE: RP must be set by the caller since this happens whenever
+   a process is dispatched - not just when registers are loaded */
 
 pxregload (ea_t pcbp) {
   ea_t regp;
   unsigned short i, mask;
 
+  if (T_PX) fprintf(stderr,"pxregload loading registers for process %o/%o\n", pcbp>>16, pcbp&0xFFFF);
   regp = pcbp+PCBREGS;
   mask = get16(pcbp+PCBMASK);
   for (i=0; i<16; i++) {
@@ -1680,8 +1685,34 @@ pxregload (ea_t pcbp) {
       crsl[i] = 0;
     }
   }
+  crs[KEYS] = get16(pcbp+PCBKEYS);
+  *(unsigned int *)(crs+DTAR2) = get32(pcbp+PCBDTAR2);
+  *(unsigned int *)(crs+DTAR3) = get32(pcbp+PCBDTAR3);
   crs[OWNERL] = pcbp & 0xFFFF;
+
+  if (T_PX) fprintf(stderr,"pxregload: registers loaded, ownerl=%o\n", crs[OWNERL]);
 }
+
+
+/* switch to the other register set (2 vs 3) */
+
+ors() {
+  unsigned short rsnum;
+  unsigned short modals;
+
+  /* only bit 11 of crs in modals is important */
+
+  printf("ors: current modals = %o, register set = %d\n", crs[MODALS], (crs[MODALS] & 0340)>>5);
+  modals = (crs[MODALS] ^ 040);
+  crs[MODALS] = modals;
+  rsnum = 2+((modals & 040) >> 5);
+  printf("ors: new modals = %o, register set = %d\n", modals, rsnum);
+  crs = regs.rs16[rsnum];
+  crsl = (void *)crs;
+  crs[MODALS] = modals;
+  printf("ors: new register set = %d\n", (crs[MODALS] & 0340)>>5);
+}
+
 
 /* the process exchange dispatcher's job is to:
    - determine the highest priority process ready to run
@@ -1697,19 +1728,32 @@ pxregload (ea_t pcbp) {
 
 dispatcher() {
   ea_t pcbp, rlp;
+  unsigned short pcbw;      /* pcb word address */
   unsigned short newrs;
   unsigned short rlbol;
   unsigned short utempa;
 
-  if (regs.sym.pcba != 0)
+  if (regs.sym.pcba != 0) {
     pcbp = MAKEVA(crs[OWNERH], regs.sym.pcba);
-  else if (regs.sym.pcbb != 0) {
+    regs.sym.pla = get16(pcbp+PCBLEV);
+    if (T_PX) printf("disp: dispatching PPA, pcba=%o, pla=%o\n", regs.sym.pcba, regs.sym.pla);
+
+  } else if (regs.sym.pcbb != 0) {
     pcbp = MAKEVA(crs[OWNERH], regs.sym.pcbb);
     regs.sym.pcba = regs.sym.pcbb;
+    regs.sym.pla = get16(pcbp+PCBLEV);
     regs.sym.pcbb = 0;
+    if (T_PX) printf("disp: dispatching PPB, pcba=%o, pla=%o\n", regs.sym.pcba, regs.sym.pla);
+
   } else {
-    rlp = MAKEVA(crs[OWNERH], regs.sym.pla);
-#if 1
+    if (T_PX) printf("disp: scanning RL\n");
+    if (regs.sym.pla != 0)
+      rlp = MAKEVA(crs[OWNERH], regs.sym.pla);
+    else if (regs.sym.plb != 0)
+      rlp = MAKEVA(crs[OWNERH], regs.sym.plb);
+    else
+      fatal("dispatch: both pla and plb are zero; can't locate ready list");
+#if 0
     if (regs.sym.pla < 0100 || regs.sym.pla > 0154)
       fatal("regs.sym.pla is out of range!");
 #endif
@@ -1725,7 +1769,9 @@ dispatcher() {
     regs.sym.pcba = rlbol;
     regs.sym.pla = rlp & 0xFFFF;
   }
-
+  pcbw = pcbp & 0xFFFF;
+  if (T_PX) printf("disp: process %o/%o selected\n", pcbp>>16, pcbw);
+  
   /* pcbp now points to the process we're going to run.  BY
      definition, this process should not be on any wait lists,
      so pcb.waitlist(seg) should be zero.  Check it */
@@ -1735,39 +1781,38 @@ dispatcher() {
     printf("dispatch: pcb %o/%o selected, but wait segno = %o\n", pcbp>>16, pcbp&0xFFFF, utempa);
     fatal(NULL);
   }
-  printf("process %o/%o selected\n", pcbp>>16, pcbp&0xFFFF);
 
-  /* find a register set for this process (for now use the current
-     register set) */
+  /* save RP in current register set before possibly switching */
 
-  newrs = (crs[MODALS] >> 5) & 7;
+  *(unsigned int *)(crs+PB) = RP;
 
-  /* make the new register set the current register set */
+  /* find a register set for this process */
 
-  crs[MODALS] = (crs[MODALS] & ~0340) | (newrs << 5);
+  if (crs[OWNERL] != pcbw)
+    ors();
 
   /* If the selected register set is owned and hasn't been saved, save
      it before taking it */
 
-  if (crs[OWNERL] == (pcbp & 0xFFFF))
-    printf("dispatch: register set %d already owned by %o - no save\n", newrs, crs[OWNERL]);
-  else {
+  if (crs[OWNERL] == pcbw) {
+    if (T_PX) fprintf(stderr,"dispatch: register set %d already owned by %o - no save\n", newrs, crs[OWNERL]);
+  } else {
     pxregsave();
     pxregload(pcbp);
-    crs[KEYS] = get16(pcbp+PCBKEYS) & ~1;    /* erase save done */
-    RP = *(unsigned int *)(crs+PB);
-    crs[PBL] = 0;
   }
+  RP = *(unsigned int *)(crs+PB);
+  crs[PBL] = 0;
+  crs[KEYS] &= ~3;                           /* erase "in dispatcher" and "save done" */
 
   /* if this process' abort flags are set, process fault */
 
   utempa = get16(pcbp+PCBABT);
   if (utempa != 0) {
-    printf("dispatch: abort flags for %o are %o\n", crs[OWNERL], utempa);
+    if (T_PX) fprintf(stderr,"dispatch: abort flags for %o are %o\n", crs[OWNERL], utempa);
     fault(PROCESSFAULT, utempa, 0);
     fatal("fault returned after process fault");
   }
-  printf("returning from dispatcher, running process %o/%o at %o/%o\n", crs[OWNERH], crs[OWNERL], RPH, RPL);
+  if (T_PX) printf("disp: returning from dispatcher, running process %o/%o at %o/%o\n", crs[OWNERH], crs[OWNERL], RPH, RPL);
   return;
 
 idle:
@@ -1803,7 +1848,7 @@ unready (ea_t waitlist, unsigned short newlink) {
   }
   rl = (bol<<16) | eol;
   put32(rl, rlp);         /* update ready list */
-  printf("unready: new rl bol/eol = %o/%o\n", rl>>16, rl&0xFFFF);
+  if (T_PX) fprintf(stderr,"unready: new rl bol/eol = %o/%o\n", rl>>16, rl&0xFFFF);
   put16(newlink, pcbp+1);     /* update my pcb link */
   put32(waitlist, pcbp+2);    /* update my pcb wait address */
   regs.sym.pcba = 0;
@@ -1817,7 +1862,8 @@ unready (ea_t waitlist, unsigned short newlink) {
 
 unsigned short ready (ea_t pcbp, unsigned short begend) {
   ea_t rlp;
-  unsigned short bol,eol,pcbwn,level,resched;
+  ea_t xpcbp;
+  unsigned short bol,eol,pcbw,level,resched;
   unsigned int rl;
 
   if ((pcbp & 0xFFFF) == crs[OWNERL])
@@ -1828,21 +1874,23 @@ unsigned short ready (ea_t pcbp, unsigned short begend) {
   level = get16(pcbp+PCBLEV);
   rlp = MAKEVA(crs[OWNERH],level);
   rl = get32(rlp);
-  //printf("ready: pcbp=%o/%o\n", pcbp>>16, pcbp&0xFFFF);
-  //printf("ready: old bol/eol for level %o = %o/%o\n", level, rl>>16, rl&0xFFFF);
-  pcbwn = pcbp;                           /* pcb word number */
+  //if (T_PX) fprintf(stderr,"ready: pcbp=%o/%o\n", pcbp>>16, pcbp&0xFFFF);
+  //if (T_PX) fprintf(stderr,"ready: old bol/eol for level %o = %o/%o\n", level, rl>>16, rl&0xFFFF);
+  pcbw = pcbp;                            /* pcb word number */
   if ((rl>>16) == 0) {                    /* bol=0: this RL level was empty */
     put32(0, pcbp+1);                     /* set link and wait SN in pcb */
-    rl = (pcbwn<<16) | pcbwn;             /* set beg=end */
+    rl = (pcbw<<16) | pcbw;               /* set beg=end */
   } else if (begend) {                    /* notify to beginning */
     put32(rl & 0xFFFF0000, pcbp+1);       /* set link and wait SN in pcb */
-    rl = (pcbwn<<16) | rl&0xFFFF;         /* new is bol, eol is unchanged */
+    rl = (pcbw<<16) | rl&0xFFFF;          /* new is bol, eol is unchanged */
   } else {                                /* notify to end */
     put32(0, pcbp+1);                     /* set link and wait SN in pcb */
-    rl = (rl & 0xFFFF0000) | pcbwn;       /* rl bol is unchanged, eol is new */
+    xpcbp = MAKEVA(crs[OWNERH],rl&0xFFFF); /* get ptr to last pcb at this level */
+    put16(pcbw,xpcbp+1);                  /* set last pcb's forward link */
+    rl = (rl & 0xFFFF0000) | pcbw;        /* rl bol is unchanged, eol is new */
   }
   put32(rl, rlp);
-  printf("ready: new bol/eol for level %o = %o/%o\n", level, rl>>16, rl&0xFFFF);
+  if (T_PX) fprintf(stderr,"ready: new bol/eol for level %o = %o/%o\n", level, rl>>16, rl&0xFFFF);
 
   /* is this new process higher priority than me?  If so, return 1
      so that the dispatcher is entered.  If not, check for new plb/pcbb */
@@ -1852,14 +1900,69 @@ unsigned short ready (ea_t pcbp, unsigned short begend) {
     regs.sym.plb = regs.sym.pla;
     regs.sym.pcbb = regs.sym.pcba;
     regs.sym.pla = level;
-    regs.sym.pcba = pcbp & 0xFFFF;
+    regs.sym.pcba = pcbw;
     resched = 1;
   } else if (level < regs.sym.plb) {
     regs.sym.plb = level;
-    regs.sym.pcbb = pcbp & 0xFFFF;
+    regs.sym.pcbb = pcbw;
   }
   return resched;
 }
+
+
+wait() {
+  ea_t ea;
+  ea_t pcbp, prevpcbp;
+  unsigned int utempl;
+  unsigned int pcblevnext;      /* pcb level and link */
+  unsigned short bol;
+  unsigned short pcblev;
+  unsigned short pcbnext;
+  short count;
+
+  restrict();
+  ea = apea(NULL);
+  if (T_PX) printf("%o/%o: WAIT on %o/%o, I am %o, keys=%o, modals=%o\n", RPH, RPL, ea>>16, ea&0xFFFF, crs[OWNERL], crs[KEYS], crs[MODALS]);
+  utempl = get32(ea);     /* get count and BOL */
+  count = utempl>>16;    /* count (signed) */
+  bol = utempl & 0xFFFF;  /* beginning of wait list */
+  if (T_PX) fprintf(stderr," wait list count was %d, bol was %o\n", count, bol);
+  count++;
+  if (count >= 1) {      /* I have to wait */
+    if (count == 1 && bol != 0)
+      fatal("WAIT: count == 1 but bol != 0");
+    if (count > 1 && bol == 0)
+      fatal("WAIT: count > 1 but bol == 0");
+    if (regs.sym.pcba == 0)
+      fatal("WAIT: pcba is zero");
+    if (bol != 0) {
+      pcbp = MAKEVA(crs[OWNERH],bol);
+      pcblevnext = get32(pcbp);
+      pcblev = pcblevnext >> 16;
+    }
+    if (count == 1 || regs.sym.pla < pcblev) {   /* add me to the beginning */
+      utempl = (count<<16) | crs[OWNERL];
+      put32(utempl, ea);    /* update semaphore count/bol */
+    } else {
+      /* do a priority scan... */
+      while (pcblev <= regs.sym.pla && bol != 0) {
+	prevpcbp = pcbp;
+	bol = pcblevnext & 0xFFFF;
+	if (bol != 0) {
+	  pcbp = MAKEVA(crs[OWNERH],bol);
+	  pcblevnext = get32(pcbp);
+	  pcblev = pcblevnext >> 16;
+	}
+      }
+      put16(crs[OWNERL], prevpcbp+PCBLINK);
+      put16(*(unsigned short *)&count, ea);    /* update count */
+    }
+    unready(ea, bol);
+    dispatcher();
+  } else
+    put16(*(unsigned short *)&count, ea);    /* just update count and continue */
+}
+
 
 
 main (int argc, char **argv) {
@@ -1886,11 +1989,12 @@ main (int argc, char **argv) {
   unsigned short m,m1,m2;
   unsigned short qtop,qbot,qseg,qmask,qtemp;
   ea_t qea;
-  int scount;                          /* shift count */
+  short scount;                          /* shift count */
   unsigned short trapvalue;
   ea_t trapaddr;
   unsigned short resched, begend, bol, ppatemp;
   ea_t pcbp;
+  unsigned short stpm[8];
 
   /* master clear:
      - clear all registers
@@ -1905,6 +2009,7 @@ main (int argc, char **argv) {
     regs.u32[i] = 0;
   crs = (void *)regs.rs[2];           /* boot w/register set 2 */
   crsl = (void *)crs;
+  crs[MODALS] = 0100;
   newkeys(0);
   RPL = 01000;
 
@@ -1927,6 +2032,12 @@ main (int argc, char **argv) {
 	sswitch = templ;
       } else
 	sswitch = 0;
+    } else if (strcmp(argv[i],"--cpuid") == 0) {
+      if (i+1 < argc && argv[i+1][0] != '-') {
+	sscanf(argv[i+1],"%d", &templ);
+	cpuid = templ;
+      } else
+	cpuid = 0;
     } else if (strcmp(argv[i],"--trace") == 0)
       while (i+1 < argc && argv[i+1][0] != '-') {
 	if (strcmp(argv[i+1],"ear") == 0)
@@ -1951,6 +2062,8 @@ main (int argc, char **argv) {
 	  traceflags |= TB_PCL;
 	else if (strcmp(argv[i+1],"fault") == 0)
 	  traceflags |= TB_FAULT;
+	else if (strcmp(argv[i+1],"px") == 0)
+	  traceflags |= TB_PX;
 	else if (strcmp(argv[i+1],"all") == 0)
 	  traceflags = -1;
 	else
@@ -2039,8 +2152,6 @@ main (int argc, char **argv) {
 
     inst = get16(RP);
     RPL++;
-    //m = get16(RP);   /* this is dangerous and should be removed! */
-    m = -1;
 
     /* while a process is running, RP is the real program counter, PBH
        is the active procedure segment, and PBL is zero.  When a
@@ -2051,10 +2162,12 @@ main (int argc, char **argv) {
     crs[PBH] = RPH;
     crs[PBL] = 0;
     earp = RP;
+    if (crs[MODALS] & 010)     /* px enabled */
+      crs[TIMER]++;
 
 xec:
     instcount++;
-    if (T_FLOW) fprintf(stderr,"\n%o@%o/%o: %o %o		A='%o/%:0d B='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d	#%d\n", crs[OWNERL], RPH, RPL-1, inst, m, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&040000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, instcount);
+    if (T_FLOW) fprintf(stderr,"\n%o @ %o/%o: %o		A='%o/%:0d B='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d	#%d\n", crs[OWNERL], RPH, RPL-1, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&040000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, instcount);
 
     /* generic? */
 
@@ -2109,11 +2222,7 @@ xec:
 
 	if (inst == 000505) {                 /* SVC */
 	  if (T_FLOW) fprintf(stderr," SVC\n");
-#if 1
-	  fault(SVCFAULT, 0, 0);
-#else
 	  svc();
-#endif
 	  continue;
 	}
 
@@ -2198,14 +2307,11 @@ xec:
 	  continue;
 	}
 
-	/* NOTE: this should do 16-bit adds on RPL in get16 calls
-	   rather than 32-bit adds */
-
 	if (inst == 001314) {
 	  if (T_FLOW) fprintf(stderr," CGT\n");
 	  tempa = get16(RP);              /* get number of words */
 	  if (1 <= crs[A] && crs[A] < tempa)
-	    RPL = get16(RP+crs[A]);
+	    RPL = get16(INCVA(RP,crs[A]));
 	  else
 	    RPL += tempa;
 	  continue;
@@ -2244,10 +2350,12 @@ xec:
 
 	if (inst == 000301) {
 	  if (T_FLOW) fprintf(stderr," PIML\n");
+	  templ = *(int *)(crs+L);
 	  *(int *)(crs+L) = *(int *)(crs+E);
 	  SETL(0);
 	  SETCC_L;
-	  if (((crs[L] ^ crs[E]) & 0x8000) || (*(int *)(crs+L) != 0 && *(int *)(crs+L) != -1))
+	  /* this is broken: see CPU.INTEGER.V Case 6 */
+	  if (((templ ^ crs[E]) & 0x8000) || (templ != 0 && templ != -1))
 	    mathexception('i', FC_INT_OFLOW, 0);
 	  else
 	    CLEARC;
@@ -2343,7 +2451,7 @@ xec:
 stfa:
 	  if (utempa != 0) {
 	    utempl = utempl | EXTMASK32;
-	    put16(utempa,ea+2);
+	    put16(utempa,INCVA(ea,2));
 	  }
 	  put32(utempl,ea);
 	  continue;
@@ -2540,12 +2648,12 @@ stfa:
 	  for (i = 11; i >= 0; i--) {
 	    if (crsl[i] != 0) {
 	      if (T_INST) fprintf(stderr," crsl[%d] saved, value=%o\n", i, crsl[i]);
-	      put32(crsl[i], ea+j);
+	      put32(crsl[i], INCVA(ea,j));
 	      savemask |= bitmask16[16-i];
 	    }
 	    j += 2;
 	  }
-	  put32(*(int *)(crs+XB), ea+25);
+	  put32(*(int *)(crs+XB), INCVA(ea,25));
 	  put16(savemask, ea);
 	  if (T_INST) fprintf(stderr," Saved, mask=%o\n", savemask);
 	  continue;
@@ -2560,14 +2668,14 @@ stfa:
 	  j = 1;
 	  for (i = 11; i >= 0; i--) {
 	    if (savemask & bitmask16[16-i]) {
-	      crsl[i] = get32(ea+j);
+	      crsl[i] = get32(INCVA(ea,j));
 	      if (T_INST) fprintf(stderr," crsl[%d] restored, value=%o\n", i, crsl[i]);
 	    } else {
 	      crsl[i] = 0;
 	    }
 	    j += 2;
 	  }
-	  *(unsigned int *)(crs+XB) = get32(ea+25);
+	  *(unsigned int *)(crs+XB) = get32(INCVA(ea,25));
 	  if (T_INST) fprintf(stderr," XB restored, value=%o/%o\n", crs[XBH], crs[XBL]);
 	  continue;
 	}
@@ -2653,34 +2761,38 @@ stfa:
 
 	if (inst == 000711) {
 	  if (T_FLOW) fprintf(stderr," LPSW\n");
+	  //printf(" LPSW\n");
 	  restrict();
 	  ea = apea(NULL);
 	  RPH = get16(ea);
-	  RPL = get16(ea+1);
-	  newkeys(get16(ea+2));
-	  m = get16(ea+3);
+	  RPL = get16(INCVA(ea,1));
+	  newkeys(get16(INCVA(ea,2)));
+	  m = get16(INCVA(ea,3));
 	  if ((m & 0340) != (crs[MODALS] & 0340))
-	    printf("WARNING: LPSW changed current register set: current modals=%o, new modals=%o\n", crs[MODALS], m);
-	  crs[MODALS] = m;
-	  if (1 || T_INST) fprintf(stderr," RPH=%o, RPL=%o, keys=%o, modals=%o\n", RPH, RPL, crs[KEYS], crs[MODALS]);
+	    if (T_PX) printf("LPSW: WARNING: changed current register set: current modals=%o, new modals=%o\n", crs[MODALS], m);
+	  crs[MODALS] = (m & ~0340) | ((crs == regs.rs16[2]? 2:3) << 5);
+	  if (T_PX) printf("LPSW: RPH=%o, RPL=%o, keys=%o, modals=%o\n", RPH, RPL, crs[KEYS], crs[MODALS]);
+	  if (T_PX) printf("LPSW: ownerl[2]=%o, keys[2]=%o, modals[2]=%o, ownerl[3]=%o, keys[3]=%o, modals[3]=%o, crs=%d\n", regs.rs16[2][OWNERL], regs.rs16[2][KEYS], regs.rs16[2][MODALS], regs.rs16[3][OWNERL], regs.rs16[3][KEYS], regs.rs16[3][MODALS], crs==regs.rs16[2]? 2:3);
 	  if (crs[MODALS] & 010) {
-	    printf("Process exchange enabled:\n");
-	    printf(" OWNER=%o/%o, PLA=%o, PCBA=%o, PLB=%o, PCBB=%o\n", crs[OWNERH], crs[OWNERL], regs.sym.pla, regs.sym.pcba, regs.sym.plb, regs.sym.pcbb);
+	    if (T_PX) fprintf(stderr,"Process exchange enabled:\n");
+	    if (T_PX) printf("LPSW: PLA=%o, PCBA=%o, PLB=%o, PCBB=%o\n", regs.sym.pla, regs.sym.pcba, regs.sym.plb, regs.sym.pcbb);
+#if 0
 	    for (i=regs.sym.pla;; i += 2) {
 	      ea = MAKEVA(crs[OWNERH], i);
 	      utempa = get16(ea);
-	      printf(" Level %o: BOL=%o, EOL=%o\n", i, utempa, get16(ea+1));
+	      if (T_PX) fprintf(stderr," Level %o: BOL=%o, EOL=%o\n", i, utempa, get16(ea+1));
 	      if (utempa == 1)
 		break;
 	      while (utempa > 0)
 		utempa = dumppcb(utempa);
 	    }
-	    traceflags = ~TB_MAP;
+#endif
+	    //traceflags = ~TB_MAP;
 	  }
 	  if (crs[MODALS] & 020)
-	    printf("Mapped I/O enabled\n");
+	    if (T_PX) fprintf(stderr,"Mapped I/O enabled\n");
 	  if (crs[MODALS] & 4) {
-	    printf("Segmentation enabled\n");
+	    if (T_PX) fprintf(stderr,"Segmentation enabled\n");
 	    if (domemdump) dumpsegs();
 	    //traceflags = ~TB_MAP;
 	  }
@@ -2692,6 +2804,11 @@ stfa:
 	  ea = MAKEVA(014,040747);
 	  put16(0,ea);
 #endif
+	  if (crs[KEYS] & 2) {
+	    printf("LPSW calling dispatcher, keys=%o, modals=%o\n", crs[KEYS], crs[MODALS]);
+	    dispatcher();
+	    printf("LPSW after dispatcher, keys=%o, modals=%o\n", crs[KEYS], crs[MODALS]);
+	  }
 	  continue;
 	}
 
@@ -2715,27 +2832,7 @@ stfa:
 
 	if (inst == 000315) {
 	  if (T_FLOW) fprintf(stderr," WAIT\n", inst);
-	  restrict();
-	  ea = apea(NULL);
-	  printf("%o/%o: WAIT on %o/%o, I am %o\n", RPH, RPL, ea>>16, ea&0xFFFF, crs[OWNERL]);
-	  utempl = get32(ea);     /* get count and BOL */
-	  scount = utempl>>16;    /* count (signed) */
-	  bol = utempl & 0xFFFF;  /* beginning of wait list */
-	  printf(" wait list count was %d, bol was %o\n", scount, bol);
-	  scount++;
-	  if (scount >= 1) {      /* I have to wait */
-	    if (scount == 1)  {   /* I'm the only waiter */
-	      utempl = (scount<<16) | crs[OWNERL];
-	      bol = 0;
-	    } else {
-	      /* XXX: this should do a priority scan... */
-	      utempl = (scount<<16) | crs[OWNERL]; 
-	    }
-	    unready(ea, bol);     /* take me off the ready list */
-	    put32(utempl, ea);    /* update semaphore count/bol */
-	    dispatcher();
-	  } else
-	    put16(*(unsigned short *)&scount, ea);    /* just update count and continue */
+	  wait();
 	  continue;
 	}
 
@@ -2753,7 +2850,7 @@ stfa:
 	  utempl = get32(ea);     /* get count and BOL */
 	  scount = utempl>>16;    /* count (signed) */
 	  bol = utempl & 0xFFFF;  /* beginning of wait list */
-	  printf("%o/%o: NFYB/E opcode %o, ea=%o/%o, count=%d, bol=%o, I am %o\n", RPH, RPL, inst, ea>>16, ea&0xFFFF, scount, bol, crs[OWNERL]);
+	  if (T_PX) fprintf(stderr,"%o/%o: NFYB/E opcode %o, ea=%o/%o, count=%d, bol=%o, I am %o\n", RPH, RPL, inst, ea>>16, ea&0xFFFF, scount, bol, crs[OWNERL]);
 	  if (scount > 0) {
 	    if (bol == 0) {
 	      printf("NFYB: bol is zero, count is %d for semaphore at %o/%o\n", scount, ea>>16, ea&0xFFFF);
@@ -2777,10 +2874,32 @@ stfa:
 	}
 	    
 	    
+	if (inst == 000024) {
+	  if (T_FLOW) fprintf(stderr," STPM\n", inst);
+	  for (i=0; i<8; i++)
+	    stpm[i] = 0;
+	  stpm[1] = cpuid;
+	  ea = *(unsigned int *)(crs+XB);
+	  put64(*(double *)(stpm+0), ea);
+	  put64(*(double *)(stpm+4), INCVA(ea,4));
+	  continue;
+	}
 
 	if (inst == 001702) {
 	  if (T_FLOW) fprintf(stderr," IDLE?\n", inst);
 	  restrict();
+	  dispatcher();
+	  continue;
+	}
+
+	if (inst == 000601) {
+	  if (T_FLOW) fprintf(stderr," IRTN\n", inst);
+	  restrict();
+	  //fatal("IRTN causes a loop in CPU.CACHE Case 4");
+	  if (regs.sym.pcba != 0) {
+	    RP = regs.sym.pswpb;
+	    crs[KEYS] = regs.sym.pswkeys;
+	  }
 	  dispatcher();
 	  continue;
 	}
@@ -4124,6 +4243,12 @@ lcgt:
 	  continue;
 	}
 
+	if (inst == 0101200) {    /* skip if machine check flop is set */
+	  if (T_FLOW) fprintf(stderr," SMCS\n");
+	  restrict();
+	  continue;
+	}
+
 	printf(" unrecognized skip instruction %o at %o/%o\n", inst, RPH, RPL);
 	fatal(NULL);
 
@@ -4207,10 +4332,10 @@ lcgt:
 
     if (opcode == 00100) {
       if (T_FLOW) fprintf(stderr," JMP\n");
-      if (prevpc+1 == RP)
+      if (prevpc+1 == RP)      /* 1-word JMP# instruction */
 	RPL = ea;
       else
-	RP = ea;
+	RP = ea;               /* 2-word JMP% instruction */
       continue;
     }
 
@@ -4218,7 +4343,7 @@ lcgt:
       crs[A] = get16(ea);
       if ((crs[KEYS] & 050000) == 040000) {  /* R-mode and DP */
 	if (T_FLOW) fprintf(stderr," DLD\n");
-	crs[B] = get16(ea+1);
+	crs[B] = get16(INCVA(ea,1));
       } else {
 	if (T_FLOW) fprintf(stderr," LDA\n");
       }
@@ -4229,7 +4354,7 @@ lcgt:
       put16(crs[A],ea);
       if ((crs[KEYS] & 050000) == 040000) {
 	if (T_FLOW) fprintf(stderr," DST\n");
-	put16(crs[B],ea+1);
+	put16(crs[B],INCVA(ea,1));
       } else {
 	if (T_FLOW) fprintf(stderr," STA\n");
       }
@@ -4241,7 +4366,7 @@ lcgt:
       m = get16(ea);
       if ((crs[KEYS] & 050000) == 040000) {
 	if (T_FLOW) fprintf(stderr," DAD\n");
-	crs[B] += get16(ea+1);
+	crs[B] += get16(INCVA(ea,1));
 	if (crs[B] & 0x8000) {
 	  crs[A]++;
 	  crs[B] &= 0x7fff;
@@ -4263,7 +4388,7 @@ lcgt:
       m = get16(ea);
       if ((crs[KEYS] & 050000) == 040000) {
 	if (T_FLOW) fprintf(stderr," DSB\n");
-	crs[B] -= get16(ea+1);
+	crs[B] -= get16(INCVA(ea,1));
 	if (crs[B] & 0x8000) {
 	  crs[A]--;
 	  crs[B] &= 0x7fff;
@@ -4362,7 +4487,6 @@ lcgt:
     }
 
     if (opcode == 01400) {
-      /* if V-mode, JSY, else (LDX in R-mode?) */
       if (T_FLOW) fprintf(stderr," JSY\n");
       crs[Y] = RPL;
       RPL = ea;
@@ -4371,7 +4495,6 @@ lcgt:
 
     if (opcode == 01402) {
       if (T_FLOW) fprintf(stderr," JSXB\n");
-      //printf("RP=%o/%o, ea=%o/%o\n", RPH, RPL, ea>>16, ea&0xFFFF);
       *(unsigned int *)(crs+XB) = RP;
       RP = ea;
       continue;
@@ -4599,18 +4722,14 @@ lcgt:
 
     if (opcode == 03502) {
       if (T_FLOW) fprintf(stderr," STY\n");
-      //if (T_FLOW) printf("STY, RPL=%o, inst=%o, next word=%o, Y=%o, ea=%o, [ea]=%o\n", RPL-1, inst, get16(RP), crs[Y], ea, get16(ea));
       put16(crs[Y],ea);
-      //if (T_FLOW) printf("executed STY, [ea]=%o\n", get16(ea));
       continue;
     }
 
     if (opcode == 01503) {
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	if (T_FLOW) fprintf(stderr," QFLX\n");
-	//	printf("QFLX, RPL=%o, inst=%o, next word=%o, X=%o, ea=%o, [ea]=%o\n", RPL-1, inst, get16(RP), crs[X], ea, get16(ea));
 	crs[X] = get16(ea) * 8;
-	//	printf("executed QFLX, X=%o\n", crs[X]);
       } else {
 	if (T_FLOW) fprintf(stderr," JIX\n");
 	crs[X]++;
@@ -4622,19 +4741,17 @@ lcgt:
 
     if (opcode == 01501) {
       if (T_FLOW) fprintf(stderr," FLX\n");
-      //      printf("FLX, RPL=%o, inst=%o, next word=%o, X=%o, ea=%o, [ea]=%o\n", RPL-1, inst, get16(RP), crs[X], ea, get16(ea));
       crs[X] = get16(ea) * 2;
-      //      printf("executed FLX, X=%o\n", crs[X]);
       continue;
     }
 
     if (opcode == 03501) {
       if (T_FLOW) fprintf(stderr," LDY\n");
-      //      printf("LDY, RPL=%o, inst=%o, next word=%o, Y=%o, ea=%o, [ea]=%o\n", RPL-1, inst, get16(RP), crs[Y], ea, get16(ea));
       crs[Y] = get16(ea);
-      //      printf("executed LDY, Y=%o\n", crs[Y]);
       continue;
     }
+
+    /* XXX: can JSX%, JSY%, and JST% cross segments like JMP% ? */
 
     if (opcode == 03503) {
       if (T_FLOW) fprintf(stderr," JSX\n");
@@ -4789,10 +4906,10 @@ lcgt:
       if (T_FLOW) fprintf(stderr, " DFCS\n");
       m = get16(ea);
       if ((crs[FLTH] & 0x8000) == (m & 0x8000)) {
-	m1 = get16(ea+3);
+	m1 = get16(INCVA(ea,3));
 	if (m1 == crs[FEXP]) {
 	  if (m == crs[FLTH]) {
-	    utempl = get32(ea+1);
+	    utempl = get32(INCVA(ea,1));
 	    if ((unsigned int)((crs[FLTL]<<16) | crs[FLTD]) == utempl) {
 	      RPL += 1;
 	      crs[KEYS] |= 0100;
@@ -4915,12 +5032,6 @@ lcgt:
       tempda[2] = crs[FLTD];
       tempda[3] = crs[FEXP];
       put64(*(double *)tempda, ea);
-#if 0
-      put16(crs[FLTH], ea);
-      put16(crs[FLTL], ea+1);
-      put16(crs[FLTD], ea+2);
-      put16(crs[FEXP], ea+3);
-#endif
       continue;
     }
 
@@ -4979,11 +5090,11 @@ lcgt:
 
     if (opcode == 00102) {
       if (T_FLOW) fprintf(stderr," XEC\n");
-      utempl = RP-2;
       utempa = get16(ea);
+      //utempl = RP-2;
       //printf("RPL %o/%o: XEC instruction %o|%o, ea is %o/%o, new inst = %o \n", utempl>>16, utempl&0xFFFF, inst, get16(utempl+1), ea>>16, ea&0xFFFF, utempa);
       inst = utempa;
-      earp = ea + 1;       /* sb 16-bit increment */
+      earp = INCVA(ea,1);
       goto xec;
     }
 
@@ -5266,6 +5377,14 @@ svc() {
   for (class=0; class<=MAXCLASS; class++)
     for (func=0; func<=MAXFUNC; func++)
       printf("Class %o, func %o: %s %d args %o\n", class,func, svcinfo[class][func].name, svcinfo[class][func].numargs, svcinfo[class][func].locargs);
+#endif
+
+  /* later, change this to look for special fault vector of -1 and
+     interpret the svc here, to allow emulator to run r-mode programs
+     directly */
+
+#if 1
+  fault(SVCFAULT, 0, 0);
 #endif
 
   /* get svc code word, break into class and function */

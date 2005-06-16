@@ -75,6 +75,8 @@
   union {
     int rs[REGSETS][32];
 
+    unsigned short rs16[REGSETS][64];
+
     /* locs '0-'177 as signed 32-bit integers */
     int s32[32*REGSETS];
 

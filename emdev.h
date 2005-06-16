@@ -20,10 +20,10 @@
    '14 = 1st magtape controller
    '20 = control panel / real-time clock
    '21 = 1st 4002 disk controller
-   '22 = obsolete: fixed head disk
-   '23 = obsolete: 30MB disk
-   '24 = tag monitor (tmain.pma) / writable control store
-   '25 = obsolete: moving head disk
+   '22 = disk
+   '23 = disk
+   '24 = disk
+   '25 = disk
    '26 = 1st disk controller
    '27 = 2nd disk controller
    '30-32 = BPIOC #1-3 (RTOS User Guide, A-1)
@@ -36,7 +36,8 @@
    '42 = digital input #2
    '43 = digital output type 6040
    '44 = digital output #2
-   '45 = D/A converter type 6060 (analog output)
+   '45 = disk (was D/A converter type 6060 (analog output) - obsolete)
+   '46 = disk
    '50 = 1st HSSMLC (cs/slcdim.pma)
    '51 = 2nd HSSMLC
    '52 = 3rd AMLC
@@ -251,7 +252,7 @@ readasr:
 	printf("Unexpected error reading from tty, n=%d", n);
 	fatal(NULL);
       }
-    } else if (func == 04 || func == 05) {  /* read control register 1/2 */
+    } else if (04 <= func && func <= 07) {  /* read control register 1/2 */
       crs[A] = 0;
       IOSKIP;
     } else if (func == 011) {    /* read device id? */
@@ -420,6 +421,14 @@ void devcp (short class, short func, short device) {
   OCP '1726 = reset controller
 
   INA '1126 = input ID, don't clear A first, fails if no controller
+  - bits 1,2,9-16 are significant
+  - 4004 controller responds '26
+  - 4005 controller responds '126
+  - 2382 controller responds '040100
+  - LCDTC controller responds '226
+  - 10019 controller responds '040100
+  - 6590 controller responds '040100
+
   INA '1726 = read status (or something), fails if controller busy
 
   OTA '1726 = load OAR (Order Address Register), ie, run channel
@@ -431,8 +440,8 @@ void devdisk (short class, short func, short device) {
   unsigned short oar;
   unsigned short status;       /* actual status */
   unsigned short teststatus;   /* status for order testing */
-  unsigned short memaddr;
   unsigned short order;
+  unsigned short m,m1,m2;
   short halt;
   short unit;
   short head, track, rec, recsize, nwords;
@@ -481,9 +490,10 @@ void devdisk (short class, short func, short device) {
       status = 0100000;
       unit = -1;
       while (!halt) {
-	order = mem[oar]>>12;
-	if (T_INST || T_DIO) fprintf(stderr,"\n %o: %o %o %o\n", oar, mem[oar], mem[oar+1], mem[oar+2]);
-	if (mem[oar] & 04000) {   /* "execute if ..." */
+	m = get16(oar);
+	order = m>>12;
+	if (T_INST || T_DIO) fprintf(stderr,"\n %o: %o %o %o\n", oar, m, get16(oar+1), get16(oar+2));
+	if (m & 04000) {   /* "execute if ..." */
 	  if (order == 2 || order == 5 || order == 6)
 	    oar += 3;
 	  else
@@ -498,10 +508,12 @@ void devdisk (short class, short func, short device) {
 	case 2: /* SFORM = Format */
 	case 5: /* SREAD = Read */
 	case 6: /* SWRITE = Write */
-	  recsize = mem[oar] & 017;
-	  track = mem[oar+1] & 01777;
-	  rec = mem[oar+2] >> 8;   /* # records for format, rec # for R/W */
-	  head = mem[oar+2] & 077;
+	  m1 = get16(oar+1);
+	  m2 = get16(oar+2);
+	  recsize = m & 017;
+	  track = m1 & 01777;
+	  rec = m2 >> 8;   /* # records for format, rec # for R/W */
+	  head = m2 & 077;
 	  if (order == 2)
 	    strcpy(ordertext,"Format");
 	  else if (order == 5)
@@ -538,6 +550,11 @@ void devdisk (short class, short func, short device) {
 	      dmanw = -(dmanw>>4);
 	      dmaaddr = regs.sym.regdmx[dmareg+1];
 	      if (T_INST || T_DIO) fprintf(stderr, " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dmanch, dmachan, regs.sym.regdmx[dmareg], dmachan+1, dmaaddr, dmanw);
+
+     /* ACK!! Need to use put16 to store the data! */
+
+	      if (crs[MODALS] & 020)
+		fatal("emdev: I/O must be mapped!");
 	      if (read(devfd, mem+dmaaddr, dmanw*2) != dmanw*2) {
 		perror("Unable to read drive file");
 		fatal(NULL);
@@ -550,6 +567,7 @@ void devdisk (short class, short func, short device) {
 		  perror("Read trace file open");
 		  fatal(NULL);
 		}
+/* NEEDS HELP! */
 		if (write(rtfd, mem+dmaaddr, dmanw*2) != dmanw*2) {
 		  perror("Unable to write read trace file");
 		  fatal(NULL);
@@ -571,12 +589,14 @@ void devdisk (short class, short func, short device) {
 	  oar += 3;
 	  break;
 	case 3: /* SSEEK = Seek */
-	  track = mem[oar+1] & 01777;
-	  if (T_INST || T_DIO) fprintf(stderr," seek track %d, restore=%d, clear=%d\n", track, (mem[oar+1] & 0100000) != 0, (mem[oar+1] & 040000) != 0);
+	  m1 = get16(oar+1);
+	  track = m1 & 01777;
+	  if (T_INST || T_DIO) fprintf(stderr," seek track %d, restore=%d, clear=%d\n", track, (m1 & 0100000) != 0, (m1 & 040000) != 0);
 	  oar += 2;
 	  break;
 	case 4: /* DSEL = Select unit */
-	  unit = (mem[oar+1] & 017) >> 1;  /* unit = 0/1/2/4 */
+	  m1 = get16(oar+1);
+	  unit = (m1 & 017) >> 1;  /* unit = 0/1/2/4 */
 	  if (unit == 4) unit = 3;         /* unit = 0/1/2/3 */
 	  snprintf(devfile,sizeof(devfile),"dev%ou%d", device, unit);
 	  if (T_INST || T_DIO) fprintf(stderr," select unit %d, filename %s\n", unit, devfile);
@@ -597,32 +617,34 @@ void devdisk (short class, short func, short device) {
 	  oar += 2;
 	  break;
 	case 9: /* DSTAT = Store status to memory */
-	  memaddr = mem[oar+1];
-	  if (T_INST || T_DIO) fprintf(stderr, " store status='%o to '%o\n", status, memaddr);
-	  mem[memaddr] = status;
+	  m1 = get16(oar+1);
+	  if (T_INST || T_DIO) fprintf(stderr, " store status='%o to '%o\n", status, m1);
+	  put16(status,m1);
 	  oar += 2;
 	  break;
 	case 11: /* DOAR = Store OAR to memory (2 words) */
-	  memaddr = mem[oar+1];
-	  if (T_INST || T_DIO) fprintf(stderr, " store OAR='%o to '%o\n", oar, memaddr);
-	  mem[memaddr] = oar;
+	  m1 = get16(oar+1);
+	  if (T_INST || T_DIO) fprintf(stderr, " store OAR='%o to '%o\n", oar, m1);
+	  put16(oar,m1);
 	  oar += 2;
 	  break;
 	case 13: /* SDMA = select DMA channel(s) to use */
-	  dmanch = mem[oar] & 017;
-	  dmachan = mem[oar+1];
+	  m1 = get16(oar+1);
+	  dmanch = m & 017;
+	  dmachan = m1;
 	  if (T_INST || T_DIO) fprintf(stderr, " set DMA channels, nch-1=%d, channel='%o\n", dmanch, dmachan);
 	  oar += 2;
 	  break;
 	case 14: /* DINT = generate interrupt through vector address */
-	  memaddr = mem[oar+1];
-	  if (T_INST || T_DIO) fprintf(stderr, " interrupt through '%o\n", memaddr);
+	  m1 = get16(oar+1);
+	  if (T_INST || T_DIO) fprintf(stderr, " interrupt through '%o\n", m1);
 	  printf("DINT not supported (emdev.h)\n");
 	  fatal(NULL);
 	  oar += 2;
 	  break;
 	case 15: /* DTRAN = channel program jump */
-	  oar = mem[oar+1];
+	  m1 = get16(oar+1);
+	  oar = m1;
 	  if (T_INST || T_DIO) fprintf(stderr, " jump to '%o\n", oar);
 	  break;
 	default:
