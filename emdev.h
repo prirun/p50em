@@ -470,9 +470,9 @@ void devdisk (short class, short func, short device) {
   case 2:
     if (T_INST || T_DIO) fprintf(stderr," INA '%2o%2o\n", func, device);
     if (func == 01)          /* read device id, clear A first */
-      crs[A] = device;
+      crs[A] = 0100 + device;
     else if (func == 011)    /* read device id, don't clear A */
-      crs[A] |= device;
+      crs[A] |= (0100 + device);
     else if (func == 017)    /* read status */
       crs[A] = 0100000;
     else {
@@ -637,10 +637,15 @@ void devdisk (short class, short func, short device) {
 	  break;
 	case 14: /* DINT = generate interrupt through vector address */
 	  m1 = get16(oar+1);
+	  m2 = get16(oar+2);
+	  if ((m2 >> 12) != 0)
+	    fatal("DINT not followed by DHALT");
 	  if (T_INST || T_DIO) fprintf(stderr, " interrupt through '%o\n", m1);
-	  printf("DINT not supported (emdev.h)\n");
-	  fatal(NULL);
+	  if (intvec != 0)
+	    fatal("DINT while intvec non-zero");
+	  intvec = m1;
 	  oar += 2;
+	  traceflags = ~TB_MAP;
 	  break;
 	case 15: /* DTRAN = channel program jump */
 	  m1 = get16(oar+1);
