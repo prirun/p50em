@@ -179,15 +179,19 @@ void devnull (short class, short func, short device) {
 
 void devasr (short class, short func, short device) {
 
-  static int ttydev=-1;
+  static int ttydev;
   static int ttyflags;
+  static int needflush;     /* true if data has been written but not flushed */
   fd_set readfds;
   struct timeval timeout;
   unsigned char ch;
   int newflags;
   int n;
 
-  if (ttydev < 0) {
+
+  switch (class) {
+
+  case -1:
     ttydev = open("/dev/tty", O_RDWR, 0);
     if (ttydev < 0) {
       perror(" error opening /dev/tty");
@@ -199,9 +203,7 @@ void devasr (short class, short func, short device) {
     }
     FD_ZERO(&readfds);
     FD_SET(ttydev, &readfds);
-  }
-
-  switch (class) {
+    break;
 
   case 0:
     if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
@@ -209,6 +211,11 @@ void devasr (short class, short func, short device) {
 
   case 1:
     if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
+    if (needflush) {
+      fflush(stdout);
+      needflush = 0;
+      devpoll[device] = 0;
+    }
     if (func == 7) {         /* skip if received a char */
       timeout.tv_sec = 0;
       timeout.tv_usec = 100000;
@@ -220,6 +227,11 @@ void devasr (short class, short func, short device) {
 
   case 2:
     if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
+    if (needflush) {
+      fflush(stdout);
+      needflush = 0;
+      devpoll[device] = 0;
+    }
     if (func == 0 || func == 010) {
       if (BLOCKIO)
 	newflags = ttyflags & ~O_NONBLOCK;
@@ -239,12 +251,15 @@ readasr:
 	}
       } else if (n == 1) {
 	if (ch == '') {
-	  traceflags = ~TB_MAP;
 	  traceflags = -1;
+	  traceflags = ~TB_MAP;
+	  fprintf(stderr,"\nTRACE ENABLED:\n\n");
+	  memdump(0, 0xFFFF);
 	  goto readasr;
 	}
 	if (func >= 010)
 	  crs[A] = 0;
+	/* NOTE: probably don't need 0x80 here... */
 	crs[A] = crs[A] | ch | 0x80;
 	if (T_INST) fprintf(stderr," character read=%o: %c\n", crs[A], crs[A]);
 	IOSKIP;
@@ -261,6 +276,9 @@ readasr:
     } else if (func == 012) {    /* read control word */
       crs[A] = 04110;
       IOSKIP;
+    } else if (func == 017) {    /* read xmit interrupt vector */
+      crs[A] = 0;
+      IOSKIP;
     } else {
       printf("Unimplemented INA '04 function '%02o\n", func);
       fatal(NULL);
@@ -274,16 +292,26 @@ readasr:
       if (T_INST) fprintf(stderr," char to write=%o: %c\n", crs[A], ch);
       if (ch > 0) {
 	putchar(crs[A] & 0x7f);
-	fflush(stdout);
+	needflush = 1;
+	devpoll[device] = instpermsec*100;
       }
       IOSKIP;                     /* OTA '0004 always works on Unix */
     } else if (func == 1) {       /* write control word */
+      IOSKIP;
+    } else if (04 <= func && func <= 07) {  /* write control register 1/2 */
       IOSKIP;
     } else {
       printf("Unimplemented OTA '04 function '%02o\n", func);
       fatal(NULL);
     }
     break;
+
+  case 4:
+    if (needflush) {
+      fflush(stdout);
+      needflush = 0;
+      devpoll[device] = 0;
+    }
   }
 }
 
@@ -358,14 +386,45 @@ void devmt (short class, short func, short device) {
 */
 
 void devcp (short class, short func, short device) {
+  static short enabled = 0;
+  static unsigned short clkvec;
+  static short clkpic;
+
+#if 1
+  /* NOTE: setting this to 64,000 causes pointer faults when doing console
+     I/O during coldstart:
+OCP '1520
+C Pointer fault, ea_s=6, ea_w=42266, [ea]=100015
+ Pointer fault, ea_s=6, ea_w=42266, [ea]=100015
+
+     Setting it to 300,000 causes:
+CUnimplemented INA device '26 function '06
+Fatal error: instruction #75661720 at 6/54305: 71404 101100
+keys = 14000, modals=137
+
+     Setting it to 600,000 works, but console output is very slow
+
+ */
+  #define SETCLKPOLL devpoll[device] = 600000;
+#else
+  #define SETCLKPOLL devpoll[device] = instpermsec*3.3*-clkpic;
+#endif
 
   switch (class) {
 
   case 0:
     if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
     printf("OCP '%02o%02o\n", func, device);
-    //printf("Unimplemented OCP device '%02o function '%02o\n", device, func);
-    //fatal(NULL);
+    if (func == 015) {
+      enabled = 1;
+      SETCLKPOLL;
+    } else if (func == 016) {
+      enabled = 0;
+      devpoll[device] = 0;
+    } else {
+      printf("Unimplemented OCP device '%02o function '%02o\n", device, func);
+      fatal(NULL);
+    }
     break;
 
   case 1:
@@ -391,17 +450,30 @@ void devcp (short class, short func, short device) {
   case 3:
     if (T_INST) fprintf(stderr," OTA '%02o%02o\n", func, device);
     if (func == 02) {            /* set PIC interval */
-      printf("Clock PIC interval set to %d\n", *(short *)(crs+A));
+      clkpic = *(short *)(crs+A);
+      SETCLKPOLL;
+      printf("Clock PIC interval set to %d\n", clkpic);
     } else if (func == 07) {
       printf("Clock control register set to '%o\n", crs[A]);
     } else if (func == 013) {
-      printf("Clock interrupt vector address = '%o\n", crs[A]);
+      clkvec = crs[A];
+      printf("Clock interrupt vector address = '%o\n", clkvec);
     } else if (func == 017) {           /* write lights */
-      IOSKIP;
+      //IOSKIP;
     } else {
       printf("Unimplemented OTA device '%02o function '%02o\n", device, func);
       fatal(NULL);
     }
+    break;
+
+  case 4:
+#if 1
+    if (enabled) {
+      if (intvec == -1)
+	intvec = clkvec;
+      SETCLKPOLL;
+    }
+#endif
     break;
   }
 }
@@ -421,15 +493,15 @@ void devcp (short class, short func, short device) {
   OCP '1726 = reset controller
 
   INA '1126 = input ID, don't clear A first, fails if no controller
-  - bits 1,2,9-16 are significant
-  - 4004 controller responds '26
-  - 4005 controller responds '126
-  - 2382 controller responds '040100
-  - LCDTC controller responds '226
-  - 10019 controller responds '040100
-  - 6590 controller responds '040100
+  - bits 1,2,8-16 are significant, bits 8-9 are type, 10-16 are ID
+  - 4004 controller responds '26 (type=0)
+  - 4005 controller responds '126 (type=1)
+  - 2382 controller responds '040100 (type=1)
+  - LCDTC controller responds '226 (type=2)
+  - 10019 controller responds '040100 (type=1)
+  - 6590 controller responds '040100 (type=1)
 
-  INA '1726 = read status (or something), fails if controller busy
+  INA '1726 = read oar, fails if controller is not halted
 
   OTA '1726 = load OAR (Order Address Register), ie, run channel
   program, address is in A
@@ -437,28 +509,61 @@ void devcp (short class, short func, short device) {
  */
 
 void devdisk (short class, short func, short device) {
-  unsigned short oar;
-  unsigned short status;       /* actual status */
-  unsigned short teststatus;   /* status for order testing */
+
+#define S_HALT 0
+#define S_RUN 1
+#define S_STALL 2
+
+  static struct {
+    unsigned short oar;
+    unsigned short state;                  /* channel program state: S_XXXX */
+    unsigned short status;                 /* controller status */
+    short unit;                            /* unit selected */
+    short dmachan;                         /* dma channel selected */
+    short dmanch;                          /* number of dma channels-1 */
+    /* these should be per-unit! */
+    char devopened[8];                     /* device file that is open on devfd */
+    int rtfd;                              /* read trace file descriptor */
+    unsigned short theads;                 /* total heads (cfg file) */
+    unsigned short spt;                    /* sectors per track */
+    int devfd;                             /* Unix device file descriptor */
+    int readnum;                           /* increments on each read */
+  } dc[64];
+
+  short i;
+
+  /* temps for running channel programs */
+
   unsigned short order;
   unsigned short m,m1,m2;
-  short halt;
-  short unit;
   short head, track, rec, recsize, nwords;
-  unsigned short dmachan, dmaaddr, dmareg;
-  short dmanw, dmanch;
+  unsigned short dmareg, dmaaddr;
+  short iobuf[4096];                       /* local I/O buf, before mapped I/O */
+  short *iobufp;
+  short dmanw, dmanw1, dmanw2;
+  unsigned int utempl;
   char ordertext[8];
-  char devfile[8];
-  char devopened[8];        /* device file that is open on devfd */
-  static int devfd=-1;      /* device file descriptor */
   int theads, spt, phyra;
-  static int readnum=0;     /* increments on each read */
-  int rtfd;                 /* read trace file descriptor */
+  char devfile[8];
   char rtfile[16];          /* read trace file name */
   int rtnw;                 /* total number of words read (all channels) */
 
   switch (class) {
 
+  case -1:
+    for (i=0; i<64; i++) {
+      dc[i].oar = 0;
+      dc[i].state = S_HALT;
+      dc[i].status = 0100000;
+      dc[i].unit = -1;
+      strcpy(dc[i].devopened,"       ");
+      dc[i].rtfd = -1;
+      dc[i].theads = 40;
+      dc[i].spt = 9;
+      dc[i].devfd = -1;
+    }
+    break;
+      
   case 0:
     if (T_INST || T_DIO) fprintf(stderr," OCP '%2o%2o\n", func, device);
     break;
@@ -467,15 +572,22 @@ void devdisk (short class, short func, short device) {
     if (T_INST || T_DIO) fprintf(stderr," SKS '%2o%2o\n", func, device);
     break;
 
+#define CID4005 0100
+
   case 2:
+    /* this turns tracing on when the Primos disk processes initialize */
+    //traceflags = ~TB_MAP;
+
     if (T_INST || T_DIO) fprintf(stderr," INA '%2o%2o\n", func, device);
     if (func == 01)          /* read device id, clear A first */
-      crs[A] = 0100 + device;
+      crs[A] = CID4005 + device;
     else if (func == 011)    /* read device id, don't clear A */
-      crs[A] |= (0100 + device);
-    else if (func == 017)    /* read status */
-      crs[A] = 0100000;
-    else {
+      crs[A] |= (CID4005 + device);
+    else if (func == 017) {  /* read OAR */
+      if (dc[device].state != S_HALT)
+	return;
+      crs[A] = dc[device].oar;
+    } else {
       printf("Unimplemented INA device '%02o function '%02o\n", device, func);
       fatal(NULL);
     }
@@ -485,183 +597,207 @@ void devdisk (short class, short func, short device) {
   case 3:
     if (T_INST || T_DIO) fprintf(stderr," OTA '%02o%02o\n", func, device);
     if (func == 017) {        /* set OAR (order address register) */
-      oar = crs[A];
-      halt = 0;
-      status = 0100000;
-      unit = -1;
-      while (!halt) {
-	m = get16(oar);
-	order = m>>12;
-	if (T_INST || T_DIO) fprintf(stderr,"\n %o: %o %o %o\n", oar, m, get16(oar+1), get16(oar+2));
-	if (m & 04000) {   /* "execute if ..." */
-	  if (order == 2 || order == 5 || order == 6)
-	    oar += 3;
-	  else
-	    oar += 2;
-	  continue;
-	}
-	switch (order) {
-	case 0: /* DHLT = Halt */
-	  halt = 1;
-	  if (T_INST || T_DIO) fprintf(stderr," channel program halt at '%o\n", oar);
-	  break;
-	case 2: /* SFORM = Format */
-	case 5: /* SREAD = Read */
-	case 6: /* SWRITE = Write */
-	  m1 = get16(oar+1);
-	  m2 = get16(oar+2);
-	  recsize = m & 017;
-	  track = m1 & 01777;
-	  rec = m2 >> 8;   /* # records for format, rec # for R/W */
-	  head = m2 & 077;
-	  if (order == 2)
-	    strcpy(ordertext,"Format");
-	  else if (order == 5)
-	    strcpy(ordertext,"Read");
-	  else if (order == 6)
-	    strcpy(ordertext,"Write");
-	  if (T_INST || T_DIO) fprintf(stderr," %s, head=%d, track=%d, rec=%d, recsize=%d\n", ordertext, head, track, rec, recsize);
-	  if (devfd == -1) {
-	    if (T_INST || T_DIO) fprintf(stderr," Unit not selected or not ready\n");
-	    status = 0100001;
-	  } else if (order == 2) {
-	    if (T_INST || T_DIO) fprintf(stderr," Format order\n");
-	    fatal("DFORMAT channel order not implemented");
-	  } else if (order == 5) {
-
-	    /* translate head/track/sector to drive record address */
-
-	    theads = 40;      /* should get total heads from a config file */
-	    spt = 9;          /* and sectors per track too */
-	    phyra = (track*theads*spt) + head*9 + rec;
-#if 0
-	    if (phyra == 106987) traceflags = -1;
-#endif
-	    if (T_INST || T_DIO) fprintf(stderr, " phyra=%d, byte offset=%d\n", phyra, phyra*2080);
-	    if (lseek(devfd, phyra*2080, SEEK_SET) == -1) {
-	      perror("Unable to seek drive file");
-	      fatal(NULL);
-	    }
-	    readnum++;
-	    rtnw = 0;
-	    while (dmanch >= 0) {
-	      dmareg = ((dmachan & 036) << 1) | (dmachan & 1);
-	      dmanw = regs.sym.regdmx[dmareg];
-	      dmanw = -(dmanw>>4);
-	      dmaaddr = regs.sym.regdmx[dmareg+1];
-	      if (T_INST || T_DIO) fprintf(stderr, " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dmanch, dmachan, regs.sym.regdmx[dmareg], dmachan+1, dmaaddr, dmanw);
-
-     /* ACK!! Need to use put16 to store the data! */
-
-	      if (crs[MODALS] & 020)
-		fatal("emdev: I/O must be mapped!");
-	      if (read(devfd, mem+dmaaddr, dmanw*2) != dmanw*2) {
-		perror("Unable to read drive file");
-		fatal(NULL);
-	      }
-	      if (T_DIO) {
-		fprintf(stderr, "\nRT: Read #%d.%d, RA=%d, numwords=%d, memaddr=%o, Unix pos=%d\n", readnum, dmanch, phyra, dmanw, dmaaddr, phyra*2080+rtnw*2);
-		snprintf(rtfile,sizeof(rtfile),"rt/rt%d.%d", readnum, dmanch);
-		if ((rtfd = open(rtfile, O_WRONLY+O_CREAT, 0777)) == -1) {
-		  printf("Read trace filename: %s\n", rtfile);
-		  perror("Read trace file open");
-		  fatal(NULL);
-		}
-/* NEEDS HELP! */
-		if (write(rtfd, mem+dmaaddr, dmanw*2) != dmanw*2) {
-		  perror("Unable to write read trace file");
-		  fatal(NULL);
-		}
-		close(rtfd);
-		rtnw += dmanw;
-		if (dmanw == 16)
-		  fprintf(stderr, "RT: cra=%d, bra=%d, cnt=%d, type=%d, next=%d, prev=%d\n", *(int *)(mem+dmaaddr), *(int *)(mem+dmaaddr+2), mem[dmaaddr+4], mem[dmaaddr+5], *(int *)(mem+dmaaddr+6), *(int *)(mem+dmaaddr+8));
-	      }
-	      regs.sym.regdmx[dmareg] = 0;
-	      regs.sym.regdmx[dmareg+1] += dmanw;
-	      dmachan += 2;
-	      dmanch--;
-	    }
-
-	  } else if (order == 6) {
-	    fatal("DWRITE channel order not implemented");
-	  }
-	  oar += 3;
-	  break;
-	case 3: /* SSEEK = Seek */
-	  m1 = get16(oar+1);
-	  track = m1 & 01777;
-	  if (T_INST || T_DIO) fprintf(stderr," seek track %d, restore=%d, clear=%d\n", track, (m1 & 0100000) != 0, (m1 & 040000) != 0);
-	  oar += 2;
-	  break;
-	case 4: /* DSEL = Select unit */
-	  m1 = get16(oar+1);
-	  unit = (m1 & 017) >> 1;  /* unit = 0/1/2/4 */
-	  if (unit == 4) unit = 3;         /* unit = 0/1/2/3 */
-	  snprintf(devfile,sizeof(devfile),"dev%ou%d", device, unit);
-	  if (T_INST || T_DIO) fprintf(stderr," select unit %d, filename %s\n", unit, devfile);
-	  if (strcmp(devfile,devopened) != 0 || devfd == -1) {
-	    if (devfd != -1) {
-	      close(devfd);
-	      devfd = -1;
-	    }
-	    if ((devfd = open(devfile, O_RDONLY, 0)) == -1)
-	      status = 0100001;    /* not ready */
-	    else
-	      strcpy(devopened, devfile);
-	  }
-	  oar += 2;
-	  break;
-	case 7: /* DSTALL = Stall */
-	  if (T_INST || T_DIO) fprintf(stderr," stall\n");
-	  oar += 2;
-	  break;
-	case 9: /* DSTAT = Store status to memory */
-	  m1 = get16(oar+1);
-	  if (T_INST || T_DIO) fprintf(stderr, " store status='%o to '%o\n", status, m1);
-	  put16(status,m1);
-	  oar += 2;
-	  break;
-	case 11: /* DOAR = Store OAR to memory (2 words) */
-	  m1 = get16(oar+1);
-	  if (T_INST || T_DIO) fprintf(stderr, " store OAR='%o to '%o\n", oar, m1);
-	  put16(oar,m1);
-	  oar += 2;
-	  break;
-	case 13: /* SDMA = select DMA channel(s) to use */
-	  m1 = get16(oar+1);
-	  dmanch = m & 017;
-	  dmachan = m1;
-	  if (T_INST || T_DIO) fprintf(stderr, " set DMA channels, nch-1=%d, channel='%o\n", dmanch, dmachan);
-	  oar += 2;
-	  break;
-	case 14: /* DINT = generate interrupt through vector address */
-	  m1 = get16(oar+1);
-	  m2 = get16(oar+2);
-	  if ((m2 >> 12) != 0)
-	    fatal("DINT not followed by DHALT");
-	  if (T_INST || T_DIO) fprintf(stderr, " interrupt through '%o\n", m1);
-	  if (intvec != 0)
-	    fatal("DINT while intvec non-zero");
-	  intvec = m1;
-	  oar += 2;
-	  traceflags = ~TB_MAP;
-	  break;
-	case 15: /* DTRAN = channel program jump */
-	  m1 = get16(oar+1);
-	  oar = m1;
-	  if (T_INST || T_DIO) fprintf(stderr, " jump to '%o\n", oar);
-	  break;
-	default:
-	  printf("Unrecognized channel order = %d\n", order);
-	  fatal(NULL);
-	}
-      }	  
-      IOSKIP;
+      dc[device].state = S_RUN;
+      dc[device].oar = crs[A];
+      devpoll[device] = 1;
     } else {
       printf("Unimplemented OTA device '%02o function '%02o\n", device, func);
       fatal(NULL);
     }
+    IOSKIP;
     break;
+
+  case 4:   /* poll (run channel program) */
+
+    while (dc[device].state != S_HALT) {
+      m = get16(dc[device].oar);
+      m1 = get16(dc[device].oar+1);
+      order = m>>12;
+      if (T_INST || T_DIO) fprintf(stderr,"\nDIOC %o: %o %o %o\n", dc[device].oar, m, m1, get16(dc[device].oar+2));
+      dc[device].oar += 2;
+      if (m & 04000) {   /* "execute if ..." */
+	if (order == 2 || order == 5 || order == 6)
+	  dc[device].oar++;
+	continue;
+      }
+
+      switch (order) {
+
+      case 0: /* DHLT = Halt */
+	dc[device].state = S_HALT;
+	devpoll[device] = 0;
+	if (T_INST || T_DIO) fprintf(stderr," channel halted at '%o\n", dc[device].oar);
+	break;
+
+      case 2: /* SFORM = Format */
+      case 5: /* SREAD = Read */
+      case 6: /* SWRITE = Write */
+	m2 = get16(dc[device].oar++);
+	recsize = m & 017;
+	track = m1 & 01777;
+	rec = m2 >> 8;   /* # records for format, rec # for R/W */
+	head = m2 & 077;
+	if (order == 2)
+	  strcpy(ordertext,"Format");
+	else if (order == 5)
+	  strcpy(ordertext,"Read");
+	else if (order == 6)
+	  strcpy(ordertext,"Write");
+	if (T_INST || T_DIO) fprintf(stderr," %s, head=%d, track=%d, rec=%d, recsize=%d\n", ordertext, head, track, rec, recsize);
+	if (dc[device].devfd == -1) {
+	  if (T_INST || T_DIO) fprintf(stderr," Unit not selected or not ready\n");
+	  dc[device].status = 0100001;
+	} else if (order == 2) {
+	  if (T_INST || T_DIO) fprintf(stderr," Format order\n");
+	  fatal("DFORMAT channel order not implemented");
+	} else if (order == 5) {
+
+	  /* translate head/track/sector to drive record address */
+
+	  phyra = (track*dc[device].theads*dc[device].spt) + head*9 + rec;
+	  if (T_INST || T_DIO) fprintf(stderr, " Unix ra=%d, byte offset=%d\n", phyra, phyra*2080);
+	  if (lseek(dc[device].devfd, phyra*2080, SEEK_SET) == -1) {
+	    perror("Unable to seek drive file");
+	    fatal(NULL);
+	  }
+	  dc[device].readnum++;
+	  rtnw = 0;
+	  while (dc[device].dmanch >= 0) {
+	    dmareg = ((dc[device].dmachan & 036) << 1) | (dc[device].dmachan & 1);
+	    dmanw = regs.sym.regdmx[dmareg];
+	    dmanw = -(dmanw>>4);
+	    dmaaddr = regs.sym.regdmx[dmareg+1];
+	    if (T_INST || T_DIO) fprintf(stderr, " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dc[device].dmanch, dc[device].dmachan, regs.sym.regdmx[dmareg], dc[device].dmachan+1, dmaaddr, dmanw);
+	    
+	    /* later, use mapva to do page-based mapped I/O in pieces */
+
+	    if (crs[MODALS] & 020)
+	      iobufp = iobuf;
+	    else
+	      iobufp = mem+dmaaddr;
+	    if (read(dc[device].devfd, (char *)iobufp, dmanw*2) != dmanw*2) {
+	      perror("Unable to read drive file");
+	      fatal(NULL);
+	      }
+	    if (crs[MODALS] & 020)
+	      for (i=0; i<dmanw; i++)
+		put16(iobuf[i], dmaaddr+i);
+
+#if 0
+	    if (T_DIO) {
+	      fprintf(stderr, "\nRT: Read #%d.%d, RA=%d, numwords=%d, memaddr=%o, Unix pos=%d\n", readnum, dmanch, phyra, dmanw, dmaaddr, phyra*2080+rtnw*2);
+	      snprintf(rtfile,sizeof(rtfile),"rt/rt%d.%d", readnum, dmanch);
+	      if ((rtfd = open(rtfile, O_WRONLY+O_CREAT, 0777)) == -1) {
+		printf("Read trace filename: %s\n", rtfile);
+		perror("Read trace file open");
+		fatal(NULL);
+	      }
+/* NEEDS HELP! */
+	      if (write(rtfd, mem+dmaaddr, dmanw*2) != dmanw*2) {
+		perror("Unable to write read trace file");
+		fatal(NULL);
+	      }
+	      close(rtfd);
+	      rtnw += dmanw;
+	      if (dmanw == 16)
+		fprintf(stderr, "RT: cra=%d, bra=%d, cnt=%d, type=%d, next=%d, prev=%d\n", *(int *)(mem+dmaaddr), *(int *)(mem+dmaaddr+2), mem[dmaaddr+4], mem[dmaaddr+5], *(int *)(mem+dmaaddr+6), *(int *)(mem+dmaaddr+8));
+	    }
+#endif
+	    regs.sym.regdmx[dmareg] = 0;
+	    regs.sym.regdmx[dmareg+1] += dmanw;
+	    dc[device].dmachan += 2;
+	    dc[device].dmanch--;
+	  }
+
+	} else if (order == 6) {
+	  fatal("DWRITE channel order not implemented");
+	}
+	break;
+
+      case 3: /* SSEEK = Seek */
+	track = m1 & 01777;
+	if (T_INST || T_DIO) fprintf(stderr," seek track %d, restore=%d, clear=%d\n", track, (m1 & 0100000) != 0, (m1 & 040000) != 0);
+	break;
+
+      case 4: /* DSEL = Select unit */
+	dc[device].unit = (m1 & 017) >> 1;  /* unit = 0/1/2/4 */
+	if (dc[device].unit == 4) dc[device].unit = 3;         /* unit = 0/1/2/3 */
+	snprintf(devfile,sizeof(devfile),"dev%ou%d", device, dc[device].unit);
+	if (T_INST || T_DIO) fprintf(stderr," select unit %d, filename %s\n", dc[device].unit, devfile);
+	if (strcmp(devfile,dc[device].devopened) != 0 || dc[device].devfd == -1) {
+	  if (dc[device].devfd != -1) {
+	    close(dc[device].devfd);
+	    dc[device].devfd = -1;
+	  }
+	  if ((dc[device].devfd = open(devfile, O_RDONLY, 0)) == -1)
+	    dc[device].status = 0100001;    /* not ready */
+	  else
+	    strcpy(dc[device].devopened, devfile);
+	}
+	break;
+
+      case 7: /* DSTALL = Stall */
+	if (T_INST || T_DIO) fprintf(stderr," stall\n");
+#if 0
+	devpoll[device] = instpermsec*10;
+#else
+	devpoll[device] = 100;
+#endif
+	dc[device].state = S_STALL;
+	return;
+
+      case 9: /* DSTAT = Store status to memory */
+	if (T_INST || T_DIO) fprintf(stderr, " store status='%o to '%o\n", dc[device].status, m1);
+	put16(dc[device].status,m1);
+	break;
+
+      case 11: /* DOAR = Store OAR to memory (2 words) */
+	if (T_INST || T_DIO) fprintf(stderr, " store OAR='%o to '%o\n", dc[device].oar, m1);
+	put16(dc[device].oar,m1);
+	break;
+
+      case 13: /* SDMA = select DMA channel(s) to use */
+	dc[device].dmanch = m & 017;
+	dc[device].dmachan = m1;
+	if (T_INST || T_DIO) fprintf(stderr, " set DMA channels, nch-1=%d, channel='%o\n", dc[device].dmanch, dc[device].dmachan);
+#if 0
+	dmareg = ((m1 & 036) << 1) | (m1 & 1);
+	//for (i=0; i<4; i++)
+	//fprintf(stderr, " dmareg+%d = %o  ", i, regs.sym.regdmx[dmareg+i]);
+	//fprintf(stderr, "\n");
+
+	dmanw1 = regs.sym.regdmx[dmareg];
+	dmanw1 = -(dmanw1>>4);
+	dmanw2 = regs.sym.regdmx[dmareg+4];
+	dmanw2 = -(dmanw2>>4);
+	if (T_INST || T_DIO) fprintf(stderr, " dmareg=%d, nch=%d, dmanw1=%d, dmanw2=%d\n", dmareg, dc[device].dmanch, dmanw1, dmanw2);
+	if (dc[device].dmanch == 1 && dmanw1 == 1024 && dmanw2 == 16) {
+	  if (T_INST || T_DIO) fprintf(stderr, " swapped DMA channels!\n");
+	  utempl = *(int *)(regs.sym.regdmx+dmareg);
+	  *(int *)(regs.sym.regdmx+dmareg) = *(int *)(regs.sym.regdmx+dmareg+4);
+	  *(int *)(regs.sym.regdmx+dmareg+4) = utempl;
+	}
+#endif
+	break;
+
+      case 14: /* DINT = generate interrupt through vector address */
+	if (T_INST || T_DIO) fprintf(stderr, " interrupt through '%o\n", m1);
+	if (intvec >= 0)
+	  fatal("DINT while intvec active");
+	intvec = m1;
+	//traceflags = ~TB_MAP;
+	devpoll[device] = 100;
+	return;
+
+      case 15: /* DTRAN = channel program jump */
+	dc[device].oar = m1;
+	if (T_INST || T_DIO) fprintf(stderr, " jump to '%o\n", m1);
+	break;
+
+      default:
+	printf("Unrecognized channel order = %d\n", order);
+	fatal(NULL);
+      }
+    }
   }
 }
