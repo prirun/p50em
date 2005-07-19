@@ -2,6 +2,8 @@
    Emulations of Primos Operating System routines for Unix.
 */
 
+#include <stdlib.h>
+#include <string.h>
 #include <stdio.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -132,7 +134,7 @@ os_t1ou(short *charg) {
 
 
 os_timdat(short *userbuf, short *n) {
-  clock_t tod;
+  time_t tod;
   struct tm tms;
   struct {
     char mmddyy[6];

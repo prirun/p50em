@@ -70,8 +70,12 @@
 /* macro to detect if an I/O instruction is followed by JMP *-1 (SR modes)
    or BCNE *-2 (VI modes) */
 
+#if 1
 #define BLOCKIO \
   (get16(RP) == 03776 || (get16(RP) == 0141603 && get16(RP+1) == RPL-2))
+#else
+#define BLOCKIO 0
+#endif
 
 
 void devnull (short class, short func, short device) {
@@ -218,7 +222,11 @@ void devasr (short class, short func, short device) {
     }
     if (func == 7) {         /* skip if received a char */
       timeout.tv_sec = 0;
+#if 0
       timeout.tv_usec = 100000;
+#else
+      timeout.tv_usec = 1;
+#endif
       if (select(1, &readfds, NULL, NULL, &timeout) == 1)
 	IOSKIP;
     } else if (func <= 014)
@@ -403,7 +411,8 @@ Fatal error: instruction #75661720 at 6/54305: 71404 101100
 keys = 14000, modals=137
 
      Setting it to 600,000 works, but console output is very slow
-
+     Setting it to 200,000 causes undefined INA '0626
+     Setting it to 100,000 causes a hang after "Coldstarting PRIMOS..."
  */
   #define SETCLKPOLL devpoll[device] = 600000;
 #else
@@ -415,10 +424,12 @@ keys = 14000, modals=137
   case 0:
     if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
     printf("OCP '%02o%02o\n", func, device);
-    if (func == 015) {
+    if (func == 0 || func == 015) {
+      /* this enables tracing when the clock process initializes */
+      //traceflags = ~TB_MAP;
       enabled = 1;
       SETCLKPOLL;
-    } else if (func == 016) {
+    } else if (func == 016 || func == 017) {
       enabled = 0;
       devpoll[device] = 0;
     } else {
@@ -491,6 +502,8 @@ keys = 14000, modals=137
 
   OCP '1626 = reset interrupt
   OCP '1726 = reset controller
+
+  INA '0626 = ??
 
   INA '1126 = input ID, don't clear A first, fails if no controller
   - bits 1,2,8-16 are significant, bits 8-9 are type, 10-16 are ID
@@ -572,7 +585,11 @@ void devdisk (short class, short func, short device) {
     if (T_INST || T_DIO) fprintf(stderr," SKS '%2o%2o\n", func, device);
     break;
 
-#define CID4005 0100
+#if 1
+  #define CID4005 0100
+#else
+  #define CID4005 0
+#endif
 
   case 2:
     /* this turns tracing on when the Primos disk processes initialize */
@@ -581,6 +598,11 @@ void devdisk (short class, short func, short device) {
     if (T_INST || T_DIO) fprintf(stderr," INA '%2o%2o\n", func, device);
     if (func == 01)          /* read device id, clear A first */
       crs[A] = CID4005 + device;
+#if 0
+    /* this happens when the clock poll rate is set to 100000 (?) */
+    else if (func == 06)     /* don't know what this is... */
+      return;
+#endif
     else if (func == 011)    /* read device id, don't clear A */
       crs[A] |= (CID4005 + device);
     else if (func == 017) {  /* read OAR */
