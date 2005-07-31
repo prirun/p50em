@@ -391,6 +391,8 @@ void devmt (short class, short func, short device) {
    INA '1420 = read location from CP ROM (not implemented, used to boot)
    INA '1620 = read control panel up switches
    INA '1720 = read control panel down switches
+
+   IMPORTANT NOTE: this device ('20) never skips!
 */
 
 void devcp (short class, short func, short device) {
@@ -470,7 +472,6 @@ keys = 14000, modals=137
       clkvec = crs[A];
       printf("Clock interrupt vector address = '%o\n", clkvec);
     } else if (func == 017) {           /* write lights */
-      //IOSKIP;
     } else {
       printf("Unimplemented OTA device '%02o function '%02o\n", device, func);
       fatal(NULL);
