@@ -455,8 +455,8 @@ keys = 14000, modals=137
 
   case 2:
     if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
-    if (func == 011) {             /* input ID, don't clear A first */
-      crs[A] |= 0120;              /* this is the SOC board */
+    if (func == 011) {             /* input ID */
+      crs[A] != 0120;               /* this is the SOC board */
     } else if (func == 016) {
       crs[A] = sswitch;
     } else if (func == 017) {      /* read switches in momentary down position */

@@ -226,6 +226,27 @@ unsigned short mem[MEMSIZE];   /* system's physical memory */
 
 #define INCVA(ea,n) (((ea) & 0xFFFF0000) | ((ea)+(n)) & 0xFFFF)
 
+/* STLB cache is defined here.  There are several different styles on
+   various Prime models.  This is modeled after the 6350 STLB, but is
+   only 1-way associative */
+
+#define STLBENTS 512
+
+typedef struct {
+  char valid;                 /* 1 if this STLB entry is valid, zero otherwise */
+  char unmodified;            /* 1 if this page hasn't been modified, 0 if modified */
+  //  char shared;                /* 1 if page is shared and can't be cached */
+  char access[4];             /* ring n access rights */
+  unsigned short procid;      /* process id for segments >= '4000 */
+  unsigned short seg;         /* segment number */
+  unsigned short vpage;       /* virtual page address */
+  unsigned int ppn;           /* physical page number (128MB limit) */
+  unsigned short *pmep;       /* pointer to page table flag word */
+  unsigned long load_ic;      /* instruction where STLB was loaded */
+} stlbe_t;
+
+stlbe_t stlb[STLBENTS];
+
 unsigned long long bitmask64[65] = {0,
    1LL<<63, 1LL<<62, 1LL<<61, 1LL<<60, 1LL<<59, 1LL<<58, 1LL<<57, 1LL<<56,
    1LL<<55, 1LL<<54, 1LL<<53, 1LL<<52, 1LL<<51, 1LL<<50, 1LL<<49, 1LL<<48,
@@ -399,47 +420,77 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr);
    - page fault if page isn't resident
 */
 
+/* NOTE: this is the 6350 STLB hash function, giving a 9-bit index 0-511 */
+
+#define STLBIX(ea) ((((((ea) >> 12) ^ (ea)) & 0xc000) >> 7) | (((ea) & 0x70000) >> 12) | ((ea) & 0x3c00) >> 10)
+
 pa_t mapva(ea_t ea, short intacc, short *access) {
   short relseg,seg,nsegs,ring;
-  unsigned short pte;
+  unsigned short pte, stlbix;
+  stlbe_t *stlbp;
   unsigned int dtar,sdw,staddr,ptaddr,pmaddr;
   pa_t pa;
 
   seg = SEGNO(ea);
-  if ((seg > 0 && (crs[MODALS] & 4)) || (seg == 0 && (crs[MODALS] & 020))) {
-    dtar = *(unsigned int *)(crs+DTAR0-2*DTAR(ea));  /* get dtar register */
-    nsegs = 1024-(dtar>>22);
-    relseg = seg & 0x3FF;     /* segment within segment table */
-    if (T_MAP) fprintf(stderr,"   MAP: ea=%o/%o, seg=%o, dtar=%o, nsegs=%d, relseg=%d, page=%d\n", ea>>16, ea&0xFFFF, seg, dtar, nsegs, relseg, PAGENO(ea));
-    if (relseg >= nsegs)
-      fault(SEGFAULT, 1, ea);   /* fcode = segment too big */
-    staddr = (dtar & 0x003F0000) | ((dtar & 0x7FFF)<<1);
-    sdw = *(unsigned int *)(mem+staddr+relseg*2);
-    if (T_MAP) fprintf(stderr,"        staddr=%o, sdw=%o\n", staddr, sdw);
-    if (sdw & 0x8000)
-      fault(SEGFAULT, 2, ea);   /* fcode = sdw fault bit set */
+  ring = ((RP | ea) >> 29) & 3;  /* current ring | ea ring = access ring */
 
-    ring = ((RP | ea) >> 29) & 3;  /* current ring | ea ring = access ring */
-    if (ring == 0)
-      *access = 7;
-    else
-      *access = (sdw >> (3-ring)*3+6) & 7;
+  if ((seg > 0 && (crs[MODALS] & 4)) || (seg == 0 && (crs[MODALS] & 020))) {
+    stlbix = STLBIX(ea);
+    stlbp = stlb+stlbix;
+    if (stlbix >= STLBENTS) {
+      printf("STLB index %d is out of range for va %o/%o!\n", stlbix, ea>>16, ea&0xffff);
+      exit(1);
+    }
+
+    /* if the STLB entry isn't valid, or the segments don't match,
+       or the segment is private and the process id doesn't match,
+       then the STLB has to be loaded first */
+
+    if (/* 1 || instcount == 20445443 || */ !stlbp->valid || stlbp->seg != seg || (seg >= 04000 && stlbp->procid != crs[OWNERL])) {
+      dtar = *(unsigned int *)(crs+DTAR0-2*DTAR(ea));  /* get dtar register */
+      nsegs = 1024-(dtar>>22);
+      relseg = seg & 0x3FF;     /* segment within segment table */
+      if (T_MAP) fprintf(stderr,"   MAP: ea=%o/%o, seg=%o, dtar=%o, nsegs=%d, relseg=%d, page=%d\n", ea>>16, ea&0xFFFF, seg, dtar, nsegs, relseg, PAGENO(ea));
+      if (relseg >= nsegs)
+	fault(SEGFAULT, 1, ea);   /* fcode = segment too big */
+      staddr = (dtar & 0x003F0000) | ((dtar & 0x7FFF)<<1);
+      sdw = *(unsigned int *)(mem+staddr+relseg*2);
+      if (T_MAP) fprintf(stderr,"        staddr=%o, sdw=%o\n", staddr, sdw);
+      if (sdw & 0x8000)
+	fault(SEGFAULT, 2, ea);   /* fcode = sdw fault bit set */
+      ptaddr = (((sdw & 0x3F)<<10) | (sdw>>22)) << 6;
+      pmaddr = ptaddr + PAGENO(ea);
+      pte = mem[pmaddr];
+      if (T_MAP) fprintf(stderr,"        ptaddr=%o, pmaddr=%o, pte=%o\n", ptaddr, pmaddr, pte);
+      if (!(pte & 0x8000))
+	fault(PAGEFAULT, 0, ea);
+      mem[pmaddr] |= 040000;     /* set referenced bit */
+      stlbp->valid = 1;
+      stlbp->unmodified = 1;
+      stlbp->access[0] = 7;
+      stlbp->access[1] = (sdw >> 12) & 7;
+      stlbp->access[3] = (sdw >> 6) & 7;
+      stlbp->procid = crs[OWNERL];
+      stlbp->seg = seg;
+      stlbp->vpage = ea & 0xfc00;
+      stlbp->ppn = (pte & 0xFFF);
+      stlbp->pmep = mem+pmaddr;
+      stlbp->load_ic = instcount;
+    }
+    if (stlbp->vpage != (ea & 0xfc00))
+      fatal("STLB page number is wrong!");
+    *access = stlbp->access[ring];
     if (((intacc & *access) != intacc) || (intacc == PACC && ((*access & 3) == 0)))
       fault(ACCESSFAULT, 0, ea);
-    ptaddr = (((sdw & 0x3F)<<10) | (sdw>>22)) << 6;
-    pmaddr = ptaddr + PAGENO(ea);
-    pte = mem[pmaddr];
-    if (T_MAP) fprintf(stderr,"        ptaddr=%o, pmaddr=%o, pte=%o\n", ptaddr, pmaddr, pte);
-    if (!(pte & 0x8000))
-      fault(PAGEFAULT, 0, ea);
-    mem[pmaddr] |= 040000;       /* set referenced bit */
-    if (intacc == WACC)
-      mem[pmaddr] &= ~020000;    /* reset unmodified bit */
-    pa = ((pte & 0xFFF) << 10) | (ea & 0x3FF);
+    if (intacc == WACC && stlbp->unmodified) {
+      stlbp->unmodified = 0;
+      //*(stlbp->pmep) &= ~020000;    /* reset unmodified bit in memory */
+    }
+    pa = (stlbp->ppn << 10) | (ea & 0x3FF);
   } else {
     pa = ea & 0x3FFFFF;
   }
-  if (T_MAP) fprintf(stderr,"        pa=%o\n", pa);
+  if (T_MAP) fprintf(stderr,"        for ea %o/%o, stlbix=%d, pa=%o	loaded at #%d\n", ea>>16, ea&0xffff, stlbix, pa, stlbp->load_ic);
   if (pa <= MEMSIZE)
     return pa;
   printf(" map: Memory address %o (%o/%o) is out of range!\n", ea, ea>>16, ea & 0xffff);
@@ -2258,6 +2309,7 @@ main (int argc, char **argv) {
      - 16S mode, single precision
      - interrupts and machine checks inhibited
      - standard interrupt mode
+     - all stlb entries are invalid
   */
 
   for (i=0; i < 32*REGSETS; i++)
@@ -2268,6 +2320,8 @@ main (int argc, char **argv) {
   crs[MODALS] = 0100;
   newkeys(0);
   RPL = 01000;
+  for (i=0; i < STLBENTS; i++)
+    stlb[i].valid = 0;
 
   verbose = 0;
   domemdump = 0;
@@ -2410,9 +2464,13 @@ main (int argc, char **argv) {
 
   while (1) {
 
-#if 0
-    if (instcount > 18255000)
+    if (0 && instcount > 46800000)   /* rev 20 crash after STLB installed */
       traceflags = -1;
+    if (0 && instcount > 18255000)   /* this is rev 20 mem test requiring STLB */
+      traceflags = -1;
+#if 0
+    if (instcount > 20445443)
+      exit(1);
 #endif
 
 #if 0
@@ -2997,6 +3055,10 @@ stfa:
 	if (inst == 000615) {
 	  if (T_FLOW) fprintf(stderr," ITLB\n");
 	  RESTRICT();
+	  utempl = *(int *)(crs+L);
+	  utempa = STLBIX(utempl);
+	  stlb[utempa].valid = 0;
+	  if (T_INST) fprintf(stderr," invalidated STLB index %d\n", utempa);
 	  /* HACK for DIAG to suppress ITLB loop in trace */
 	  if (RP == 0106070)
 	    if (*(int *)(crs+L) == 0) {
