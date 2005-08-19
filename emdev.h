@@ -400,7 +400,7 @@ void devcp (short class, short func, short device) {
   static unsigned short clkvec;
   static short clkpic;
 
-#if 1
+#if 0
   /* NOTE: setting this to 64,000 causes pointer faults when doing console
      I/O during coldstart:
 OCP '1520
@@ -418,7 +418,7 @@ keys = 14000, modals=137
  */
   #define SETCLKPOLL devpoll[device] = 600000;
 #else
-  #define SETCLKPOLL devpoll[device] = instpermsec*3.3*-clkpic;
+  #define SETCLKPOLL devpoll[device] = instpermsec*(-clkpic*3.2)/1000;
 #endif
 
   switch (class) {
@@ -426,14 +426,21 @@ keys = 14000, modals=137
   case 0:
     if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
     printf("OCP '%02o%02o\n", func, device);
+
     if (func == 0 || func == 015) {
+      fprintf(stderr,"Clock process initialized!\n");
       /* this enables tracing when the clock process initializes */
       //traceflags = ~TB_MAP;
       enabled = 1;
+#if 0
       SETCLKPOLL;
+#else
+      devpoll[device] = 600000;
+#endif
     } else if (func == 016 || func == 017) {
       enabled = 0;
       devpoll[device] = 0;
+
     } else {
       printf("Unimplemented OCP device '%02o function '%02o\n", device, func);
       fatal(NULL);
@@ -526,25 +533,32 @@ void devdisk (short class, short func, short device) {
 
 #define S_HALT 0
 #define S_RUN 1
-#define S_STALL 2
+#define S_INT 2
+
+#if 0
+  #define CID4005 0100
+#else
+  #define CID4005 0
+#endif
+
 
   static struct {
     unsigned short oar;
     unsigned short state;                  /* channel program state: S_XXXX */
     unsigned short status;                 /* controller status */
-    short unit;                            /* unit selected */
+    short usel;                            /* unit selected (0-3, -1=none) */
     short dmachan;                         /* dma channel selected */
     short dmanch;                          /* number of dma channels-1 */
-    /* these should be per-unit! */
-    char devopened[8];                     /* device file that is open on devfd */
-    int rtfd;                              /* read trace file descriptor */
-    unsigned short theads;                 /* total heads (cfg file) */
-    unsigned short spt;                    /* sectors per track */
-    int devfd;                             /* Unix device file descriptor */
-    int readnum;                           /* increments on each read */
+    struct {
+      int rtfd;                            /* read trace file descriptor */
+      unsigned short theads;               /* total heads (cfg file) */
+      unsigned short spt;                  /* sectors per track */
+      int devfd;                           /* Unix device file descriptor */
+      int readnum;                         /* increments on each read */
+    } unit[4];
   } dc[64];
 
-  short i;
+  short i,u;
 
   /* temps for running channel programs */
 
@@ -566,37 +580,58 @@ void devdisk (short class, short func, short device) {
 
   case -1:
     for (i=0; i<64; i++) {
-      dc[i].oar = 0;
       dc[i].state = S_HALT;
       dc[i].status = 0100000;
-      dc[i].unit = -1;
-      strcpy(dc[i].devopened,"       ");
-      dc[i].rtfd = -1;
-      dc[i].theads = 40;
-      dc[i].spt = 9;
-      dc[i].devfd = -1;
+      dc[i].usel = -1;
+      for (u=0; u<4; u++) {
+	dc[i].unit[u].rtfd = -1;
+	dc[i].unit[u].theads = 40;
+	dc[i].unit[u].spt = 9;
+	dc[i].unit[u].devfd = -1;
+	dc[i].unit[u].readnum = -1;
+      }
     }
     break;
       
   case 0:
     if (T_INST || T_DIO) fprintf(stderr," OCP '%2o%2o\n", func, device);
+    if (func == 016) {                /* reset interrupt */
+      if (dc[device].state == S_INT) {
+	dc[device].state = S_RUN;
+	devpoll[device] = 1;
+      }
+    } else if (func == 017) {         /* reset controller */
+      dc[i].state = S_HALT;
+      dc[i].status = 0100000;
+      dc[i].usel = -1;
+    } else {
+      fprintf(stderr," Unrecognized OCP '%2o%2o\n", func, device);
+      fatal(NULL);
+    }
     break;
 
   case 1:
     if (T_INST || T_DIO) fprintf(stderr," SKS '%2o%2o\n", func, device);
+    if (func == 04) {                  /* skip if not interrupting */
+      if (dc[device].state != S_INT)
+	IOSKIP;
+    } else {
+      fprintf(stderr," Unrecognized SKS '%2o%2o\n", func, device);
+      fatal(NULL);
+    }
     break;
 
-#if 1
-  #define CID4005 0100
-#else
-  #define CID4005 0
-#endif
-
   case 2:
+    if (T_INST || T_DIO) fprintf(stderr," INA '%2o%2o\n", func, device);
+
     /* this turns tracing on when the Primos disk processes initialize */
     //traceflags = ~TB_MAP;
 
-    if (T_INST || T_DIO) fprintf(stderr," INA '%2o%2o\n", func, device);
+    /* INA's are only accepted when the controller is not busy */
+
+    if (dc[device].state != S_HALT)
+      return;
+
     if (func == 01)          /* read device id, clear A first */
       crs[A] = CID4005 + device;
 #if 0
@@ -607,8 +642,6 @@ void devdisk (short class, short func, short device) {
     else if (func == 011)    /* read device id, don't clear A */
       crs[A] |= (CID4005 + device);
     else if (func == 017) {  /* read OAR */
-      if (dc[device].state != S_HALT)
-	return;
       crs[A] = dc[device].oar;
     } else {
       printf("Unimplemented INA device '%02o function '%02o\n", device, func);
@@ -632,12 +665,12 @@ void devdisk (short class, short func, short device) {
 
   case 4:   /* poll (run channel program) */
 
-    while (dc[device].state != S_HALT) {
+    while (dc[device].state == S_RUN) {
       m = get16(dc[device].oar);
       m1 = get16(dc[device].oar+1);
-      order = m>>12;
       if (T_INST || T_DIO) fprintf(stderr,"\nDIOC %o: %o %o %o\n", dc[device].oar, m, m1, get16(dc[device].oar+2));
       dc[device].oar += 2;
+      order = m>>12;
       if (m & 04000) {   /* "execute if ..." */
 	if (order == 2 || order == 5 || order == 6)
 	  dc[device].oar++;
@@ -660,6 +693,7 @@ void devdisk (short class, short func, short device) {
 	track = m1 & 01777;
 	rec = m2 >> 8;   /* # records for format, rec # for R/W */
 	head = m2 & 077;
+	u = dc[device].usel;
 	if (order == 2)
 	  strcpy(ordertext,"Format");
 	else if (order == 5)
@@ -667,7 +701,7 @@ void devdisk (short class, short func, short device) {
 	else if (order == 6)
 	  strcpy(ordertext,"Write");
 	if (T_INST || T_DIO) fprintf(stderr," %s, head=%d, track=%d, rec=%d, recsize=%d\n", ordertext, head, track, rec, recsize);
-	if (dc[device].devfd == -1) {
+	if (dc[device].unit[u].devfd == -1) {
 	  if (T_INST || T_DIO) fprintf(stderr," Unit not selected or not ready\n");
 	  dc[device].status = 0100001;
 	} else if (order == 2) {
@@ -677,13 +711,13 @@ void devdisk (short class, short func, short device) {
 
 	  /* translate head/track/sector to drive record address */
 
-	  phyra = (track*dc[device].theads*dc[device].spt) + head*9 + rec;
+	  phyra = (track*dc[device].unit[u].theads*dc[device].unit[u].spt) + head*9 + rec;
 	  if (T_INST || T_DIO) fprintf(stderr, " Unix ra=%d, byte offset=%d\n", phyra, phyra*2080);
-	  if (lseek(dc[device].devfd, phyra*2080, SEEK_SET) == -1) {
+	  if (lseek(dc[device].unit[u].devfd, phyra*2080, SEEK_SET) == -1) {
 	    perror("Unable to seek drive file");
 	    fatal(NULL);
 	  }
-	  dc[device].readnum++;
+	  dc[device].unit[u].readnum++;
 	  rtnw = 0;
 	  while (dc[device].dmanch >= 0) {
 	    dmareg = ((dc[device].dmachan & 036) << 1) | (dc[device].dmachan & 1);
@@ -698,7 +732,7 @@ void devdisk (short class, short func, short device) {
 	      iobufp = iobuf;
 	    else
 	      iobufp = mem+dmaaddr;
-	    if (read(dc[device].devfd, (char *)iobufp, dmanw*2) != dmanw*2) {
+	    if (read(dc[device].unit[u].devfd, (char *)iobufp, dmanw*2) != dmanw*2) {
 	      perror("Unable to read drive file");
 	      fatal(NULL);
 	      }
@@ -743,30 +777,21 @@ void devdisk (short class, short func, short device) {
 	break;
 
       case 4: /* DSEL = Select unit */
-	dc[device].unit = (m1 & 017) >> 1;  /* unit = 0/1/2/4 */
-	if (dc[device].unit == 4) dc[device].unit = 3;         /* unit = 0/1/2/3 */
-	snprintf(devfile,sizeof(devfile),"dev%ou%d", device, dc[device].unit);
-	if (T_INST || T_DIO) fprintf(stderr," select unit %d, filename %s\n", dc[device].unit, devfile);
-	if (strcmp(devfile,dc[device].devopened) != 0 || dc[device].devfd == -1) {
-	  if (dc[device].devfd != -1) {
-	    close(dc[device].devfd);
-	    dc[device].devfd = -1;
-	  }
-	  if ((dc[device].devfd = open(devfile, O_RDONLY, 0)) == -1)
+	u = (m1 & 017) >> 1;       /* unit = 0/1/2/4 */
+	if (u == 4) u = 3;         /* unit = 0/1/2/3 */
+	dc[device].usel = u;
+	if (dc[device].unit[u].devfd == -1) {
+	  snprintf(devfile,sizeof(devfile),"dev%ou%d", device, u);
+	  if (T_INST || T_DIO) fprintf(stderr," filename for unit %d is %s\n", u, devfile);
+	  if ((dc[device].unit[u].devfd = open(devfile, O_RDONLY, 0)) == -1)
 	    dc[device].status = 0100001;    /* not ready */
-	  else
-	    strcpy(dc[device].devopened, devfile);
 	}
+	if (T_INST || T_DIO) fprintf(stderr," select unit %d\n", u);
 	break;
 
       case 7: /* DSTALL = Stall */
 	if (T_INST || T_DIO) fprintf(stderr," stall\n");
-#if 0
-	devpoll[device] = instpermsec*10;
-#else
-	devpoll[device] = 100;
-#endif
-	dc[device].state = S_STALL;
+	devpoll[device] = instpermsec/5;
 	return;
 
       case 9: /* DSTAT = Store status to memory */
@@ -805,11 +830,14 @@ void devdisk (short class, short func, short device) {
 
       case 14: /* DINT = generate interrupt through vector address */
 	if (T_INST || T_DIO) fprintf(stderr, " interrupt through '%o\n", m1);
-	if (intvec >= 0)
-	  fatal("DINT while intvec active");
-	intvec = m1;
+	if (intvec >= 0 || !(crs[MODALS] & 0100000) || inhcount > 0)
+	  dc[device].oar -= 2;     /* can't take interrupt right now */
+	else {
+	  intvec = m1;
+	  dc[device].state = S_INT;
+	}
 	//traceflags = ~TB_MAP;
-	devpoll[device] = 100;
+	devpoll[device] = 10;
 	return;
 
       case 15: /* DTRAN = channel program jump */
