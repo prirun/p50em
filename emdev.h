@@ -127,6 +127,9 @@ void devnull (short class, short func, short device) {
 
 /* Device '4: system console
 
+   NOTES:
+   - needs to set -icanon -icrnl on system console tty
+
    OCP '0004 = initialize for input only, echoplex, 110 baud, 8-bit, no parity
    OCP '0104 = same, but for output only
    OCP '0204 = set receive interrupt mask
@@ -267,8 +270,7 @@ readasr:
 	}
 	if (func >= 010)
 	  crs[A] = 0;
-	/* NOTE: probably don't need 0x80 here... */
-	crs[A] = crs[A] | ch | 0x80;
+	crs[A] = crs[A] | ch;
 	if (T_INST) fprintf(stderr," character read=%o: %c\n", crs[A], crs[A]);
 	IOSKIP;
       } else  if (n != 0) {
@@ -425,7 +427,7 @@ keys = 14000, modals=137
 
   case 0:
     if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
-    printf("OCP '%02o%02o\n", func, device);
+    //printf("OCP '%02o%02o\n", func, device);
 
     if (func == 0 || func == 015) {
       fprintf(stderr,"Clock process initialized!\n");
@@ -707,7 +709,7 @@ void devdisk (short class, short func, short device) {
 	} else if (order == 2) {
 	  if (T_INST || T_DIO) fprintf(stderr," Format order\n");
 	  fatal("DFORMAT channel order not implemented");
-	} else if (order == 5) {
+	} else {            /* order = 5 (read) or 6 (write) */
 
 	  /* translate head/track/sector to drive record address */
 
@@ -717,8 +719,6 @@ void devdisk (short class, short func, short device) {
 	    perror("Unable to seek drive file");
 	    fatal(NULL);
 	  }
-	  dc[device].unit[u].readnum++;
-	  rtnw = 0;
 	  while (dc[device].dmanch >= 0) {
 	    dmareg = ((dc[device].dmachan & 036) << 1) | (dc[device].dmachan & 1);
 	    dmanw = regs.sym.regdmx[dmareg];
@@ -728,46 +728,35 @@ void devdisk (short class, short func, short device) {
 	    
 	    /* later, use mapva to do page-based mapped I/O in pieces */
 
-	    if (crs[MODALS] & 020)
-	      iobufp = iobuf;
-	    else
-	      iobufp = mem+dmaaddr;
-	    if (read(dc[device].unit[u].devfd, (char *)iobufp, dmanw*2) != dmanw*2) {
-	      perror("Unable to read drive file");
-	      fatal(NULL);
-	      }
-	    if (crs[MODALS] & 020)
-	      for (i=0; i<dmanw; i++)
-		put16(iobuf[i], dmaaddr+i);
-
-#if 0
-	    if (T_DIO) {
-	      fprintf(stderr, "\nRT: Read #%d.%d, RA=%d, numwords=%d, memaddr=%o, Unix pos=%d\n", readnum, dmanch, phyra, dmanw, dmaaddr, phyra*2080+rtnw*2);
-	      snprintf(rtfile,sizeof(rtfile),"rt/rt%d.%d", readnum, dmanch);
-	      if ((rtfd = open(rtfile, O_WRONLY+O_CREAT, 0777)) == -1) {
-		printf("Read trace filename: %s\n", rtfile);
-		perror("Read trace file open");
+	    if (order == 5) {
+	      if (crs[MODALS] & 020)
+		iobufp = iobuf;
+	      else
+		iobufp = mem+dmaaddr;
+	      if (read(dc[device].unit[u].devfd, (char *)iobufp, dmanw*2) != dmanw*2) {
+		perror("Unable to read drive file");
 		fatal(NULL);
 	      }
-/* NEEDS HELP! */
-	      if (write(rtfd, mem+dmaaddr, dmanw*2) != dmanw*2) {
-		perror("Unable to write read trace file");
+	      if (crs[MODALS] & 020)
+		for (i=0; i<dmanw; i++)
+		  put16(iobuf[i], dmaaddr+i);
+	    } else {
+	      if (crs[MODALS] & 020) {
+		iobufp = iobuf;
+		for (i=0; i<dmanw; i++)
+		  iobuf[i] = get16(dmaaddr+i);
+	      } else
+		iobufp = mem+dmaaddr;
+	      if (write(dc[device].unit[u].devfd, (char *)iobufp, dmanw*2) != dmanw*2) {
+		perror("Unable to write drive file");
 		fatal(NULL);
 	      }
-	      close(rtfd);
-	      rtnw += dmanw;
-	      if (dmanw == 16)
-		fprintf(stderr, "RT: cra=%d, bra=%d, cnt=%d, type=%d, next=%d, prev=%d\n", *(int *)(mem+dmaaddr), *(int *)(mem+dmaaddr+2), mem[dmaaddr+4], mem[dmaaddr+5], *(int *)(mem+dmaaddr+6), *(int *)(mem+dmaaddr+8));
 	    }
-#endif
 	    regs.sym.regdmx[dmareg] = 0;
 	    regs.sym.regdmx[dmareg+1] += dmanw;
 	    dc[device].dmachan += 2;
 	    dc[device].dmanch--;
 	  }
-
-	} else if (order == 6) {
-	  fatal("DWRITE channel order not implemented");
 	}
 	break;
 
@@ -783,7 +772,7 @@ void devdisk (short class, short func, short device) {
 	if (dc[device].unit[u].devfd == -1) {
 	  snprintf(devfile,sizeof(devfile),"dev%ou%d", device, u);
 	  if (T_INST || T_DIO) fprintf(stderr," filename for unit %d is %s\n", u, devfile);
-	  if ((dc[device].unit[u].devfd = open(devfile, O_RDONLY, 0)) == -1)
+	  if ((dc[device].unit[u].devfd = open(devfile, O_RDWR, 0)) == -1)
 	    dc[device].status = 0100001;    /* not ready */
 	}
 	if (T_INST || T_DIO) fprintf(stderr," select unit %d\n", u);

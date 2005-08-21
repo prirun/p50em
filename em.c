@@ -239,7 +239,6 @@ typedef struct {
   char access[4];             /* ring n access rights */
   unsigned short procid;      /* process id for segments >= '4000 */
   unsigned short seg;         /* segment number */
-  unsigned short vpage;       /* virtual page address */
   unsigned int ppn;           /* physical page number (128MB limit) */
   unsigned short *pmep;       /* pointer to page table flag word */
   unsigned long load_ic;      /* instruction where STLB was loaded */
@@ -446,7 +445,7 @@ pa_t mapva(ea_t ea, short intacc, short *access) {
        or the segment is private and the process id doesn't match,
        then the STLB has to be loaded first */
 
-    if (/* 1 || instcount == 20445443 || */ !stlbp->valid || stlbp->seg != seg || (seg >= 04000 && stlbp->procid != crs[OWNERL])) {
+    if (!stlbp->valid || stlbp->seg != seg || (seg >= 04000 && stlbp->procid != crs[OWNERL])) {
       dtar = *(unsigned int *)(crs+DTAR0-2*DTAR(ea));  /* get dtar register */
       nsegs = 1024-(dtar>>22);
       relseg = seg & 0x3FF;     /* segment within segment table */
@@ -472,19 +471,16 @@ pa_t mapva(ea_t ea, short intacc, short *access) {
       stlbp->access[3] = (sdw >> 6) & 7;
       stlbp->procid = crs[OWNERL];
       stlbp->seg = seg;
-      stlbp->vpage = ea & 0xfc00;
       stlbp->ppn = (pte & 0xFFF);
       stlbp->pmep = mem+pmaddr;
       stlbp->load_ic = instcount;
     }
-    if (stlbp->vpage != (ea & 0xfc00))
-      fatal("STLB page number is wrong!");
     *access = stlbp->access[ring];
     if (((intacc & *access) != intacc) || (intacc == PACC && ((*access & 3) == 0)))
       fault(ACCESSFAULT, 0, ea);
     if (intacc == WACC && stlbp->unmodified) {
       stlbp->unmodified = 0;
-      //*(stlbp->pmep) &= ~020000;    /* reset unmodified bit in memory */
+      *(stlbp->pmep) &= ~020000;    /* reset unmodified bit in memory */
     }
     pa = (stlbp->ppn << 10) | (ea & 0x3FF);
   } else {
@@ -2113,14 +2109,13 @@ keys = 14200, modals=137
   put32(utempl, ea);             /* update the semaphore */
 
   if (inst & 4) {                /* interrupt notify */
-    if (inst & 2) {              /* clear active interrupt */
+    if (inst & 2)                /* clear active interrupt */
       intvec = -1;
-      crs[MODALS] |= 0100000;    /* enable interrupts */
-    }
     /* not sure about all this... Case 85/87 */
     RP = regs.sym.pswpb;
     crs[PBH] = RPH;
     newkeys(regs.sym.pswkeys);
+    crs[MODALS] |= 0100000;      /* enable interrupts */
   }
 
   if (resched || (inst & 4))
@@ -2468,10 +2463,8 @@ main (int argc, char **argv) {
       traceflags = -1;
     if (0 && instcount > 18255000)   /* this is rev 20 mem test requiring STLB */
       traceflags = -1;
-#if 0
-    if (instcount > 20445443)
-      exit(1);
-#endif
+    if (crs[OWNERL] == 0100600)
+      traceflags = -1;
 
 #if 0
     if (trapaddr != 0 && mem[trapaddr] != trapvalue) {
@@ -2607,7 +2600,7 @@ main (int argc, char **argv) {
 #endif
 
 xec:
-    if (T_FLOW) fprintf(stderr,"\n%o/%o: %o		A='%o/%:0d B='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d K=%o M=%o	#%d [%s %o]\n", RPH, RPL-1, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&020000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, crs[KEYS], crs[MODALS], instcount, searchloadmap(*(unsigned int *)(crs+OWNER)), crs[OWNERL]);
+    if (T_FLOW) fprintf(stderr,"\n			#%d [%s %o] SB: %o/%o LB: %o/%o XB: %o/%o\n%o/%o: %o		A='%o/%:0d B='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d K=%o M=%o\n", instcount, searchloadmap(*(unsigned int *)(crs+OWNER)), crs[OWNERL], crs[SBH], crs[SBL], crs[LBH], crs[LBL], crs[XBH], crs[XBL], RPH, RPL-1, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&020000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, crs[KEYS], crs[MODALS]);
 
     /* begin instruction decode: generic? */
 
@@ -3056,9 +3049,20 @@ stfa:
 	  if (T_FLOW) fprintf(stderr," ITLB\n");
 	  RESTRICT();
 	  utempl = *(int *)(crs+L);
-	  utempa = STLBIX(utempl);
-	  stlb[utempa].valid = 0;
-	  if (T_INST) fprintf(stderr," invalidated STLB index %d\n", utempa);
+
+	  /* NOTE: Primos substitutes an ITLB loop for PTLB, and the ITLB
+	     segno is 1, ie, it looks like using segment 1 invalidates all
+	     pages, regardless of segment number?? */
+
+	  if (utempl == 0x10000) {
+	    for (utempa = 0; utempa < STLBENTS; utempa++)
+	      stlb[utempa].valid = 0;
+	    if (T_INST) fprintf(stderr," purged entire STLB\n");
+	  } else {
+	    utempa = STLBIX(utempl);
+	    stlb[utempa].valid = 0;
+	    if (T_INST) fprintf(stderr," invalidated STLB index %d\n", utempa);
+	  }
 	  /* HACK for DIAG to suppress ITLB loop in trace */
 	  if (RP == 0106070)
 	    if (*(int *)(crs+L) == 0) {
@@ -3123,6 +3127,13 @@ irtn:
 	  RESTRICT();
 	  intvec = -1;
 	  goto irtn;
+	}
+
+	if (inst == 000411) {
+	  if (T_FLOW) fprintf(stderr," CAI\n", inst);
+	  RESTRICT();
+	  intvec = -1;
+	  continue;
 	}
 
 	/* R-mode/infrequent gen 0 instructions */
@@ -5990,17 +6001,9 @@ svc() {
       printf("Class %o, func %o: %s %d args %o\n", class,func, svcinfo[class][func].name, svcinfo[class][func].numargs, svcinfo[class][func].locargs);
 #endif
 
-  /* if the svc fault vector is zero, interpret the svc here.  This
-     allows the emulator to run r-mode programs directly */
-
-  if ((crs[KEYS] & 010) || get16(065) != 0) {
-    fault(SVCFAULT, 0, 0);
-    fatal("Returned from SVC fault");
-  }
-
   /* get svc code word, break into class and function */
 
-  code = mem[RPL];
+  code = get16(RPL);
   class = (code >> 6) & 077;
   if (class == 0)
     class = 1;
@@ -6009,7 +6012,7 @@ svc() {
   /* determine argument list location and create arg list vector */
 
   if (code & 0100000)
-    argl = mem[RPL-2];
+    argl = get16(RPL-2);
   else if (code & 040000)
     argl = RPL+2;
   else
@@ -6023,11 +6026,12 @@ svc() {
 
   /* if location '65 is set, do indirect JST to handle svc */
 
-  if (mem[065] != 0) {
-    if (T_INST) fprintf(stderr," JST* '65 [%o]\n", mem[065]);
-    mem[mem[065]] = RPL;
-    RPL = mem[065]+1;
-    return;
+  /* if the svc fault vector is zero, interpret the svc here.  This
+     allows the emulator to run r-mode programs directly */
+
+  if ((crs[KEYS] & 010) || get16(065) != 0) {
+    fault(SVCFAULT, 0, 0);
+    fatal("Returned from SVC fault");
   }
 
   if (svcinfo[class][func].numargs == 99)
