@@ -568,8 +568,8 @@ void devdisk (short class, short func, short device) {
   unsigned short m,m1,m2;
   short head, track, rec, recsize, nwords;
   unsigned short dmareg, dmaaddr;
-  short iobuf[4096];                       /* local I/O buf, before mapped I/O */
-  short *iobufp;
+  unsigned short iobuf[4096];                /* local I/O buf, before mapped I/O */
+  unsigned short *iobufp;
   short dmanw, dmanw1, dmanw2;
   unsigned int utempl;
   char ordertext[8];

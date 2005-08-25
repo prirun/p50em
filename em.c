@@ -20,6 +20,7 @@
 */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -306,24 +307,76 @@ int boot;                            /* true if reading a boot record */
 
 /* load map related data, specified with --map */
 
-#define MAXSYMBOLS 5000
+#define MAXSYMBOLS 15000
 #define MAXSYMLEN 9
 int numsyms = 0;
 static struct {
   char symname[MAXSYMLEN];
-  int  address;
+  ea_t address;
+  char symtype;                /* o=other, c=common, e=ecb, p=proc, l=linkbase */
 } mapsym[MAXSYMBOLS];
+
+
+/* returns an index to a symbol, based on an address and type
+   match; if the address isn't found exactly, the index returned
+   will be the address lower than the requested address, or -1
+   if the symbol table is empty or the requested address is
+   lower than any in the symbol table */
+
+int findsym(ea_t addr, char type) {
+  int low, high, mid, saveix;
+
+  addr &= 0xFFFFFFF;      /* strip fault, ring, E bits */
+
+  low = 0;
+  high = numsyms-1;
+  mid = -1;
+  while (low <= high) {
+    mid = (low+high)/2;
+    if (addr < mapsym[mid].address)
+      high = mid-1;
+    else if (addr == mapsym[mid].address)
+      break;
+    else if (addr > mapsym[mid].address && mid != numsyms-1 && addr >= mapsym[mid+1].address)
+      low = mid+1;
+    else
+      break;
+  }
+  saveix = mid;
+  if (type != 'x' && mid >= 0)
+    while (addr > mapsym[saveix].address && saveix != numsyms-1 && addr > mapsym[saveix+1].address && mapsym[saveix].symtype != type)
+      saveix++;
+  return saveix;
+}
+
+
+addsym(char *sym, unsigned short seg, unsigned short word, char type) {
+  short symlen,ix,ix2;
+  ea_t addr;
+
+  symlen = strlen(sym);
+  if (symlen > 0 && symlen < MAXSYMLEN) {
+    addr = MAKEVA(seg, word);
+    ix = findsym(addr, 'x');
+    if (ix+1 < numsyms)          /* make room for the new symbol */
+      for (ix2 = numsyms; ix2 > ix; ix2--)
+	mapsym[ix2] = mapsym[ix2-1];
+    //printf("%s = %o/%o\n", sym, segno, wordno);
+    strcpy(mapsym[ix+1].symname, sym);
+    mapsym[ix+1].address = addr;
+    mapsym[ix+1].symtype = type;
+    numsyms++;
+  }
+}
 
 
 readloadmap(char *filename) {
   FILE *mapf;
   char line[100];
-  int lc;
+  int lc,ix;
   char sym[100];
-  int symlen;
-  int segno, wordno;
-  int thisaddr, lastaddr;
-  int wordlen;
+  unsigned int segno, wordno, ecbseg, ecbword, pbseg, pbword, lbseg, lbword;
+  ea_t lastaddr;
 
   printf("Reading load map from %s... ", filename);
   if ((mapf = fopen(filename, "r")) == NULL) {
@@ -331,64 +384,63 @@ readloadmap(char *filename) {
     fatal(NULL);
   }
   lc = 0;
-  lastaddr = -1;
   while (fgets(line, sizeof(line), mapf) != NULL) {
     lc++;
-    if (sscanf(line, " %s %o %o ", sym, &segno, &wordno) > 0) {
-      if (strcmp(sym,"*START") == 0)
-	break;
-      symlen = strlen(sym);
-      if (symlen > 0 && symlen < MAXSYMLEN) {
-	//printf("%s = %o/%o\n", sym, segno, wordno);
-	strcpy(mapsym[numsyms].symname, sym);
-	thisaddr = segno<<16 | wordno;
-	if (thisaddr < lastaddr) {
-	  printf("Load map sequence error at line %d\n", lc);
-	  fatal(NULL);
-	}
-	mapsym[numsyms].address = thisaddr;
-	lastaddr = thisaddr;
-	numsyms++;
-	if (numsyms == MAXSYMBOLS) {
-	  printf("TABLE LIMIT! ");
-	  break;
-	}
-      }
+    if (strstr(line, "*START"))
+      break;
+    if (sscanf(line, "%s %o %o %o %o %*o %*o %o %o", sym, &ecbseg, &ecbword, &pbseg, &pbword, &lbseg, &lbword) == 7) {
+      addsym(sym, ecbseg, ecbword, 'e');
+      addsym(sym, pbseg, pbword, 'p');
+      addsym(sym, lbseg, lbword, 'l');
+      //printf("adding proc symbol, line=%s\n", line);
+    } else if (sscanf(line, "%s %o %o", sym, &segno, &wordno) == 3) {
+      addsym(sym, segno, wordno, 'x');
+      //printf("adding symbol, line=%s\n", line);
+    } else if (strcspn(line, " \n") == 0)
+      continue;
+    else
+      printf("Can't parse line #%d: %s\n", lc, line);
+    if (numsyms == MAXSYMBOLS) {
+      printf("Symbol table limit!");
+      break;
     }
   }
   fclose(mapf);
   printf("%d symbols loaded\n", numsyms);
+
+  lastaddr = 0;
+  for (ix=0; ix < numsyms; ix++) {
+    if (mapsym[ix].address < lastaddr)
+      printf("Symbol table out of order: ix=%d, sym=%s, addr=%o/%o, lastaddr=%o/%o\n", ix, mapsym[ix].symname, mapsym[ix].address>>16, mapsym[ix].address&0xffff, lastaddr>>16, lastaddr&0xffff);
+    lastaddr = mapsym[ix].address;
+  }
 }
 
-/* returns a pointer to a static character string like DSKBLK+25, to print
-   with the effective address for an instruction */
+/* returns a pointer to a static character string like DSKBLK+25, to
+   print with the effective address for an instruction.  There is a
+   stack of return results so that if this is called twice on a
+   function call, different results can be returned */
 
-char *searchloadmap(int addr) {
-  int low, high, mid, diff;
-  static char buf[100] = "";
+char *searchloadmap(int addr, char type) {
+  short ix, diff;
 
-  if (numsyms == 0)
-    return buf;
+#define MAXBUFIX 10
 
-  addr &= 0xFFFFFFF;      /* strip fault, ring, E bits */
+  static char blank = 0;
+  static char buf[MAXBUFIX][100];
+  static int bufix=-1;
 
-  low = 0;
-  high = numsyms-1;
-  while (low <= high) {
-    mid = (low+high)/2;
-    if (addr < mapsym[mid].address)
-      high = mid-1;
-    else if (addr > mapsym[mid].address && mid != numsyms-1 && addr >= mapsym[mid+1].address)
-      low = mid+1;
-    else
-      break;
-  }
-  diff = addr - mapsym[mid].address;
-  if (diff) {
-    sprintf(buf, "%s+'%o", mapsym[mid].symname, diff);
-    return buf;
-  } else
-    return mapsym[mid].symname;
+  if ((ix = findsym(addr, type)) > 0) {
+    diff = addr - mapsym[ix].address;
+    if (diff) {
+      if (++bufix == MAXBUFIX)
+	bufix = 0;
+      snprintf(buf[bufix], sizeof(buf[0]), "%s+'%o", mapsym[ix].symname, diff);
+      return buf[bufix];
+    } else
+      return mapsym[ix].symname;
+  } else 
+    return &blank;
 }
 
 
@@ -423,7 +475,7 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr);
 
 #define STLBIX(ea) ((((((ea) >> 12) ^ (ea)) & 0xc000) >> 7) | (((ea) & 0x70000) >> 12) | ((ea) & 0x3c00) >> 10)
 
-pa_t mapva(ea_t ea, short intacc, short *access) {
+pa_t mapva(ea_t ea, short intacc, unsigned short *access) {
   short relseg,seg,nsegs,ring;
   unsigned short pte, stlbix;
   stlbe_t *stlbp;
@@ -525,6 +577,11 @@ unsigned int get32(ea_t ea) {
   unsigned short access;
   unsigned short m[2];
 
+  /* check for live register access */
+
+  if (ea & 0x80000000)
+    fatal("Address trap in get32!");
+
   pa = mapva(ea, RACC, &access);
 
   if ((pa & 01777) <= 01776)
@@ -540,6 +597,11 @@ double get64(ea_t ea) {
   pa_t pa;
   unsigned short access;
   unsigned short m[4];
+
+  /* check for live register access */
+
+  if (ea & 0x80000000)
+    fatal("Address trap in get64!");
 
   pa = mapva(ea, RACC, &access);
   if ((pa & 01777) <= 01774)
@@ -586,6 +648,11 @@ put32(unsigned int value, ea_t ea) {
   unsigned short access;
   unsigned short *m;
 
+  /* check for live register access */
+
+  if (ea & 0x80000000)
+    fatal("Address trap in put32!");
+
   pa = mapva(ea, WACC, &access);
   if ((pa & 01777) <= 01776)
     *(unsigned int *)(mem+pa) = value;
@@ -600,6 +667,11 @@ put64(double value, ea_t ea) {
   pa_t pa;
   unsigned short access;
   unsigned short *m;
+
+  /* check for live register access */
+
+  if (ea & 0x80000000)
+    fatal("Address trap in put32!");
 
   pa = mapva(ea, WACC, &access);
   if ((pa & 01777) <= 01774)
@@ -902,7 +974,7 @@ ea_t ea32s (unsigned short inst, short i, short x) {
    bit, is that 32R indirect words have an indirect bit for multi-level
    indirects */
 
-ea_t ea32r64r (ea_t earp, unsigned short inst, short i, short x, short *opcode) {
+ea_t ea32r64r (ea_t earp, unsigned short inst, short i, short x, unsigned short *opcode) {
 
   short class;
   unsigned short ea,m,rpl;
@@ -1048,7 +1120,7 @@ unsigned int ea32i (ea_t earp, unsigned short inst, short i, short x) {
 
 ea_t apea(unsigned short *bitarg) {
   unsigned short ibr, ea_s, ea_w, bit, br;
-  ea_t ea;
+  ea_t ea, ip;
   
   ibr = get16(RP);
   RPL++;
@@ -1063,16 +1135,17 @@ ea_t apea(unsigned short *bitarg) {
   ea_w += get16(RP);
   RPL++;
   ea = MAKEVA(ea_s, ea_w);
-  if (T_EAAP) fprintf(stderr," AP ea = %o/%o  %s\n", ea_s, ea_w, searchloadmap(ea));
+  if (T_EAAP) fprintf(stderr," AP ea = %o/%o  %s\n", ea_s, ea_w, searchloadmap(ea,' '));
   if (ibr & 004000) {
     if (ea & 0x80000000)
       fault(POINTERFAULT, ea>>16, 0);
-    ea = get32(ea);
-    if (ea & EXTMASK32)
+    ip = get32(ea);
+    if (ip & EXTMASK32)
       bit = get16(INCVA(ea,2)) >> 12;
     else
       bit = 0;
-    if (T_EAAP) fprintf(stderr," After indirect, AP ea = %o/%o, bit=%d  %s\n", ea>>16, ea & 0xFFFF, bit, searchloadmap(ea));
+    ea = ip;
+    if (T_EAAP) fprintf(stderr," After indirect, AP ea = %o/%o, bit=%d  %s\n", ea>>16, ea & 0xFFFF, bit, searchloadmap(ea,' '));
   }
   if (bit)
     ea |= EXTMASK32;
@@ -1396,7 +1469,7 @@ ea_t pclea(unsigned short brsave[6], ea_t rp, unsigned short *bitarg, short *sto
 
 pcl (ea_t ecbea) {
   short i;
-  short access;
+  unsigned short access;
   unsigned short ecb[9];
   short bit;                  /* bit offset for args */
   ea_t newrp;                 /* start of new proc */
@@ -1418,7 +1491,7 @@ pcl (ea_t ecbea) {
   if (T_PCL) fprintf(stderr," ecb @ %o/%o, access=%d\n", ecbea>>16, ecbea&0xFFFF, access);
 
 #if 0
-  if (strstr(searchloadmap(ea),"TNOU")) {
+  if (strstr(searchloadmap(ea,' '),"TNOU")) {
     fprintf(stderr," TNOUx called!\n");
   }
 #endif
@@ -1522,7 +1595,6 @@ pcl (ea_t ecbea) {
   *(unsigned int *)(crs+LB) = *(unsigned int *)(ecb+6);
   newkeys(ecb[8] & 0177760);
   RP = newrp;
-  if (T_PCL) fprintf(stderr," new RP=%o/%o\n", RPH, RPL);
 
   /* update the stack free pointer; this has to wait until after all
      memory accesses, in case of stack page faults (PCL restarts).
@@ -1538,6 +1610,16 @@ pcl (ea_t ecbea) {
      argument transfer, so:
      Y(high) = stack frame offset to store next argument
      Y(low) = number of arguments left to transfer (JW hack!) */
+
+
+  /* if a page fault occurs during argument transfer, we need to 
+     make sure to use the current RP, which points to the ARGT
+     instruction.  Otherwise, the return from the page fault
+     is to the PCL instruction, which has already completed at
+     this point */
+
+  prevpc = RP;
+  if (T_PCL) fprintf(stderr," new RP=%o/%o\n", RPH, RPL);
 
   if (ecb[5] > 0) {
     crs[Y] = ecb[4];
@@ -1561,7 +1643,8 @@ pcl (ea_t ecbea) {
 
 argt() {
   unsigned short brsave[6];
-  unsigned short argsleft, argdisp, lastarg, store,bit;
+  unsigned short argsleft, argdisp, bit;
+  short lastarg, store;
   unsigned int utempl;
   unsigned short ecby;          /* last offset where ecb temp ea was stored */
   ea_t ea, stackfp, rp, ecbea;
@@ -1642,6 +1725,7 @@ argt() {
   /* after argument transfer, advance real RP past ARGT */
 
   RPL++;
+  if (T_PCL) fprintf(stderr," Return RP=%o/%o\n", rp>>16, rp&0xffff);
 }
 
 
@@ -1944,8 +2028,11 @@ unsigned short ready (ea_t pcbp, unsigned short begend) {
 
   if ((pcbp & 0xFFFF) == crs[OWNERL])
     fatal("Tried to put myself on the ready list!");
+#if 0
+  /* NOTE: restore drive b, boot 14314, halts here after login_server */
   if (regs.sym.pcba != crs[OWNERL])
     fatal("I'm running, but not regs.sym.pcba!");
+#endif
 
   level = get16(pcbp+PCBLEV);
   rlp = MAKEVA(crs[OWNERH],level);
@@ -1986,7 +2073,7 @@ unsigned short ready (ea_t pcbp, unsigned short begend) {
 }
 
 
-wait() {
+pwait() {
   ea_t ea;
   ea_t pcbp, prevpcbp;
   unsigned int utempl;
@@ -2206,11 +2293,11 @@ ldc(n) {
       crs[A] = m & 0xFF;
       crsl[flr] &= 0xFFFF0FFF;
       crsl[far] = (crsl[far]+1) & 0x6FFFFFFF;
-      if (T_INST) fprintf(stderr," loaded character '%o (%c) from %o/%o left\n", crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
+      if (T_INST) fprintf(stderr," ldc '%o (%c) from %o/%o right\n", crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
     } else {
       crs[A] = m >> 8;
       crsl[flr] |= 0x8000;
-      if (T_INST) fprintf(stderr," loaded character '%o (%c) from %o/%o right\n", crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
+      if (T_INST) fprintf(stderr," ldc '%o (%c) from %o/%o left\n", crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
     }
     utempl--;
     PUTFLR(n,utempl);
@@ -2227,6 +2314,7 @@ stc(n) {
   unsigned int utempl;
   unsigned short m;
   unsigned short far, flr;
+  ea_t ea;
 
   far = FAR0;
   flr = FLR0;
@@ -2237,13 +2325,16 @@ stc(n) {
 
   utempl = GETFLR(n);
   if (utempl > 0) {
+    ea = crsl[far];
     m = get16(crsl[far]);
     if (crsl[flr] & 0x8000) {
+      if (T_INST) fprintf(stderr," stc '%o (%c) to %o/%o right\n", crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
       m = (m & 0xFF00) | (crs[A] & 0xFF);
       put16(m,crsl[far]);
       crsl[flr] &= 0xFFFF0FFF;
       crsl[far] = (crsl[far]+1) & 0x6FFFFFFF;
     } else {
+      if (T_INST) fprintf(stderr," stc '%o (%c) to %o/%o left\n", crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
       m = (crs[A] << 8) | (m & 0xFF);
       put16(m,crsl[far]);
       crsl[flr] |= 0x8000;
@@ -2330,10 +2421,8 @@ main (int argc, char **argv) {
     else if (strcmp(argv[i],"--v") == 0)
       verbose = 1;
     else if (strcmp(argv[i],"--map") == 0) {
-      if (i+1 < argc && argv[i+1][0] != '-')
+      while (i+1 < argc && argv[i+1][0] != '-')
 	readloadmap(argv[++i]);
-      else
-	fatal("--map option needs a filename\n");
     } else if (strcmp(argv[i],"--memdump") == 0)
       domemdump = 1;
     else if (strcmp(argv[i],"--ss") == 0) {
@@ -2459,20 +2548,34 @@ main (int argc, char **argv) {
 
   while (1) {
 
-    if (0 && instcount > 46800000)   /* rev 20 crash after STLB installed */
-      traceflags = -1;
-    if (0 && instcount > 18255000)   /* this is rev 20 mem test requiring STLB */
-      traceflags = -1;
-    if (crs[OWNERL] == 0100600)
-      traceflags = -1;
+#if 0
+    /* this is to debug ppa problem */
+    if (instcount > 85400000)
+      traceflags = ~TB_MAP;
+#endif
 
 #if 0
-    if (trapaddr != 0 && mem[trapaddr] != trapvalue) {
-      printf("TRAP: at #%d, old value of '%o was %o; new value is %o\n", instcount, trapaddr, trapvalue, mem[trapaddr]);
-      trapvalue = mem[trapaddr];
-    }
-    if (*(int *)(crs+XB) != 0) {
-      fprintf(stderr, "TRAP: at #%d, XB% changed to %o/%o\n", instcount, crs[XBH], crs[XBL]);
+    /* NOTE: don't trace TFLADJ loops */
+
+    if (crs[OWNERL] == 0100100 && instcount > 60000000 && crs[LBL] != 010046)
+      traceflags = ~TB_MAP;
+    else
+      traceflags = 0;
+#endif
+
+#if 0
+    /* NOTE: this tends to hang if the location being monitored isn't
+       wired */
+
+    if (trapaddr != 0 && (crs[OWNERL] & 0100000) && (crs[MODALS] & 010)) {
+      traceflags = -1;
+      printf("TRAP: at #%d\n", instcount);
+      utempa = get16(trapaddr);
+      if (utempa != trapvalue) {
+	printf("TRAP: at #%d, old value of %o/%o was %o; new value is %o\n", instcount, trapaddr>>16, trapaddr&0xffff, trapvalue, utempa);
+	trapvalue = utempa;
+	printf("TRAP: new trap value is %o\n", trapvalue);
+      }
     }
 #endif
 
@@ -2581,12 +2684,7 @@ main (int argc, char **argv) {
 	  ea = *(ea_t *)(crs+OWNER);
 	  m = get16(ea+4) | 1;       /* set process abort flag */
 	  put16(m, ea+4);
-#if 0
-	  fault(PROCESSFAULT, utempa, 0);
-	  fatal("fault returned after process fault");    
-#endif
 	}
-	//printf("incremented timer to %d\n", *(short *)(crs+TIMER));
       }
     }
 
@@ -2600,7 +2698,7 @@ main (int argc, char **argv) {
 #endif
 
 xec:
-    if (T_FLOW) fprintf(stderr,"\n			#%d [%s %o] SB: %o/%o LB: %o/%o XB: %o/%o\n%o/%o: %o		A='%o/%:0d B='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d K=%o M=%o\n", instcount, searchloadmap(*(unsigned int *)(crs+OWNER)), crs[OWNERL], crs[SBH], crs[SBL], crs[LBH], crs[LBL], crs[XBH], crs[XBL], RPH, RPL-1, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&020000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, crs[KEYS], crs[MODALS]);
+    if (T_FLOW) fprintf(stderr,"\n			#%d [%s %o] SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%:0d B='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d K=%o M=%o\n", instcount, searchloadmap(*(unsigned int *)(crs+OWNER),'x'), crs[OWNERL], crs[SBH], crs[SBL], crs[LBH], crs[LBL], searchloadmap(*(unsigned int *)(crs+LBH),'l'), crs[XBH], crs[XBL], RPH, RPL-1, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&020000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, crs[KEYS], crs[MODALS]);
 
     /* begin instruction decode: generic? */
 
@@ -2790,6 +2888,9 @@ stfa:
 	  if (utempa != 0) {
 	    utempl = utempl | EXTMASK32;
 	    put16(utempa,INCVA(ea,2));
+	    if (T_INST) fprintf(stderr," stored 3-word pointer %o/%o %o\n", utempl>>16, utempl&0xffff, utempa);
+	  } else {
+	    if (T_INST) fprintf(stderr," stored 2-word pointer %o/%o\n", utempl>>16, utempl&0xffff);
 	  }
 	  put32(utempl,ea);
 	  continue;
@@ -2860,13 +2961,14 @@ stfa:
 	  savemask = 0;
 	  for (i = 11; i >= 0; i--) {
 	    if (crsl[i] != 0) {
-	      if (T_INST) fprintf(stderr," crsl[%d] saved, value=%o\n", i, crsl[i]);
+	      if (T_INST) fprintf(stderr," crsl[%d] saved, value=%o (%o/%o)\n", i, crsl[i], crsl[i]>>16, crsl[i]&0xffff);
 	      put32(crsl[i], INCVA(ea,j));
 	      savemask |= bitmask16[16-i];
 	    }
 	    j += 2;
 	  }
 	  put32(*(int *)(crs+XB), INCVA(ea,25));
+	  if (T_INST) fprintf(stderr," XB saved, value=%o/%o\n", crs[XBH], crs[XBL]);
 	  put16(savemask, ea);
 	  if (T_INST) fprintf(stderr," Saved, mask=%o\n", savemask);
 	  continue;
@@ -2876,13 +2978,12 @@ stfa:
 	  if (T_FLOW) fprintf(stderr," RRST\n");
 	  ea = apea(NULL);
 	  savemask = get16(ea);
-	  //if (T_INST) fprintf(stderr," %o/%o: RRST %o/%o, mask=%o, modals=%o\n", RPH,RPL,ea>>16,ea&0xffff,savemask,crs[MODALS]);
 	  if (T_INST) fprintf(stderr," Save mask=%o\n", savemask);
 	  j = 1;
 	  for (i = 11; i >= 0; i--) {
 	    if (savemask & bitmask16[16-i]) {
 	      crsl[i] = get32(INCVA(ea,j));
-	      if (T_INST) fprintf(stderr," crsl[%d] restored, value=%o\n", i, crsl[i]);
+	      if (T_INST) fprintf(stderr," crsl[%d] restored, value=%o (%o/%o)\n", i, crsl[i], crsl[i]>>16, crsl[i]&0xffff);
 	    } else {
 	      crsl[i] = 0;
 	    }
@@ -2930,9 +3031,17 @@ stfa:
 	  continue;
 	}
 
+	/* NOTE: when ARGT is executed as an instruction, it means
+	   that a fault occurred during PCL argument processing.
+	   argt() advances RP when all arguments have been
+	   transferred, which is correct for the normal PCL case (no
+	   fault), but incorrect for the fault case.  So it's
+	   decremented here, after argt() */
+
 	if (inst == 000605) {
 	  if (T_FLOW || T_PCL) fprintf(stderr," ARGT\n");
 	  argt();
+	  RP--;
 	  continue;
 	}
 
@@ -2953,9 +3062,14 @@ stfa:
 	  utempa = crs[A];
 	  do {
 	    ldc(0);
-	    if (crs[KEYS] & 0100)
+	    if (!(crs[KEYS] & 0100))
+	      stc(1);
+	    else {
 	      crs[A] = 0240;
-	    stc(1);
+	      do {
+		stc(1);
+	      } while (!(crs[KEYS] & 0100));
+	    }
 	  } while (!(crs[KEYS] & 0100));
 	  crs[A] = utempa;
 	  continue;
@@ -2964,15 +3078,16 @@ stfa:
 	if (inst == 001115) {
 	  if (T_FLOW) fprintf(stderr," ZMVD\n", inst);
 	  utempa = crs[A];
-	  utempl = GETFLR(0);
-	  PUTFLR(0, 65535);
-	  if (T_INST) fprintf(stderr," source=%o/%o, len=%d, dest=%o/%o, len=%d\n", crsl[FAR0]>>16, crsl[FAR0]&0xffff, GETFLR(0), crsl[FAR1]>>16, crsl[FAR0]&0xffff, GETFLR(1));
-	  do {
-	    ldc(0);
-	    stc(1);
-	  } while (!(crs[KEYS] & 0100));
-	  crs[A] = utempa;
+	  utempl = GETFLR(1);
 	  PUTFLR(0, utempl);
+	  if (T_INST) fprintf(stderr," source=%o/%o, len=%d, dest=%o/%o, len=%d\n", crsl[FAR0]>>16, crsl[FAR0]&0xffff, GETFLR(0), crsl[FAR1]>>16, crsl[FAR0]&0xffff, GETFLR(1));
+	  while (1) {
+	    ldc(0);
+	    if (crs[KEYS] & 0100)
+	      break;
+	    stc(1);
+	  }
+	  crs[A] = utempa;
 	  continue;
 	}
 
@@ -3019,7 +3134,7 @@ stfa:
 	if (inst == 000315) {
 	  if (T_FLOW) fprintf(stderr," WAIT\n", inst);
 	  RESTRICT();
-	  wait();
+	  pwait();
 	  continue;
 	}
 
@@ -3052,7 +3167,7 @@ stfa:
 
 	  /* NOTE: Primos substitutes an ITLB loop for PTLB, and the ITLB
 	     segno is 1, ie, it looks like using segment 1 invalidates all
-	     pages, regardless of segment number?? */
+	     pages that match, regardless of segment number?? */
 
 	  if (utempl == 0x10000) {
 	    for (utempa = 0; utempa < STLBENTS; utempa++)
@@ -3345,8 +3460,9 @@ irtn:
 	if (i < GEN0TABSIZE)
 	  continue;
 
-	if (T_INST) fprintf(stderr," unrecognized generic class 0 instruction!\n");
+	fprintf(stderr," unrecognized generic class 0 instruction!\n");
 	printf("#%d: %o/%o: Unrecognized generic class 0 instruction '%o!\n", instcount, RPH, RPL, inst);
+	//traceflags = ~TB_MAP;
 	fault(UIIFAULT, RPL, 0);
 	fatal(NULL);
       }
@@ -4753,6 +4869,23 @@ lcgt:
 	  continue;
 	}
 
+#if 0
+	/* NOTE: this is the clock display instruction skip, but appears
+	   goofy to me, and looks more like an I/O instruction:
+
+ unrecognized skip instruction 101704 at 6/3174
+Fatal error: instruction #106825755 at 6/3173: 101704 677
+keys = 14200, modals=100177
+
+	*/
+#endif
+
+	if (inst == 0101704) {    /* skip if machine check flop is set */
+	  if (T_FLOW) fprintf(stderr," clock SKP?\n");
+	  RPL++;
+	  continue;
+	}
+
 	printf(" unrecognized skip instruction %o at %o/%o\n", inst, RPH, RPL);
 	fatal(NULL);
 
@@ -4829,7 +4962,7 @@ lcgt:
       fatal(NULL);
     }
 
-    if (T_INST) fprintf(stderr," EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea));
+    if (T_INST) fprintf(stderr," EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
 
 
     /* NOTE: basic and dbasic execute instructions from the register file 
@@ -4856,24 +4989,27 @@ lcgt:
       continue;
     }
 
+    /* NOTE: don't use get32 for DLD/DST, because it doesn't handle register
+       address traps */
+
     if (opcode == 00200) {
-      if ((crs[KEYS] & 050000) != 040000) {     /* V/I mode or SP */
-	crs[A] = get16(ea);
-	if (T_FLOW) fprintf(stderr," LDA ='%o/%d\n", crs[A], *(short *)(crs+A));
-      } else {                                  /* R-mode and DP */
+      crs[A] = get16(ea);
+      if ((crs[KEYS] & 050000) == 040000) {  /* R-mode and DP */
 	if (T_FLOW) fprintf(stderr," DLD\n");
-	*(unsigned int *)(crs+L) = get32(ea);
+	crs[B] = get16(INCVA(ea,1));
+      } else {
+	if (T_FLOW) fprintf(stderr," LDA ='%o/%d\n", crs[A], *(short *)(crs+A));
       }
       continue;
     }
 
     if (opcode == 00400) {
-      if ((crs[KEYS] & 050000) != 040000) {     /* V/I mode or SP */
-	if (T_FLOW) fprintf(stderr," STA\n");
-	put16(crs[A],ea);
-      } else {                                  /* R-mode and DP */
+      put16(crs[A],ea);
+      if ((crs[KEYS] & 050000) == 040000) {
 	if (T_FLOW) fprintf(stderr," DST\n");
-	put32(*(unsigned int *)(crs+L),ea);
+	put16(crs[B],INCVA(ea,1));
+      } else {
+	if (T_FLOW) fprintf(stderr," STA\n");
       }
       continue;
     }
@@ -5245,7 +5381,8 @@ lcgt:
     if (opcode == 01002) {
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	//traceflags = ~TB_MAP;
-	if (T_FLOW || T_PCL) fprintf(stderr,"#%d %o/%o: PCL %o/%o\n", instcount, RPH, RPL-2, ea>>16, ea&0xFFFF);
+	//if (T_FLOW || T_PCL) fprintf(stderr,"#%d %o/%o: PCL %o/%o\n", instcount, RPH, RPL-2, ea>>16, ea&0xFFFF);
+	if (T_FLOW || T_PCL) fprintf(stderr," PCL %s\n", searchloadmap(ea, 'e'));
 	pcl(ea);
       } else {
 	if (T_FLOW) fprintf(stderr," CREP\n");
