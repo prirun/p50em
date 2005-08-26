@@ -189,6 +189,8 @@ void devasr (short class, short func, short device) {
   static int ttydev;
   static int ttyflags;
   static int needflush;     /* true if data has been written but not flushed */
+  static int atbol=1;       /* true if cursor is at bol */
+  static int atnewl=1;      /* true if cursor is on a blank line */
   fd_set readfds;
   struct timeval timeout;
   unsigned char ch;
@@ -301,7 +303,17 @@ readasr:
       ch = crs[A] & 0x7f;
       if (T_INST) fprintf(stderr," char to write=%o: %c\n", crs[A], ch);
       if (ch > 0) {
-	putchar(crs[A] & 0x7f);
+	if (atbol && atnewl)
+	  printf("%10d| ", instcount);
+	putchar(ch);
+	if (ch == 015)
+	  atbol = 1;
+	else if (ch == 012)
+	  atnewl = 1;
+	else {
+	  atbol = 0;
+	  atnewl = 0;
+	}
 	needflush = 1;
 	devpoll[device] = instpermsec*100;
       }

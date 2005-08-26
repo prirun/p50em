@@ -220,7 +220,7 @@ jmp_buf jmpbuf;                      /* for longjumps to the fetch loop */
 #define MEMSIZE 4*1024*1024
 unsigned short mem[MEMSIZE];   /* system's physical memory */
 
-#define MAKEVA(seg,word) (((int)(seg))<<16) | (word)
+#define MAKEVA(seg,word) ((((int)(seg))<<16) | (word))
 
 /* returns the incremented value of a virtual address, wrapping to word
    zero at the end of a segment (word portion = 0177777) */
@@ -535,10 +535,10 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access) {
       *(stlbp->pmep) &= ~020000;    /* reset unmodified bit in memory */
     }
     pa = (stlbp->ppn << 10) | (ea & 0x3FF);
+    if (T_MAP) fprintf(stderr,"        for ea %o/%o, stlbix=%d, pa=%o	loaded at #%d\n", ea>>16, ea&0xffff, stlbix, pa, stlbp->load_ic);
   } else {
     pa = ea & 0x3FFFFF;
   }
-  if (T_MAP) fprintf(stderr,"        for ea %o/%o, stlbix=%d, pa=%o	loaded at #%d\n", ea>>16, ea&0xffff, stlbix, pa, stlbp->load_ic);
   if (pa <= MEMSIZE)
     return pa;
   printf(" map: Memory address %o (%o/%o) is out of range!\n", ea, ea>>16, ea & 0xffff);
@@ -805,9 +805,10 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
       pxfvec = get32(pcbp+PCBFVR0);           /* use R0 handler */
     else if (fvec == PAGEFAULT)
       pxfvec = get32(pcbp+PCBFVPF);
-    else
-      /* NOTE: probably need to weaken ring field on pxfvec in this case */
+    else {
       pxfvec = get32(pcbp+PCBFVEC+2*ring);    /* use current ring handler */
+      pxfvec |= ((int)ring) << 29;            /* weaken */
+    }
 
     /* push a concealed stack entry */
 
@@ -1484,6 +1485,11 @@ pcl (ea_t ecbea) {
   ea_t stackfp;               /* new stack frame pointer */
   pa_t pa;                    /* physical address of ecb */
   unsigned short brsave[6];   /* old PB,SB,LB */
+
+  if (ecbea == MAKEVA(06,0164600)) {
+    printf("pcl: calling fatal$ at %d\n", instcount);
+    //savetraceflags = ~TB_MAP;
+  }
 
   /* get segment access; mapva ensures either read or gate */
 
@@ -2548,11 +2554,16 @@ main (int argc, char **argv) {
 
   while (1) {
 
-#if 0
-    /* this is to debug ppa problem */
-    if (instcount > 85400000)
+    if (0 && instcount > 85400000)   /* this is to debug ppa problem */
       traceflags = ~TB_MAP;
-#endif
+
+    if (0 && instcount > 99700000)   /* this is to debug disk rd err problem */
+      traceflags = ~TB_MAP;
+
+    if (savetraceflags && crs[OWNERL] == 0100100)
+      traceflags = savetraceflags;
+    else
+      traceflags = 0;
 
 #if 0
     /* NOTE: don't trace TFLADJ loops */
@@ -3211,9 +3222,11 @@ stfa:
 
 	if (inst == 001702) {
 	  if (T_FLOW) fprintf(stderr," IDLE?\n", inst);
+	  printf(" IDLE? at #%d\n", instcount);
 	  RESTRICT();
+	  fault(UIIFAULT, RPL, RP);
 	  //traceflags = ~TB_MAP;
-	  dispatcher();
+	  //dispatcher();
 	  continue;
 	}
 
@@ -3696,7 +3709,7 @@ bidy:
 	if (inst == 0140734) {
 	  if (T_FLOW) fprintf(stderr," BDX\n");
 	  crs[X]--;
-#if 1
+#if 0
 	  if (RPL == 070512 && traceflags != 0) {   /* backstop loop */
 	    fprintf(stderr," Suppressing backstop trace\n");
 	    savetraceflags = traceflags;
