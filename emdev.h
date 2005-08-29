@@ -129,6 +129,9 @@ void devnull (short class, short func, short device) {
 
    NOTES:
    - needs to set -icanon -icrnl on system console tty
+   - only works with ASRATE 3410 - not 7672 (19,200 bps)
+   - input ID is wrong, causes OCP '0477 on clock interrupt
+   - instruction counters on output are bogus, need to intercept TNOUA instead
 
    OCP '0004 = initialize for input only, echoplex, 110 baud, 8-bit, no parity
    OCP '0104 = same, but for output only
@@ -303,8 +306,10 @@ readasr:
       ch = crs[A] & 0x7f;
       if (T_INST) fprintf(stderr," char to write=%o: %c\n", crs[A], ch);
       if (ch > 0) {
+#if 0
 	if (atbol && atnewl)
 	  printf("%10d| ", instcount);
+#endif
 	putchar(ch);
 	if (ch == 015)
 	  atbol = 1;
@@ -792,7 +797,7 @@ void devdisk (short class, short func, short device) {
 
       case 7: /* DSTALL = Stall */
 	if (T_INST || T_DIO) fprintf(stderr," stall\n");
-	devpoll[device] = instpermsec/5;
+	devpoll[device] = instpermsec/5;   /* 200 microseconds, sb 210 */
 	return;
 
       case 9: /* DSTAT = Store status to memory */
