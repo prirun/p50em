@@ -1680,7 +1680,7 @@ pcl (ea_t ecbea) {
     *(unsigned int *)(crs+SB) = (stackfp & ~RINGMASK32) | (RP & RINGMASK32);
   if (T_PCL) fprintf(stderr," new SB=%o/%o\n", crs[SBH], crs[SBL]);
   *(unsigned int *)(crs+LB) = *(unsigned int *)(ecb+6);
-  newkeys(ecb[8] & 0177760);
+  newkeys(ecb[8] & 0177770);
 
   /* update the stack free pointer; this has to wait until after all
      memory accesses, in case of stack page faults (PCL restarts).
@@ -1833,7 +1833,7 @@ void prtn() {
   RP = newrp | (RP & RINGMASK32);
   *(unsigned int *)(crs+SB) = newsb;
   *(unsigned int *)(crs+LB) = newlb;
-  newkeys(keys & 0177760);
+  newkeys(keys & 0177770);
   if (T_INST) fprintf(stderr," Finished PRTN, RP=%o/%o\n", RPH, RPL);
 }
 
@@ -2057,11 +2057,12 @@ dispatcher() {
   crs[KEYS] &= ~3;                           /* erase "in dispatcher" and "save done" */
   if (T_PX) fprintf(stderr,"disp: returning from dispatcher, running process %o/%o at %o/%o, modals=%o\n", crs[OWNERH], crs[OWNERL], RPH, RPL, crs[MODALS]);
 
-  /* if this process' abort flags are set, process fault */
+  /* if this process' abort flags are set, clear them and take process fault */
 
   utempa = get16r(pcbp+PCBABT, 0);
   if (utempa != 0) {
     if (T_PX) fprintf(stderr,"dispatch: abort flags for %o are %o\n", crs[OWNERL], utempa);
+    put16r(0, pcbp+PCBABT, 0);
     fault(PROCESSFAULT, utempa, 0);
     fatal("fault returned after process fault");    
   }
@@ -2385,18 +2386,21 @@ ldc(n) {
     if (crsl[flr] & 0x8000) {
       crs[A] = m & 0xFF;
       crsl[flr] &= 0xFFFF0FFF;
-      crsl[far] = (crsl[far]+1) & 0x6FFFFFFF;
+      crsl[far] = (crsl[far] & 0x6FFF0000) | ((crsl[far]+1) & 0xFFFF); \
       if (T_INST) fprintf(stderr," ldc %d = '%o (%c) from %o/%o right\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
+      //printf(" ldc %d = '%o (%c) from %o/%o right\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
     } else {
       crs[A] = m >> 8;
       crsl[flr] |= 0x8000;
       if (T_INST) fprintf(stderr," ldc %d = '%o (%c) from %o/%o left\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
+      //printf(" ldc %d = '%o (%c) from %o/%o left\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
     }
     utempl--;
     PUTFLR(n,utempl);
     crs[KEYS] &= ~0100;     /* reset EQ */
   } else {                  /* utempl == 0 */
     if (T_INST) fprintf(stderr," LDC %d limit\n", n);
+    //printf(" LDC %d limit\n", n);
     crs[A] = 0;
     crs[KEYS] |= 0100;      /* set EQ */
   }
@@ -2422,12 +2426,14 @@ stc(n) {
     m = get16(crsl[far]);
     if (crsl[flr] & 0x8000) {
       if (T_INST) fprintf(stderr," stc %d =  '%o (%c) to %o/%o right\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
+      //printf(" stc %d =  '%o (%c) to %o/%o right\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
       m = (m & 0xFF00) | (crs[A] & 0xFF);
       put16(m,crsl[far]);
       crsl[flr] &= 0xFFFF0FFF;
-      crsl[far] = (crsl[far]+1) & 0x6FFFFFFF;
+      crsl[far] = (crsl[far] & 0x6FFF0000) | ((crsl[far]+1) & 0xFFFF); \
     } else {
       if (T_INST) fprintf(stderr," stc %d = '%o (%c) to %o/%o left\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
+      //printf(" stc %d = '%o (%c) to %o/%o left\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
       m = (crs[A] << 8) | (m & 0xFF);
       put16(m,crsl[far]);
       crsl[flr] |= 0x8000;
@@ -2437,6 +2443,7 @@ stc(n) {
     crs[KEYS] &= ~0100;     /* reset EQ */
   } else {                  /* utempl == 0 */
     if (T_INST) fprintf(stderr," STC %d limit\n", n);
+    //printf(" STC %d limit\n", n);
     crs[KEYS] |= 0100;      /* set EQ */
   }
 }
@@ -2471,7 +2478,11 @@ main (int argc, char **argv) {
   unsigned short trapvalue;
   ea_t trapaddr;
   unsigned short stpm[8];
-  unsigned short zcmf1, zcmf2, zcmc1, zcmc2, zcmres;
+
+  unsigned short zresult, zclen1, zclen2, zaccess;
+  unsigned int zlen1, zlen2;
+  ea_t zea1, zea2;
+  unsigned char zch1, zch2, *zcp1, *zcp2, zspace;
 
   unsigned int instpermsecmask = 03777;   /* nearest mask of above */
   unsigned long long bootmsec;            /* time we booted */
@@ -3047,7 +3058,7 @@ stfa:
 
 	if (inst == 001015) {
 	  if (T_FLOW) fprintf(stderr," TAK\n");
-	  newkeys(crs[A] & 0177760);
+	  newkeys(crs[A] & 0177770);
 	  continue;
 	}
 
@@ -3152,84 +3163,154 @@ stfa:
 	/* Decimal and character instructions */
 
 #if 1
+ 
+#if 1
+#define ZGETC(zea, zlen, zcp, zclen, zch) \
+  if (zclen == 0) { \
+    zcp = (unsigned char *) (mem+mapva(zea, RACC, &zaccess, RP)); \
+    zclen = 2048 - (zea & 01777)*2; \
+    if (zea & EXTMASK32) { \
+      zcp++; \
+      zclen--; \
+    } \
+    if (zclen >= zlen) \
+      zclen = zlen; \
+    else \
+      zea = (zea & 0xEFFF0000) | ((zea+0x400) & 0xFC00); \
+  } \
+  zch = *zcp; \
+  zcp++; \
+  zclen--; \
+  zlen--
+
+#define ZPUTC(zea, zlen, zcp, zclen, zch) \
+  if (zclen == 0) { \
+    zcp = (unsigned char *) (mem+mapva(zea, WACC, &zaccess, RP)); \
+    zclen = 2048 - (zea & 01777)*2; \
+    if (zea & EXTMASK32) { \
+      zcp++; \
+      zclen--; \
+    } \
+    if (zclen >= zlen) \
+      zclen = zlen; \
+    else \
+      zea = (zea & 0xEFFF0000) | ((zea+0x400) & 0xFC00); \
+  } \
+  *zcp = zch; \
+  zcp++; \
+  zclen--; \
+  zlen--
+
+#endif
+
 	if (inst == 001114) {
 	  if (T_FLOW) fprintf(stderr," ZMV\n");
+	  if (crs[KEYS] & 020)
+	    zspace = 040;
+	  else
+	    zspace = 0240;
+	  //printf("ZMV: source=%o/%o, len=%d, dest=%o/%o, len=%d, keys=%o\n", crsl[FAR0]>>16, crsl[FAR0]&0xffff, GETFLR(0), crsl[FAR1]>>16, crsl[FAR1]&0xffff, GETFLR(1), crs[KEYS]);
 	  utempa = crs[A];
 	  do {
 	    ldc(0);
 	    if (!(crs[KEYS] & 0100))
 	      stc(1);
 	    else {
-	      crs[A] = 0240;
+	      crs[A] = zspace;
 	      do {
 		stc(1);
 	      } while (!(crs[KEYS] & 0100));
 	    }
 	  } while (!(crs[KEYS] & 0100));
 	  crs[A] = utempa;
+	  //printf("ZMV finished\n");
 	  continue;
 	}
 
 	if (inst == 001115) {
 	  if (T_FLOW) fprintf(stderr," ZMVD\n");
-	  utempa = crs[A];
-	  utempl = GETFLR(1);
-	  PUTFLR(0, utempl);
-	  if (T_INST) fprintf(stderr," source=%o/%o, len=%d, dest=%o/%o, len=%d\n", crsl[FAR0]>>16, crsl[FAR0]&0xffff, GETFLR(0), crsl[FAR1]>>16, crsl[FAR0]&0xffff, GETFLR(1));
-	  ldc(0);
-	  while (!(crs[KEYS] & 0100)) {
-	    stc(1);
-	    ldc(0);
+	  zlen1 = GETFLR(1);
+	  zlen2 = zlen1;
+	  zea1 = crsl[FAR0];
+	  if (crsl[FLR0] & 0x8000)
+	    zea1 |= EXTMASK32;
+	  zea2 = crsl[FAR1];
+	  if (crsl[FLR1] & 0x8000)
+	    zea2 |= EXTMASK32;
+	  if (T_INST) fprintf(stderr," ea1=%o/%o, ea2=%o/%o, len=%d\n", zea1>>16, zea1&0xffff, zea2>>16, zea2&0xffff, zlen1);
+	  //printf("ZMVD: ea1=%o/%o, ea2=%o/%o, len=%d\n", zea1>>16, zea1&0xffff, zea2>>16, zea2&0xffff, zlen1);
+	  zclen1 = 0;
+	  zclen2 = 0;
+	  while (zlen1) {
+	    ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
 	  }
-	  crs[A] = utempa;
+	  crs[KEYS] |= 0100;
 	  continue;
 	}
 
 	/* NOTE: ZFIL is used early after PX enabled, and can be used to cause
-	   a UII fault to debug CALF etc. */
+	   a UII fault to debug CALF etc.
+
+	   Could use memset(zcp2, zch2, zclen2) to fill by pieces.
+	*/
 
 	if (inst == 001116) {
 	  if (T_FLOW) fprintf(stderr," ZFIL\n");
-	  do {
-	    stc(1);
-	  } while (!(crs[KEYS] & 0100));
+	  zlen2 = GETFLR(1);
+	  zea2 = crsl[FAR1];
+	  if (crsl[FLR1] & 0x8000)
+	    zea2 |= EXTMASK32;
+	  if (T_INST) fprintf(stderr," ea=%o/%o, len=%d\n", zea2>>16, zea2&0xffff, GETFLR(1));
+	  //printf("ZFIL: ea=%o/%o, len=%d\n", zea2>>16, zea2&0xffff, GETFLR(1));
+	  zclen2 = 0;
+	  zch2 = crs[A];
+	  while (zlen2) {
+	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch2);
+	    //printf(" after put, zlen2=%d, zcp2=%x, zclen2=%d, zch2=%o\n", zlen2, zcp2, zclen2, zch2);
+	  }
+	  crs[KEYS] |= 0100;
 	  continue;
 	}
 
 	if (inst == 001117) {
 	  if (T_FLOW) fprintf(stderr," ZCM\n");
-	  utempa = crs[A];
-	  zcmres = 0100;                /* assume equal */
-	  zcmf1 = 1; zcmf2 = 1;         /* data avail in 1 & 2 */
-	  while (zcmf1 || zcmf2) {
-	    if (zcmf1) {
-	      ldc(0);
-	      if (!(crs[KEYS] & 0100))
-		zcmc1 = crs[A];
-	      else {
-		zcmc1 = 0240;           /* Prime space character */
-		zcmf1 = 0;
-	      }
-	    }
-	    if (zcmf2) {
-	      ldc(1);
-	      if (!(crs[KEYS] & 0100))
-		zcmc2 = crs[A];
-	      else {
-		zcmc2 = 0240;
-		zcmf2 = 0;
-	      }
-	    }
-	    if (zcmc1 < zcmc2) {
-	      zcmres = 0200;
+	  if (crs[KEYS] & 020)
+	    zspace = 040;
+	  else
+	    zspace = 0240;
+	  zlen1 = GETFLR(0);
+	  zlen2 = GETFLR(1);
+	  zea1 = crsl[FAR0];
+	  if (crsl[FLR0] & 0x8000)
+	    zea1 |= EXTMASK32;
+	  zea2 = crsl[FAR1];
+	  if (crsl[FLR1] & 0x8000)
+	    zea2 |= EXTMASK32;
+	  if (T_INST) fprintf(stderr," ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, GETFLR(0), zea2>>16, zea2&0xffff, GETFLR(1));
+	  zresult = 0100;                /* assume equal */
+	  zclen1 = 0;
+	  zclen2 = 0;
+	  while (zlen1 || zlen2) {
+	    if (zlen1) {
+	      ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+	    } else
+	      zch1 = zspace;
+	    if (T_INST) fprintf(stderr," zch1=%o\n", zch1);
+	    if (zlen2) {
+	      ZGETC(zea2, zlen2, zcp2, zclen2, zch2);
+	    } else
+	      zch2 = zspace;
+	    if (T_INST) fprintf(stderr," zch2=%o\n", zch2);
+	    if (zch1 < zch2) {
+	      zresult = 0200;
 	      break;
-	    } else if (zcmc1 > zcmc2) {
-	      zcmres = 0;
+	    } else if (zch1 > zch2) {
+	      zresult = 0;
 	      break;
 	    }
 	  }
-	  crs[KEYS] = (crs[KEYS] & ~0300) | zcmres;
-	  crs[A] = utempa;
+	  crs[KEYS] = (crs[KEYS] & ~0300) | zresult;
 	  continue;
 	}
 #endif
