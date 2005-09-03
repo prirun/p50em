@@ -198,8 +198,10 @@ char gen0nam[][5] = {
 #define T_FAULT (traceflags & TB_FAULT)
 #define T_PX (traceflags & TB_PX)
 
+#define T_TRACE1 TB_FLOW | TB_INST | T_DIO | T_PCL | T_FAULT
+
 int traceflags=0;                    /* each bit is a trace flag */
-int savetraceflags=0;                /* see ITLB, BDX */
+int savetraceflags=0;                /* see ITLB */
 
 int intvec=-1;                       /* currently raised interrupt (if >= zero) */
 
@@ -208,7 +210,9 @@ int intvec=-1;                       /* currently raised interrupt (if >= zero) 
 
 unsigned short sswitch = 0;          /* sense switches, set with --ss */
 
-unsigned short cpuid = 0;            /* STPM CPU model, set with --cpuid */
+/* NOTE: the default cpuid is a 4150: 2 MIPS, 32MB of memory */
+
+unsigned short cpuid = 27;           /* STPM CPU model, set with --cpuid */
 
 unsigned long instcount=0;           /* global instruction count */
 
@@ -218,10 +222,12 @@ unsigned int instpermsec = 2048;     /* initially assume 2048 inst/msec */
 
 jmp_buf jmpbuf;                      /* for longjumps to the fetch loop */
 
-/* define a 4 million 16-bit word system memory; later systems have 
-   more main memory capacity, using a different page map setup */
+/* The standard Prime physical memory limit on early machines is 8MB.
+   Later machines have higher memory capacities, up to 1GB, using 
+   32-bit page tables. 
+   NOTE: rev 20 is limited to 32MB on all machines. */
 
-#define MEMSIZE 4*1024*1024
+#define MEMSIZE 16*1024*1024   /* 32 MB */
 unsigned short mem[MEMSIZE];   /* system's physical memory */
 
 #define MAKEVA(seg,word) ((((int)(seg))<<16) | (word))
@@ -233,20 +239,21 @@ unsigned short mem[MEMSIZE];   /* system's physical memory */
 
 /* STLB cache is defined here.  There are several different styles on
    various Prime models.  This is modeled after the 6350 STLB, but is
-   only 1-way associative */
+   only 1-way associative and doesn't have slots dedicated to I/O
+   segments */
 
 #define STLBENTS 512
 
 typedef struct {
-  char valid;                 /* 1 if this STLB entry is valid, zero otherwise */
-  char unmodified;            /* 1 if this page hasn't been modified, 0 if modified */
+  char valid;                 /* 1 if STLB entry is valid, zero otherwise */
+  char unmodified;            /* 1 if page hasn't been modified, 0 if modified */
   //  char shared;                /* 1 if page is shared and can't be cached */
   char access[4];             /* ring n access rights */
   unsigned short procid;      /* process id for segments >= '4000 */
   unsigned short seg;         /* segment number */
-  unsigned int ppn;           /* physical page number (128MB limit) */
+  unsigned int ppn;           /* physical page number (15 bits = 64MB limit) */
   unsigned short *pmep;       /* pointer to page table flag word */
-  unsigned long load_ic;      /* instruction where STLB was loaded */
+  unsigned long load_ic;      /* instruction where STLB was loaded (for debug) */
 } stlbe_t;
 
 stlbe_t stlb[STLBENTS];
@@ -305,9 +312,12 @@ unsigned short amask;                /* address mask */
 #define SEGFAULT      076
 #define POINTERFAULT  077
 
+ea_t tnoua_ea=0, tnou_ea=0;
 int verbose;                         /* --v (not used anymore) */
 int domemdump;                       /* --memdump arg */
 int boot;                            /* true if reading a boot record */
+int pmap32bits;                      /* true if 32-bit page maps */
+int csoffset;                        /* concealed stack segment offset */
 
 /* load map related data, specified with --map */
 
@@ -397,6 +407,10 @@ readloadmap(char *filename) {
       addsym(sym, pbseg, pbword, 'p');
       addsym(sym, lbseg, lbword, 'l');
       //printf("adding proc symbol, line=%s\n", line);
+      if (tnou_ea == 0 && strcmp(sym,"TNOU") == 0)
+	tnou_ea = MAKEVA(ecbseg, ecbword);
+      if (tnoua_ea == 0 && strcmp(sym,"TNOUA") == 0)
+	tnoua_ea = MAKEVA(ecbseg, ecbword);
     } else if (sscanf(line, "%s %o %o", sym, &segno, &wordno) == 3) {
       addsym(sym, segno, wordno, 'x');
       //printf("adding symbol, line=%s\n", line);
@@ -490,7 +504,7 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
   short relseg,seg,nsegs,ring;
   unsigned short pte, stlbix;
   stlbe_t *stlbp;
-  unsigned int dtar,sdw,staddr,ptaddr,pmaddr;
+  unsigned int dtar,sdw,staddr,ptaddr,pmaddr,ppn;
   pa_t pa;
 
   seg = SEGNO(ea);
@@ -521,9 +535,17 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
       if (sdw & 0x8000)
 	fault(SEGFAULT, 2, ea);   /* fcode = sdw fault bit set */
       ptaddr = (((sdw & 0x3F)<<10) | (sdw>>22)) << 6;
-      pmaddr = ptaddr + PAGENO(ea);
-      pte = mem[pmaddr];
-      if (T_MAP) fprintf(stderr,"        ptaddr=%o, pmaddr=%o, pte=%o\n", ptaddr, pmaddr, pte);
+      if (pmap32bits) {
+	pmaddr = ptaddr + 2*PAGENO(ea);
+	pte = mem[pmaddr];
+	ppn = mem[pmaddr+1];
+	if (T_MAP) fprintf(stderr,"        ptaddr=%o, pmaddr=%o, pte=%o\n", ptaddr, pmaddr, pte);
+      } else {
+	pmaddr = ptaddr + PAGENO(ea);
+	pte = mem[pmaddr];
+	ppn = pte & 0xFFF;
+	if (T_MAP) fprintf(stderr,"        ptaddr=%o, pmaddr=%o, pte=%o\n", ptaddr, pmaddr, pte);
+      }
       if (!(pte & 0x8000))
 	fault(PAGEFAULT, 0, ea);
       mem[pmaddr] |= 040000;     /* set referenced bit */
@@ -534,7 +556,7 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
       stlbp->access[3] = (sdw >> 6) & 7;
       stlbp->procid = crs[OWNERL];
       stlbp->seg = seg;
-      stlbp->ppn = (pte & 0xFFF);
+      stlbp->ppn = ppn;
       stlbp->pmep = mem+pmaddr;
       stlbp->load_ic = instcount;
     }
@@ -548,7 +570,7 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
     pa = (stlbp->ppn << 10) | (ea & 0x3FF);
     if (T_MAP) fprintf(stderr,"        for ea %o/%o, stlbix=%d, pa=%o	loaded at #%d\n", ea>>16, ea&0xffff, stlbix, pa, stlbp->load_ic);
   } else {
-    pa = ea & 0x3FFFFF;
+    pa = ea & (MEMSIZE-1);
   }
   if (pa <= MEMSIZE)
     return pa;
@@ -727,7 +749,7 @@ void calf(ea_t ea) {
     this = last;
   else
     this = next-6;
-  csea = MAKEVA(crs[OWNERH], this);
+  csea = MAKEVA(crs[OWNERH]+csoffset, this);
   if (T_FAULT) fprintf(stderr,"CALF: cs frame is at %o/%o\n", csea>>16, csea&0xFFFF);
 
   /* make sure ecb specifies zero arguments */
@@ -843,7 +865,7 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
       if (T_FAULT) fprintf(stderr, "fault: Concealed stack wraparound to first");
       next = first;
     }
-    csea = MAKEVA(crs[OWNERH], next);
+    csea = MAKEVA(crs[OWNERH]+csoffset, next);
     put32r(faultrp, csea, 0);
     put16r(crs[KEYS], csea+2, 0);
     put16r(fcode, csea+3, 0);
@@ -1147,21 +1169,21 @@ unsigned int ea32i (ea_t earp, unsigned short inst, short i, short x) {
 
 
 ea_t apea(unsigned short *bitarg) {
-  unsigned short ibr, ea_s, ea_w, bit, br;
+  unsigned short ibr, ea_s, ea_w, bit, br, a;
   ea_t ea, ip;
   
   ibr = get16(RP);
   RPL++;
+  a = get16(RP);
+  RPL++;
   bit = (ibr >> 12) & 0xF;
   br = (ibr >> 8) & 3;
-  if (T_EAAP) fprintf(stderr," AP ibr=%o, br=%d, i=%d, bit=%d\n", ibr, br, (ibr & 004000) != 0, bit);
+  if (T_EAAP) fprintf(stderr," AP ibr=%o, br=%d, i=%d, bit=%d, a=%o\n", ibr, br, (ibr & 004000) != 0, bit, a);
 
   /* XXX: should ea ring be weakened with RP ring? */
 
   ea_s = crs[PBH + 2*br];
-  ea_w = crs[PBL + 2*br];
-  ea_w += get16(RP);
-  RPL++;
+  ea_w = crs[PBL + 2*br] + a;
   ea = MAKEVA(ea_s, ea_w);
   if (T_EAAP) fprintf(stderr," AP ea = %o/%o  %s\n", ea_s, ea_w, searchloadmap(ea,' '));
   if (ibr & 004000) {
@@ -1345,6 +1367,26 @@ ea_t stex(unsigned int extsize) {
   if (T_INST) fprintf(stderr," stack extension is at %o/%o\n", stackfp>>16, stackfp&0xffff);
   return stackfp;
 }
+
+
+void prtn() {
+  unsigned short stackrootseg;
+  ea_t newrp,newsb,newlb;
+  unsigned short keys;
+
+  stackrootseg = get16(*(unsigned int *)(crs+SB)+1);
+  put32(*(unsigned int *)(crs+SB), MAKEVA(stackrootseg,0));
+  newrp = get32(*(unsigned int *)(crs+SB)+2);
+  newsb = get32(*(unsigned int *)(crs+SB)+4);
+  newlb = get32(*(unsigned int *)(crs+SB)+6);
+  keys = get16(*(unsigned int *)(crs+SB)+8);
+  RP = newrp | (RP & RINGMASK32);
+  *(unsigned int *)(crs+SB) = newsb;
+  *(unsigned int *)(crs+LB) = newlb;
+  newkeys(keys & 0177770);
+  if (T_INST) fprintf(stderr," Finished PRTN, RP=%o/%o\n", RPH, RPL);
+}
+
 
 
 /* NOTE: the brsave array contains copies of the PB, SB, and LB base
@@ -1558,6 +1600,9 @@ pcl (ea_t ecbea) {
   ea_t stackfp;               /* new stack frame pointer */
   pa_t pa;                    /* physical address of ecb */
   unsigned short brsave[6];   /* old PB,SB,LB */
+  unsigned short utempa;
+  unsigned short tnstring[500];
+  unsigned short tnlen;
 
 #define FATAL$ MAKEVA(06,0164600)
 #define INIT$3 MAKEVA(013,0174041)
@@ -1574,12 +1619,6 @@ pcl (ea_t ecbea) {
 
   pa = mapva(ecbea, PACC, &access, RP);
   if (T_PCL) fprintf(stderr," ecb @ %o/%o, access=%d\n", ecbea>>16, ecbea&0xFFFF, access);
-
-#if 0
-  if (strstr(searchloadmap(ea,' '),"TNOU")) {
-    fprintf(stderr," TNOUx called!\n");
-  }
-#endif
 
   /* get a copy of the ecb.  gates must be aligned on a 16-word
      boundary, therefore can't cross a page boundary, and mapva has
@@ -1713,6 +1752,44 @@ pcl (ea_t ecbea) {
     crs[YL] = ecb[5];
     crs[XL] = 0;
     argt();
+
+#if 0
+    /* do something here to intercept TNOUx calls for user 1, to avoid
+       9600-bps system console issue.  This sort of works, but not all
+       console output is trapped so it gets mixed together.  Trapping
+       tolio$ may work better.  However, that has the problem of not
+       putting characters into the como file.  Could also trap, do
+       printf, let it go into asrbuf, ignore it in devasr.  With a big
+       ASRBUF, this might work fine.  */
+
+    if (ecbea == tnou_ea || ecbea == tnoua_ea) {
+      fprintf(stderr," TNOUx called, ea=%o/%o\n", ecbea>>16, ecbea&0xffff);
+      ea = *(unsigned int *)(crs+SB) + ecb[4];
+      utempa = get16(get32(ea));        /* userid */
+      if (utempa == 1) {
+	ea = ea + 6;
+	tnlen = get16(get32(ea));      /* length in bytes */
+	ea = get32(ea-3);              /* address of string */
+	for (i=0; i<(tnlen+1)/2; i++)
+	  tnstring[i] = get16(ea+i) & 0x7f7f;
+	tnstring[i] = 0;
+	if (ecbea == tnoua_ea) {
+	  printf("%s", tnstring);
+	  fflush(stdout);
+	} else
+	  printf("%s\n", tnstring);
+	prtn();
+	return;
+
+	/* HOWEVER, RP really needs to point to a real PRTN
+	   instruction in case prtn faults.  Right now, RP points to
+	   ARGT.  Maybe use flags in the stackframe header to indicate
+	   that the ARGT should actually prtn instead??
+	*/
+      }
+    }
+#endif
+
     RPL++;    /* advance real RP past ARGT after argument transfer */
   }
 }
@@ -1816,25 +1893,6 @@ argt() {
   }
 
   if (T_PCL) fprintf(stderr," Return RP=%o/%o\n", rp>>16, rp&0xffff);
-}
-
-
-void prtn() {
-  unsigned short stackrootseg;
-  ea_t newrp,newsb,newlb;
-  unsigned short keys;
-
-  stackrootseg = get16(*(unsigned int *)(crs+SB)+1);
-  put32(*(unsigned int *)(crs+SB), MAKEVA(stackrootseg,0));
-  newrp = get32(*(unsigned int *)(crs+SB)+2);
-  newsb = get32(*(unsigned int *)(crs+SB)+4);
-  newlb = get32(*(unsigned int *)(crs+SB)+6);
-  keys = get16(*(unsigned int *)(crs+SB)+8);
-  RP = newrp | (RP & RINGMASK32);
-  *(unsigned int *)(crs+SB) = newsb;
-  *(unsigned int *)(crs+LB) = newlb;
-  newkeys(keys & 0177770);
-  if (T_INST) fprintf(stderr," Finished PRTN, RP=%o/%o\n", RPH, RPL);
 }
 
 
@@ -2478,6 +2536,7 @@ main (int argc, char **argv) {
   unsigned short trapvalue;
   ea_t trapaddr;
   unsigned short stpm[8];
+  unsigned short access;
 
   unsigned short zresult, zclen1, zclen2, zaccess;
   unsigned int zlen1, zlen2;
@@ -2517,6 +2576,8 @@ main (int argc, char **argv) {
   verbose = 0;
   domemdump = 0;
   boot = 0;
+  pmap32bits = 0;
+  csoffset = 0;
 
   /* check args */
 
@@ -2541,7 +2602,7 @@ main (int argc, char **argv) {
 	sscanf(argv[i+1],"%d", &templ);
 	cpuid = templ;
       } else
-	cpuid = 0;
+	fprintf(stderr,"--cpuid needs an argument\n");
     } else if (strcmp(argv[i],"--trace") == 0)
       while (i+1 < argc && argv[i+1][0] != '-') {
 	if (strcmp(argv[i+1],"ear") == 0)
@@ -2579,6 +2640,12 @@ main (int argc, char **argv) {
     else if (argv[i][0] == '-' && argv[i][1] == '-')
       fprintf(stderr,"Unrecognized argument: %s\n", argv[i]);
   }
+
+  /* set some vars after the options have been read */
+
+  pmap32bits = (cpuid == 15 || cpuid == 18 || cpuid == 19 || cpuid == 24 || cpuid >= 26);
+  if ((26 <= cpuid && cpuid <= 29) || cpuid >= 35)
+    csoffset = 1;
 
   fprintf(stderr,"Sense switches set to %o\n", sswitch);
 
@@ -2627,9 +2694,6 @@ main (int argc, char **argv) {
   newkeys(rvec[6]);
   RPL = rvec[2];
 
-  if (RPL == 0161000)      /* hack for *DOS64; P is off by 3?? */
-    RPL = 0161003;
-
   if (domemdump)
     memdump(rvec[0], rvec[1]);
 
@@ -2653,19 +2717,8 @@ main (int argc, char **argv) {
 
   while (1) {
 
-    if (0 && instcount > 85400000)   /* this is to debug ppa problem */
+    if (0 && instcount > 46800000)  /* to debug LIOT on --cpuid 5 */
       traceflags = ~TB_MAP;
-
-    if (0 && instcount > 99700000)   /* this is to debug disk rd err problem */
-      traceflags = ~TB_MAP;
-
-#if 0
-    if (savetraceflags || (crs[MODALS] & 0100010)==010)
-      traceflags = ~TB_MAP;
-    else
-      traceflags = 0;
-#endif
-
 
 #if 0
     /* NOTE: don't trace TFLADJ loops */
@@ -2698,8 +2751,6 @@ main (int argc, char **argv) {
       if (devpoll[i] && (--devpoll[i] == 0)) {
 	if (!devmap[i])
 	  fatal("devpoll set but devmap is null");
-	if (RPL == 070511 && savetraceflags != 0)
-	  traceflags = savetraceflags;
 	devmap[i](4, 0, i);
       }
 
@@ -2707,8 +2758,6 @@ main (int argc, char **argv) {
 
     if (intvec >= 0 && (crs[MODALS] & 0100000) && inhcount == 0) {
       //printf("fetch: taking interrupt vector '%o, modals='%o\n", intvec, crs[MODALS]);
-      if (RPL == 070511 && savetraceflags != 0)
-	traceflags = savetraceflags;
       if (T_INST) fprintf(stderr, "\nfetch: taking interrupt vector '%o, modals='%o\n", intvec, crs[MODALS]);
       regs.sym.pswpb = RP;
       regs.sym.pswkeys = crs[KEYS];
@@ -3164,7 +3213,6 @@ stfa:
 
 #if 1
  
-#if 1
 #define ZGETC(zea, zlen, zcp, zclen, zch) \
   if (zclen == 0) { \
     zcp = (unsigned char *) (mem+mapva(zea, RACC, &zaccess, RP)); \
@@ -3201,8 +3249,6 @@ stfa:
   zclen--; \
   zlen--
 
-#endif
-
 	if (inst == 001114) {
 	  if (T_FLOW) fprintf(stderr," ZMV\n");
 	  if (crs[KEYS] & 020)
@@ -3210,20 +3256,25 @@ stfa:
 	  else
 	    zspace = 0240;
 	  //printf("ZMV: source=%o/%o, len=%d, dest=%o/%o, len=%d, keys=%o\n", crsl[FAR0]>>16, crsl[FAR0]&0xffff, GETFLR(0), crsl[FAR1]>>16, crsl[FAR1]&0xffff, GETFLR(1), crs[KEYS]);
-	  utempa = crs[A];
-	  do {
-	    ldc(0);
-	    if (!(crs[KEYS] & 0100))
-	      stc(1);
-	    else {
-	      crs[A] = zspace;
-	      do {
-		stc(1);
-	      } while (!(crs[KEYS] & 0100));
-	    }
-	  } while (!(crs[KEYS] & 0100));
-	  crs[A] = utempa;
-	  //printf("ZMV finished\n");
+	  zlen1 = GETFLR(0);
+	  zlen2 = GETFLR(1);
+	  zea1 = crsl[FAR0];
+	  if (crsl[FLR0] & 0x8000)
+	    zea1 |= EXTMASK32;
+	  zea2 = crsl[FAR1];
+	  if (crsl[FLR1] & 0x8000)
+	    zea2 |= EXTMASK32;
+	  if (T_INST) fprintf(stderr," ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
+	  zclen1 = 0;
+	  zclen2 = 0;
+	  while (zlen2) {
+	    if (zlen1) {
+	      ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+	    } else
+	      zch1 = zspace;
+	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+	  }
+	  crs[KEYS] |= 0100;
 	  continue;
 	}
 
@@ -3241,7 +3292,7 @@ stfa:
 	  //printf("ZMVD: ea1=%o/%o, ea2=%o/%o, len=%d\n", zea1>>16, zea1&0xffff, zea2>>16, zea2&0xffff, zlen1);
 	  zclen1 = 0;
 	  zclen2 = 0;
-	  while (zlen1) {
+	  while (zlen2) {
 	    ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
 	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
 	  }
@@ -3377,17 +3428,36 @@ stfa:
 	  continue;
 	}
 
-	if (inst == 000711) {
-	  if (T_FLOW) fprintf(stderr," LPSW\n");
+	/* NOTE: L contains target virtual address.  How does 
+	   LIOT use the target virtual address to "help invalidate
+	   the cache"? */
+
+	if (inst == 000044) {
+	  if (T_FLOW) fprintf(stderr," LIOT\n");
 	  RESTRICT();
-	  lpsw();
+	  ea = apea(NULL);
+	  utempa = STLBIX(ea);
+	  stlb[utempa].valid = 0;
+	  if (T_INST) fprintf(stderr," invalidated STLB index %d\n", utempa);
+	  mapva(ea, RACC, &access, RP);
+	  if (T_INST) fprintf(stderr," loaded STLB for %o/%o\n", ea>>16, ea&0xffff);
+	  continue;
+	}
+
+	if (inst == 000064) {
+	  if (T_FLOW) fprintf(stderr," PTLB\n");
+	  RESTRICT();
+	  utempl = *(unsigned int *)(crs+L);
+	  for (utempa = 0; utempa < STLBENTS; utempa++)
+	    if ((utempl & 0x80000000) || stlb[utempa].ppn == utempl)
+	      stlb[utempa].valid = 0;
 	  continue;
 	}
 
 	if (inst == 000615) {
 	  if (T_FLOW) fprintf(stderr," ITLB\n");
 	  RESTRICT();
-	  utempl = *(int *)(crs+L);
+	  utempl = *(unsigned int *)(crs+L);
 
 	  /* NOTE: Primos substitutes an ITLB loop for PTLB, and the ITLB
 	     segno is 1, ie, it looks like using segment 1 invalidates all
@@ -3413,6 +3483,13 @@ stfa:
 	      fprintf(stderr," Restoring DIAG trace\n");
 	      traceflags = savetraceflags;
 	    }
+	  continue;
+	}
+
+	if (inst == 000711) {
+	  if (T_FLOW) fprintf(stderr," LPSW\n");
+	  RESTRICT();
+	  lpsw();
 	  continue;
 	}
 
@@ -3443,8 +3520,8 @@ stfa:
 	*/
 
 	if (inst == 001702) {
-	  if (T_FLOW) fprintf(stderr," IDLE?\n", inst);
-	  printf(" IDLE? at #%d, OWNERL=%o, RP=%o/%o\n", instcount, crs[OWNERL], RPH, RPL);
+	  if (T_FLOW) fprintf(stderr," 1702?\n", inst);
+	  printf(" 1702? at #%d, OWNERL=%o, RP=%o/%o\n", instcount, crs[OWNERL], RPH, RPL);
 	  RESTRICT();
 	  //fault(UIIFAULT, RPL, RP);
 	  traceflags = ~TB_MAP;
@@ -3526,8 +3603,10 @@ irtn:
 
 	if (inst == 001010) {                 /* E32I */
 	  if (T_FLOW) fprintf(stderr," E32I\n");
-	  fault(RESTRICTFAULT, 0, 0);
-	  newkeys((crs[KEYS] & 0161777) | 4<<10);
+	  if (cpuid < 4)
+	    fault(RESTRICTFAULT, 0, 0);
+	  else
+	    newkeys((crs[KEYS] & 0161777) | 4<<10);
 	  continue;
 	}
 
@@ -3931,17 +4010,30 @@ bidy:
 	if (inst == 0140734) {
 	  if (T_FLOW) fprintf(stderr," BDX\n");
 	  crs[X]--;
-#if 0
-	  if (RPL == 070512 && traceflags != 0) {   /* backstop loop */
-	    fprintf(stderr," Suppressing backstop trace\n");
-	    savetraceflags = traceflags;
-	    traceflags = 0;
-	  } else if (RPL == 070512 && savetraceflags != 0 && crs[X] == 0) {
-	    fprintf(stderr," Restoring backstop trace\n");
-	    traceflags = savetraceflags;
+#if 1
+	  m = get16(RP);
+	  if (crs[X] > 100 && m == RPL-1) {
+	    //fprintf(stderr," BDX loop detected at %o/%o, remainder=%d\n", prevpc>>16, prevpc&0xffff, crs[X]);
+	    utempl = instpermsec*10;
+	    for (i=0; i<64; i++)
+	      if (devpoll[i] && devpoll[i] < utempl)
+		utempl = devpoll[i];
+	    utempl--;
+	    for (i=0; i<64; i++)
+	      if (devpoll[i])
+		devpoll[i] -= utempl;
+	    usleep(utempl*1000/instpermsec);
+	    crs[X] = 0;
+	    instcount += utempl;
 	  }
-#endif
+	  if (crs[X] != 0)
+	    RPL = m;
+	  else
+	    RPL++;
+	  continue;
+#else
 	  goto bidx;
+#endif
 	}
 
 	if (inst == 0141206) {
@@ -5206,21 +5298,6 @@ keys = 14200, modals=100177
     if (opcode == 00100) {
       if (T_FLOW) fprintf(stderr," JMP\n");
       RP = ea;
-
-#if 1
-      /* it seems that on some DIAG tests (see JST), the monitor is
-	 incorrectly entered in R-mode, which causes LDL to be
-	 interpreted as JEQ, and the test incorrectly halts.  This
-	 helps with that, though the wrong tests appear to run, ie, it
-	 says it's running test 1 but runs test 2, and some tests fail
-	 that should work.  (This latter problem is fixed with the JST
-	 change to use the segment number on a long JST) */
-
-      if (prevpc < 0100000 && RP >= 0100000 && (crs[KEYS] & 010000) == 0) {
-	printf("Switching to V mode for DIAGS, keys=%o!\n", crs[KEYS]);
-	newkeys((crs[KEYS] & ~016000) | 014000);
-      }
-#endif
       continue;
     }
 
@@ -5365,45 +5442,7 @@ keys = 14200, modals=100177
     if (opcode == 01000) {
       if (T_FLOW) fprintf(stderr," JST\n");
 
-#if 1
-      /* NOTE: CPU.KEYS.SR, CPU.LOGICAL.VI, CPU.CLEAR.VI, CPU.MOVE.VI all
-	 fail with unexpected seg faults on a 2-word JST instruction that
-	 references a weird segment.
-
-	 Ignoring the ea segment number gets past the segfault and seems
-	 to begin the actual test, but then it fails with program halts
-	 (and for CPU.CLEAR.VI, executes the Case 2 instruction CRLE when
-	 it says it's executing Case 1)
-
-	 Using the ea segment number as the JST word address seems to
-	 work better, and executes CRE like it should.  However, the
-	 program still halts in the monitor portion (see below) and
-	 this hack causes the Primos rev 22 boot to fail, even before
-	 the memory test... :(
-
-0/140561: 43400         A='0/0 B='177777/-1 X=147635/-12387 Y=177777/-1 C=0 L=0 LT=0 EQ=1       #25131753 [ 0]
- opcode=00100, i=0, x=40000
- ea32r64r: i=0, x=1
- special, new opcode=00100, class=0
- Class 0, new ea=3
- Preindex, ea=3, X='147635/-12387
- Preindex, new ea=147640
- EA: 0/147640
- JMP
-
-0/147640: 5414          A='0/0 B='177777/-1 X=147635/-12387 Y=177777/-1 C=0 L=0 LT=0 EQ=1       #25131754 [ 0]
- opcode=00200, i=0, x=0
- ea32r64r: i=0, x=0
- special, new opcode=00203, class=0
- Class 0, new ea=115561
- EA: 0/115561
- JEQ
-
-0/115561: 0             A='0/0 B='177777/-1 X=147635/-12387 Y=177777/-1 C=0 L=0 LT=0 EQ=1       #25131755 [ 0]
- generic class 0
- HLT
-      */
-
+#if 0
       ea = MAKEVA(RPH, ea & 0xFFFF);
 #endif
       if (amask == 0177777)

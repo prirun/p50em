@@ -327,6 +327,9 @@ readasr:
       IOSKIP;
     } else if (04 <= func && func <= 07) {  /* write control register 1/2 */
       IOSKIP;
+    } else if (func == 017) {
+      /* NOTE: 9950 does this in rev 20, others don't */
+      IOSKIP;
     } else {
       printf("Unimplemented OTA '04 function '%02o\n", func);
       fatal(NULL);
@@ -685,9 +688,9 @@ void devdisk (short class, short func, short device) {
   case 4:   /* poll (run channel program) */
 
     while (dc[device].state == S_RUN) {
-      m = get16(dc[device].oar);
-      m1 = get16(dc[device].oar+1);
-      if (T_INST || T_DIO) fprintf(stderr,"\nDIOC %o: %o %o %o\n", dc[device].oar, m, m1, get16(dc[device].oar+2));
+      m = get16r(dc[device].oar, 0);
+      m1 = get16r(dc[device].oar+1, 0);
+      if (T_INST || T_DIO) fprintf(stderr,"\nDIOC %o: %o %o %o\n", dc[device].oar, m, m1, get16r(dc[device].oar+2, 0));
       dc[device].oar += 2;
       order = m>>12;
       if (m & 04000) {   /* "execute if ..." */
@@ -707,7 +710,7 @@ void devdisk (short class, short func, short device) {
       case 2: /* SFORM = Format */
       case 5: /* SREAD = Read */
       case 6: /* SWRITE = Write */
-	m2 = get16(dc[device].oar++);
+	m2 = get16r(dc[device].oar++, 0);
 	recsize = m & 017;
 	track = m1 & 01777;
 	rec = m2 >> 8;   /* # records for format, rec # for R/W */
@@ -756,12 +759,12 @@ void devdisk (short class, short func, short device) {
 	      }
 	      if (crs[MODALS] & 020)
 		for (i=0; i<dmanw; i++)
-		  put16(iobuf[i], dmaaddr+i);
+		  put16r(iobuf[i], dmaaddr+i, 0);
 	    } else {
 	      if (crs[MODALS] & 020) {
 		iobufp = iobuf;
 		for (i=0; i<dmanw; i++)
-		  iobuf[i] = get16(dmaaddr+i);
+		  iobuf[i] = get16r(dmaaddr+i, 0);
 	      } else
 		iobufp = mem+dmaaddr;
 	      if (write(dc[device].unit[u].devfd, (char *)iobufp, dmanw*2) != dmanw*2) {
@@ -797,17 +800,21 @@ void devdisk (short class, short func, short device) {
 
       case 7: /* DSTALL = Stall */
 	if (T_INST || T_DIO) fprintf(stderr," stall\n");
+#if 1
 	devpoll[device] = instpermsec/5;   /* 200 microseconds, sb 210 */
 	return;
+#else
+	break;
+#endif
 
       case 9: /* DSTAT = Store status to memory */
 	if (T_INST || T_DIO) fprintf(stderr, " store status='%o to '%o\n", dc[device].status, m1);
-	put16(dc[device].status,m1);
+	put16r(dc[device].status,m1,0);
 	break;
 
       case 11: /* DOAR = Store OAR to memory (2 words) */
 	if (T_INST || T_DIO) fprintf(stderr, " store OAR='%o to '%o\n", dc[device].oar, m1);
-	put16(dc[device].oar,m1);
+	put16r(dc[device].oar,m1,0);
 	break;
 
       case 13: /* SDMA = select DMA channel(s) to use */
