@@ -218,7 +218,7 @@ unsigned long instcount=0;           /* global instruction count */
 
 unsigned short inhcount = 0;         /* number of instructions to stay inhibited */
 
-unsigned int instpermsec = 2048;     /* initially assume 2048 inst/msec */
+unsigned int instpermsec = 2400;     /* initial assumption for inst/msec */
 
 jmp_buf jmpbuf;                      /* for longjumps to the fetch loop */
 
@@ -1027,10 +1027,11 @@ ea_t ea32s (unsigned short inst, short i, short x) {
 ea_t ea32r64r (ea_t earp, unsigned short inst, short i, short x, unsigned short *opcode) {
 
   short class;
-  unsigned short ea,m,rpl;
+  unsigned short ea,m,rph,rpl;
   ea_t va;
 
   rpl = earp;
+  rph = (earp >> 16) & 0x7FFF;     /* clear fault (live register) bit from RP */
   if (T_EAR) fprintf(stderr," ea32r64r: i=%o, x=%o, amask=%o\n", i!= 0, x!=0, amask);
   if (inst & 001000)                             /* sector bit 7 set? */
     if ((inst & 0760) != 0400) {                 /* PC relative? */
@@ -1053,7 +1054,7 @@ ea_t ea32r64r (ea_t earp, unsigned short inst, short i, short x, unsigned short 
     if (ea < 040)
       m = get16(0x80000000|ea);
     else
-      m = get16(MAKEVA(RPH,ea));
+      m = get16(MAKEVA(rph,ea));
     if (T_EAR) fprintf(stderr," Indirect, old ea=%o, [ea]=%o\n", ea, m);
     if ((crs[KEYS] & 016000) == 06000)           /* 32R mode? */
       i = m & 0100000;                           /* yes, multiple indirects */
@@ -1068,7 +1069,7 @@ ea_t ea32r64r (ea_t earp, unsigned short inst, short i, short x, unsigned short 
     if (T_EAR) fprintf(stderr," Postindex, new ea=%o\n", ea);
   }
   ea &= amask;
-  va = MAKEVA(RPH, ea);
+  va = MAKEVA(rph, ea);
   if (ea < 040)                                  /* flag live register ea */
     return va | 0x80000000;
   return va;
@@ -1092,7 +1093,7 @@ special:
       if (ea < 040)
 	m = get16(0x80000000|ea);
       else
-	m = get16(MAKEVA(RPH,ea));
+	m = get16(MAKEVA(rph,ea));
       if (T_EAR) fprintf(stderr," Indirect, old ea=%o, [ea]=%o\n", ea, m);
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
@@ -1104,7 +1105,7 @@ special:
 
   } else if (i && x) {                           /* class 2/3, ix=11 */
     if (T_EAR) fprintf(stderr," class 2/3, ix=11\n");
-    ea = get16(MAKEVA(RPH,RPL++));               /* get A from next word */
+    ea = get16(MAKEVA(rph,RPL++));               /* get A from next word */
     if (T_EAR) fprintf(stderr," ea=%o\n", ea);
     if (class == 3)
       ea += (short) crs[S];
@@ -1112,7 +1113,7 @@ special:
       if (ea < 040)
 	m = get16(0x80000000|ea);
       else
-	m = get16(MAKEVA(RPH,ea));
+	m = get16(MAKEVA(rph,ea));
       if (T_EAR) fprintf(stderr," Indirect, ea=%o, [ea]=%o\n", ea, m);
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
@@ -1135,7 +1136,7 @@ special:
       if (ea < 040)
 	m = get16(0x80000000|ea);
       else
-	m = get16(MAKEVA(RPH,ea));
+	m = get16(MAKEVA(rph,ea));
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
       ea = m & amask;
@@ -1144,7 +1145,7 @@ special:
       if (ea < 040)
 	m = get16(0x80000000|ea);
       else
-	m = get16(MAKEVA(RPH,ea));
+	m = get16(MAKEVA(rph,ea));
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
       else
@@ -1155,7 +1156,7 @@ special:
       ea += crs[X];
   }
   ea &= amask;
-  va = MAKEVA(RPH, ea);
+  va = MAKEVA(rph, ea);
   if (ea < 040)                                  /* flag live register ea */
     return va | 0x80000000;
   return va;
@@ -1999,13 +2000,12 @@ dispatcher() {
 
   if (regs.sym.pcba != 0) {
     pcbp = MAKEVA(crs[OWNERH], regs.sym.pcba);
-    regs.sym.pla = get16r(pcbp+PCBLEV, 0);
     if (T_PX) fprintf(stderr,"disp: dispatching PPA, pcba=%o, pla=%o\n", regs.sym.pcba, regs.sym.pla);
 
   } else if (regs.sym.pcbb != 0) {
     pcbp = MAKEVA(crs[OWNERH], regs.sym.pcbb);
     regs.sym.pcba = regs.sym.pcbb;
-    regs.sym.pla = get16r(pcbp+PCBLEV, 0);
+    regs.sym.pla = regs.sym.plb;
     regs.sym.pcbb = 0;
     if (T_PX) fprintf(stderr,"disp: dispatching PPB, pcba=%o, pla=%o\n", regs.sym.pcba, regs.sym.pla);
 
@@ -2014,7 +2014,11 @@ dispatcher() {
     if (regs.sym.pla != 0)
       rlp = MAKEVA(crs[OWNERH], regs.sym.pla);
     else if (regs.sym.plb != 0)
+#if 0
       rlp = MAKEVA(crs[OWNERH], regs.sym.plb);
+#else
+      fatal("disp: pla is invalid, plb is valid?");
+#endif
     else
       fatal("dispatch: both pla and plb are zero; can't locate ready list");
     while(1) {
@@ -2031,6 +2035,24 @@ dispatcher() {
   }
   pcbw = pcbp & 0xFFFF;
   if (T_PX) fprintf(stderr,"disp: process %o/%o selected\n", pcbp>>16, pcbw);
+
+#if 1
+  /* debug tests to verify ready list structure */
+  rlp = MAKEVA(crs[OWNERH], regs.sym.pla);
+  rlbol = get16r(rlp, 0);
+  if (rlbol != pcbw) {
+    printf("disp: rl bol=%o, != process dispatched=%o\n", rlbol, pcbw);
+    fatal(NULL);
+  }
+#if 0
+  /* NOTE: if a running process has its priority changed (in the pcb), this
+     test fails */
+  if (get16r(pcbp+PCBLEV, 0) != regs.sym.pla) {
+    printf("disp: dispatched process level=%o, != pla=%o\n", get16r(pcbp+PCBLEV, 0), regs.sym.pla);
+    fatal(NULL);
+  }
+#endif
+#endif
   
   /* pcbp now points to the process we're going to run.  By
      definition, this process should not be on any wait lists,
@@ -2113,7 +2135,7 @@ dispatcher() {
   RP = *(unsigned int *)(crs+PB);
   crs[PBL] = 0;
   crs[KEYS] &= ~3;                           /* erase "in dispatcher" and "save done" */
-  if (T_PX) fprintf(stderr,"disp: returning from dispatcher, running process %o/%o at %o/%o, modals=%o\n", crs[OWNERH], crs[OWNERL], RPH, RPL, crs[MODALS]);
+  if (T_PX) fprintf(stderr,"disp: returning from dispatcher, running process %o/%o at %o/%o, modals=%o, ppa=%o, pla=%o, ppb=%o, plb=%o\n", crs[OWNERH], crs[OWNERL], RPH, RPL, crs[MODALS], regs.sym.pcba, regs.sym.pla, regs.sym.pcbb, regs.sym.plb);
 
   /* if this process' abort flags are set, clear them and take process fault */
 
@@ -2149,7 +2171,7 @@ unready (ea_t waitlist, unsigned short newlink) {
   bol = rl >> 16;
   eol = rl & 0xFFFF;
   if (bol != (pcbp & 0xFFFF)) {
-    printf("rlp=%o/%o, bol=%o, pcbp=%o/%o, pla=%o, pcba=%o\n", rlp>>16, rlp&0xFFFF, bol, pcbp>>16, pcbp&0xFFFF, regs.sym.pla, regs.sym.pcba);
+    printf("rlp=%o/%o, bol=%o, eol=%o, pcbp=%o/%o, pla=%o, pcba=%o\n", rlp>>16, rlp&0xFFFF, bol, eol, pcbp>>16, pcbp&0xFFFF, regs.sym.pla, regs.sym.pcba);
     fatal("unready: I'm not first on the ready list");
   }
   if (bol == eol) {
@@ -2235,6 +2257,7 @@ pwait() {
   unsigned short bol;
   unsigned short pcblev;
   unsigned short pcbnext;
+  unsigned short mylev;
   short count;
 
   ea = apea(NULL);
@@ -2262,17 +2285,23 @@ keys = 14200, modals=137
       fatal("WAIT: count > 1 but bol == 0");
     if (regs.sym.pcba == 0)
       fatal("WAIT: pcba is zero");
+    if (regs.sym.pcba != crs[OWNERL]) {
+      printf("WAIT: pcba=%o != ownerl=%o\n", regs.sym.pcba, crs[OWNERL]);
+      fatal(NULL);
+    }
+    mylev = get32r(*(ea_t *)(crs+OWNER),0);
+
     if (bol != 0) {
       pcbp = MAKEVA(crs[OWNERH],bol);
       pcblevnext = get32r(pcbp, 0);
       pcblev = pcblevnext >> 16;
     }
-    if (count == 1 || regs.sym.pla < pcblev) {   /* add me to the beginning */
+    if (count == 1 || mylev < pcblev) {   /* add me to the beginning */
       utempl = (count<<16) | crs[OWNERL];
       put32r(utempl, ea, 0);    /* update semaphore count/bol */
     } else {
       /* do a priority scan... */
-      while (pcblev <= regs.sym.pla && bol != 0) {
+      while (pcblev <= mylev && bol != 0) {
 	prevpcbp = pcbp;
 	bol = pcblevnext & 0xFFFF;
 	if (bol != 0) {
@@ -2307,7 +2336,7 @@ nfy(unsigned short inst) {
 
   resched = 0;
   begend = inst & 1;
-#if 0
+#if 1
   if (regs.sym.pcba != crs[OWNERL]) {
     printf("NFY: regs.pcba = %o, but crs[OWNERL] = %o\n", regs.sym.pcba, crs[OWNERL]);
     fatal(NULL);
@@ -2717,14 +2746,16 @@ main (int argc, char **argv) {
 
   while (1) {
 
-    if (0 && instcount > 46800000)  /* to debug LIOT on --cpuid 5 */
+#if 0
+    if (instcount > 77500000)
       traceflags = ~TB_MAP;
+#endif
 
 #if 0
-    /* NOTE: don't trace TFLADJ loops */
-
-    if (crs[OWNERL] == 0100100 && instcount > 60000000 && crs[LBL] != 010046)
-      traceflags = ~TB_MAP;
+    if (traceflags != 0)
+      savetraceflags = traceflags;
+    if (crs[OWNERL] == 0100100 && savetraceflags)
+      traceflags = savetraceflags;
     else
       traceflags = 0;
 #endif
@@ -2868,18 +2899,18 @@ xec:
       class = inst>>14;
       if (class == 0) {
 	if (T_INST) fprintf(stderr," generic class 0\n");
+	switch (inst) {
 
 	/* V-mode/frequent instructions */
 
-	if (inst == 000201) {
+	case 000201:
 	  if (T_FLOW) fprintf(stderr," IAB\n");
 	  tempa = crs[B];
 	  crs[B] = crs[A];
 	  crs[A] = tempa;
 	  continue;
-	}
 
-	if (inst == 001314) {
+	case 001314:
 	  if (T_FLOW) fprintf(stderr," CGT\n");
 	  tempa = get16(RP);              /* get number of words */
 	  if (1 <= crs[A] && crs[A] < tempa)
@@ -2887,25 +2918,22 @@ xec:
 	  else
 	    RPL += tempa;
 	  continue;
-	}
 
-	if (inst == 000115) {
+	case 000115:
 	  if (T_FLOW) fprintf(stderr," PIDA\n");
 	  *(int *)(crs+L) = *(short *)(crs+A);
 	  continue;
-	}
 
-	if (inst == 000305) {
+	case 000305:
 	  if (T_FLOW) fprintf(stderr," PIDL\n");
 	  *(long long *)(crs+L) = *(int *)(crs+L);
 	  continue;
-	}
 
 	/* XXX: how does PIMA affect registers when overflow occurs?
 	   NOTE: PMA manual says copy B reg to A reg, but DIAG seems
 	   to indicate a swap */
 
-	if (inst == 000015) {
+	case 000015:
 	  if (T_FLOW) fprintf(stderr," PIMA\n");
 	  tempa = crs[B];
 	  crs[B] = crs[A];
@@ -2917,9 +2945,8 @@ xec:
 	  else
 	    CLEARC;
 	  continue;
-	}
 
-	if (inst == 000301) {
+	case 000301:
 	  if (T_FLOW) fprintf(stderr," PIML\n");
 	  templ = *(int *)(crs+L);
 	  *(int *)(crs+L) = *(int *)(crs+E);
@@ -2930,53 +2957,46 @@ xec:
 	  else
 	    CLEARC;
 	  continue;
-	}
 
 	/* character/field instructions */
 
-	if (inst == 001302) {
+	case 001302:
 	  if (T_FLOW) fprintf(stderr," LDC 0\n");
 	  ldc(0);
 	  continue;
-	}
 
-	if (inst == 001312) {
+	case 001312:
 	  if (T_FLOW) fprintf(stderr," LDC 1\n");
 	  ldc(1);
 	  continue;
-	}
 
-	if (inst == 001322) {
+	case 001322:
 	  if (T_FLOW) fprintf(stderr," STC 0\n");
 	  stc(0);
 	  continue;
-	}
 	    
-	if (inst == 001332) {
+	case 001332:
 	  if (T_FLOW) fprintf(stderr," STC 1\n");
 	  stc(1);
 	  continue;
-	}
 
-	if (inst == 001300) {
+	case 001300:
 	  if (T_FLOW) fprintf(stderr," EAFA 0\n");
 	  ea = apea(&eabit);
 	  crsl[FAR0] = ea;
 	  crsl[FLR0] = (crsl[FLR0] & 0xFFFF0FFF) | (eabit << 12);
 	  if (T_INST) fprintf(stderr," FAR0=%o, eabit=%d, FLR=%x\n", crsl[FAR0], eabit, crsl[FLR0]);
 	  continue;
-	}
 
-	if (inst == 001310) {
+	case 001310:
 	  if (T_FLOW) fprintf(stderr," EAFA 1\n");
 	  ea = apea(&eabit);
 	  crsl[FAR1] = ea;
 	  crsl[FLR1] = (crsl[FLR1] & 0xFFFF0FFF) | (eabit << 12);
 	  if (T_INST) fprintf(stderr," FAR1=%o, eabit=%d, FLR=%x\n", crsl[FAR1], eabit, crsl[FLR1]);
 	  continue;
-	}
 
-	if (inst == 001301) {
+	case 001301:
 	  if (T_FLOW) fprintf(stderr," ALFA 0\n");
 	  if (T_INST) fprintf(stderr," before add, FAR0=%o, FLR=%o\n", crsl[FAR0], crsl[FLR0]);
 	  utempl = ((crsl[FAR0] & 0xFFFF) << 4) | ((crsl[FLR0] >> 12) & 0xF);
@@ -2985,18 +3005,16 @@ xec:
 	  crsl[FLR0] = (crsl[FLR0] & 0xFFFF0FFF) | ((utempl & 0xF) << 12);
 	  if (T_INST) fprintf(stderr," after add, FAR0=%o, FLR=%o\n", crsl[FAR0], crsl[FLR0]);
 	  continue;
-	}
 
-	if (inst == 001311) {
+	case 001311:
 	  if (T_FLOW) fprintf(stderr," ALFA 1\n");
 	  utempl = ((crsl[FAR1] & 0xFFFF) << 4) | ((crsl[FLR1] >> 12) & 0xF);
 	  utempl += *(int *)(crs+L);
 	  crsl[FAR1] = (crsl[FAR1] & 0xFFFF0000) | ((utempl >> 4) & 0xFFFF);
 	  crsl[FLR1] = (crsl[FLR1] & 0xFFFF0FFF) | ((utempl & 0xF) << 12);
 	  continue;
-	}
 
-	if (inst == 001303) {
+	case 001303:
 	  if (T_FLOW) fprintf(stderr," LFLI 0\n");
 #if 0
 	  for (utempa=0; utempa<256; utempa++) {
@@ -3017,9 +3035,8 @@ xec:
 	  if (utempa != utempl)
 	    fatal("LFLI 0 error");
 	  continue;
-	}
 
-	if (inst == 001313) {
+	case 001313:
 	  if (T_FLOW) fprintf(stderr," LFLI 1\n");
 #if 0
 	  for (utempa=0; utempa<256; utempa++) {
@@ -3039,9 +3056,8 @@ xec:
 	  if (utempa != utempl)
 	    fatal("LFLI 1 error");
 	  continue;
-	}
 
-	if (inst == 001320) {
+	case 001320:
 	  if (T_FLOW) fprintf(stderr," STFA 0\n");
 	  ea = apea(NULL);
 	  utempl = crsl[FAR0] & 0x6FFFFFFF;
@@ -3056,67 +3072,56 @@ stfa:
 	  }
 	  put32(utempl,ea);
 	  continue;
-	}
 
-	if (inst == 001330) {
+	case 001330:
 	  if (T_FLOW) fprintf(stderr," STFA 1\n");
 	  ea = apea(NULL);
 	  utempl = crsl[FAR1] & 0x6FFFFFFF;
 	  utempa = crsl[FLR1] & 0xF000;
 	  goto stfa;
-	}
 
-	if (inst == 001321) {
+	case 001321:
 	  if (T_FLOW) fprintf(stderr," TLFL 0\n");
 	  PUTFLR(0,*(unsigned int *)(crs+L));
 	  continue;
-	}
 
-	if (inst == 001331) {
+	case 001331:
 	  if (T_FLOW) fprintf(stderr," TLFL 1\n");
 	  PUTFLR(1,*(unsigned int *)(crs+L));
 	  utempl = GETFLR(1);
 	  if (T_INST) fprintf(stderr," Transfer %d to FLR1, FLR=%x, actual = %d\n", *(unsigned int *)(crs+L), crsl[FLR1], utempl);
 	  continue;
-	}
 
-
-	if (inst == 001323) {
+	case 001323:
 	  if (T_FLOW) fprintf(stderr," TFLL 0\n");
 	  *(unsigned int *)(crs+L) = GETFLR(0);
 	  continue;
-	}
 
-	if (inst == 001333) {
+	case 001333:
 	  if (T_FLOW) fprintf(stderr," TFLL 1\n");
 	  *(unsigned int *)(crs+L) = GETFLR(1);
 	  continue;
-	}
 	
-	if (inst == 000611) {
+	case 000611:
 	  if (T_FLOW) fprintf(stderr," PRTN\n");
 	  prtn();
 	  continue;
-	}
 
-	if (inst == 001005) {
+	case 001005:
 	  if (T_FLOW) fprintf(stderr," TKA\n");
 	  crs[A] = crs[KEYS];
 	  continue;
-	}
 
-	if (inst == 001015) {
+	case 001015:
 	  if (T_FLOW) fprintf(stderr," TAK\n");
 	  newkeys(crs[A] & 0177770);
 	  continue;
-	}
 
-	if (inst == 000001) {
+	case 000001:
 	  if (T_FLOW) fprintf(stderr," NOP\n");
 	  continue;
-	}
 
-	if (inst == 000715) {
+	case 000715:
 	  if (T_FLOW) fprintf(stderr," RSAV\n");
 	  ea = apea(NULL);
 	  j = 1;
@@ -3134,9 +3139,8 @@ stfa:
 	  put16(savemask, ea);
 	  if (T_INST) fprintf(stderr," Saved, mask=%o\n", savemask);
 	  continue;
-	}
 
-	if (inst == 000717) {
+	case 000717:
 	  if (T_FLOW) fprintf(stderr," RRST\n");
 	  ea = apea(NULL);
 	  savemask = get16(ea);
@@ -3154,24 +3158,25 @@ stfa:
 	  *(unsigned int *)(crs+XB) = get32(INCVA(ea,25));
 	  if (T_INST) fprintf(stderr," XB restored, value=%o/%o\n", crs[XBH], crs[XBL]);
 	  continue;
-	}
 
-	if (000400 <= inst && inst <= 000402) {
+	case 000400:
+	case 000401:
+	case 000402:
 	  if (T_FLOW) fprintf(stderr," ENB\n");
 	  RESTRICT();
 	  crs[MODALS] |= 0100000;
 	  inhcount = 1;
 	  continue;
-	}
 
-	if (001000 <= inst && inst <= 001002) {
+	case 001000:
+	case 001001:
+	case 001002:
 	  if (T_FLOW) fprintf(stderr," INH\n");
 	  RESTRICT();
 	  crs[MODALS] &= ~0100000;
 	  continue;
-	}
 
-	if (inst == 01200) {
+	case 01200:
 	  if (T_FLOW) fprintf(stderr," STAC\n");
 	  ea = apea(NULL);
 	  if (get16(ea) == crs[B]) {
@@ -3180,9 +3185,8 @@ stfa:
 	  } else 
 	    crs[KEYS] &= ~0100;      /* reset EQ */
 	  continue;
-	}
 
-	if (inst == 01204) {
+	case 01204:
 	  if (T_FLOW) fprintf(stderr," STLC\n");
 	  ea = apea(NULL);
 	  if (get32(ea) == *(unsigned int *)(crs+E)){
@@ -3191,23 +3195,20 @@ stfa:
 	  } else 
 	    crs[KEYS] &= ~0100;      /* reset EQ */
 	  continue;
-	}
 
 	/* NOTE: when ARGT is executed as an instruction, it means
 	   that a fault occurred during PCL argument processing. */
 
-	if (inst == 000605) {
+	case 000605:
 	  if (T_FLOW || T_PCL) fprintf(stderr," ARGT\n");
 	  argt();
 	  continue;
-	}
 
-	if (inst == 000705) {
+	case 000705:
 	  if (T_FLOW || T_PCL) fprintf(stderr," CALF\n");
 	  ea = apea(NULL);
 	  calf(ea);
 	  continue;
-	}
 
 	/* Decimal and character instructions */
 
@@ -3249,7 +3250,7 @@ stfa:
   zclen--; \
   zlen--
 
-	if (inst == 001114) {
+	case 001114:
 	  if (T_FLOW) fprintf(stderr," ZMV\n");
 	  if (crs[KEYS] & 020)
 	    zspace = 040;
@@ -3276,9 +3277,8 @@ stfa:
 	  }
 	  crs[KEYS] |= 0100;
 	  continue;
-	}
 
-	if (inst == 001115) {
+	case 001115:
 	  if (T_FLOW) fprintf(stderr," ZMVD\n");
 	  zlen1 = GETFLR(1);
 	  zlen2 = zlen1;
@@ -3298,7 +3298,6 @@ stfa:
 	  }
 	  crs[KEYS] |= 0100;
 	  continue;
-	}
 
 	/* NOTE: ZFIL is used early after PX enabled, and can be used to cause
 	   a UII fault to debug CALF etc.
@@ -3306,7 +3305,7 @@ stfa:
 	   Could use memset(zcp2, zch2, zclen2) to fill by pieces.
 	*/
 
-	if (inst == 001116) {
+	case 001116:
 	  if (T_FLOW) fprintf(stderr," ZFIL\n");
 	  zlen2 = GETFLR(1);
 	  zea2 = crsl[FAR1];
@@ -3322,9 +3321,8 @@ stfa:
 	  }
 	  crs[KEYS] |= 0100;
 	  continue;
-	}
 
-	if (inst == 001117) {
+	case 001117:
 	  if (T_FLOW) fprintf(stderr," ZCM\n");
 	  if (crs[KEYS] & 020)
 	    zspace = 040;
@@ -3363,7 +3361,6 @@ stfa:
 	  }
 	  crs[KEYS] = (crs[KEYS] & ~0300) | zresult;
 	  continue;
-	}
 #endif
 
 	/* 001100 = XAD
@@ -3382,57 +3379,52 @@ stfa:
 	   001146 = XDTB
 	*/
 
-	if (001100 <= inst && inst <= 001146) {
-	  //traceflags = -1;
-	  if (T_FLOW) fprintf(stderr," X/Z UII %o\n", inst);
-	  fault(UIIFAULT, RPL, RP);
-	  continue;
-	}
-
 	/* OS/restricted instructions */
 
-	if (inst == 000510) {
+	case 000510:
 	  if (T_FLOW) fprintf(stderr," STTM\n", inst);
 	  RESTRICT();
 	  fault(UIIFAULT, RPL, RP);
 	  continue;
-	}
 
-	if (inst == 000511) {
+	case 000511:
 	  if (T_FLOW) fprintf(stderr," RTS\n", inst);
 	  RESTRICT();
 	  //traceflags = ~TB_MAP;
 	  fault(UIIFAULT, RPL, RP);
 	  continue;
-	}
 
-	if (inst == 000315) {
+	case 000315:
 	  if (T_FLOW) fprintf(stderr," WAIT\n", inst);
 	  RESTRICT();
 	  pwait();
 	  continue;
-	}
 
-	if (001210 <= inst && inst <= 001217) {
-	  if (001212 <= inst && inst <= 001213)
-	    fatal("Unrecognized NFY instruction");
+	case 001210:
+	case 001211:
+	case 001214:
+	case 001215:
+	case 001216:
+	case 001217:
 	  if (T_FLOW) fprintf(stderr," NFY(%o)\n", inst);
 	  RESTRICT();
 	  nfy(inst);
 	  continue;
-	}
 	    
-	if (inst == 001315) {
+	case 001212:
+	case 001213:
+	  fatal("Unrecognized NFY instruction");
+
+	case 001315:
 	  if (T_FLOW) fprintf(stderr," STEX\n");
 	  *(ea_t *)(crs+L) = stex(*(unsigned int *)(crs+L));
 	  continue;
-	}
 
 	/* NOTE: L contains target virtual address.  How does 
 	   LIOT use the target virtual address to "help invalidate
 	   the cache"? */
 
-	if (inst == 000044) {
+	case 000044:
 	  if (T_FLOW) fprintf(stderr," LIOT\n");
 	  RESTRICT();
 	  ea = apea(NULL);
@@ -3442,9 +3434,8 @@ stfa:
 	  mapva(ea, RACC, &access, RP);
 	  if (T_INST) fprintf(stderr," loaded STLB for %o/%o\n", ea>>16, ea&0xffff);
 	  continue;
-	}
 
-	if (inst == 000064) {
+	case 000064:
 	  if (T_FLOW) fprintf(stderr," PTLB\n");
 	  RESTRICT();
 	  utempl = *(unsigned int *)(crs+L);
@@ -3452,9 +3443,8 @@ stfa:
 	    if ((utempl & 0x80000000) || stlb[utempa].ppn == utempl)
 	      stlb[utempa].valid = 0;
 	  continue;
-	}
 
-	if (inst == 000615) {
+	case 000615:
 	  if (T_FLOW) fprintf(stderr," ITLB\n");
 	  RESTRICT();
 	  utempl = *(unsigned int *)(crs+L);
@@ -3484,16 +3474,14 @@ stfa:
 	      traceflags = savetraceflags;
 	    }
 	  continue;
-	}
 
-	if (inst == 000711) {
+	case 000711:
 	  if (T_FLOW) fprintf(stderr," LPSW\n");
 	  RESTRICT();
 	  lpsw();
 	  continue;
-	}
 
-	if (inst == 000024) {
+	case 000024:
 	  if (T_FLOW) fprintf(stderr," STPM\n", inst);
 	  RESTRICT();
 	  for (i=0; i<8; i++)
@@ -3503,13 +3491,11 @@ stfa:
 	  put64(*(double *)(stpm+0), ea);
 	  put64(*(double *)(stpm+4), INCVA(ea,4));
 	  continue;
-	}
 
-	if (inst == 040310) {
+	case 040310:
 	  if (T_FLOW) fprintf(stderr," SSSN\n", inst);
 	  fault(UIIFAULT, RPL, RP);
 	  continue;
-	}
 
 	/* I think this is an invalid opcode that Prime uses when unexpected
 	   things happen, for example:
@@ -3519,7 +3505,7 @@ stfa:
            1702              no, they should be, die
 	*/
 
-	if (inst == 001702) {
+	case 001702:
 	  if (T_FLOW) fprintf(stderr," 1702?\n", inst);
 	  printf(" 1702? at #%d, OWNERL=%o, RP=%o/%o\n", instcount, crs[OWNERL], RPH, RPL);
 	  RESTRICT();
@@ -3527,9 +3513,8 @@ stfa:
 	  traceflags = ~TB_MAP;
 	  dispatcher();
 	  continue;
-	}
 
-	if (inst == 000601) {
+	case 000601:
 	  if (T_FLOW) fprintf(stderr," IRTN\n", inst);
 	  RESTRICT();
 	  //fatal("IRTN causes a loop in CPU.CACHE Case 4");
@@ -3547,76 +3532,65 @@ irtn:
 #endif
 	  dispatcher();
 	  continue;
-	}
 
-	if (inst == 000603) {
+	case 000603:
 	  if (T_FLOW) fprintf(stderr," IRTC\n", inst);
 	  RESTRICT();
 	  intvec = -1;
 	  goto irtn;
-	}
 
-	if (inst == 000411) {
+	case 000411:
 	  if (T_FLOW) fprintf(stderr," CAI\n", inst);
 	  RESTRICT();
 	  intvec = -1;
 	  continue;
-	}
 
 	/* R-mode/infrequent gen 0 instructions */
 
-	if (inst == 000005) {                 /* SGL */
+	case 000005:                 /* SGL */
 	  if (T_FLOW) fprintf(stderr," SGL\n");
 	  crs[KEYS] &= ~040000;
 	  continue;
-	}
 
-	if (inst == 000011) {                 /* E16S */
+	case 000011:                 /* E16S */
 	  if (T_FLOW) fprintf(stderr," E16S\n");
 	  newkeys(crs[KEYS] & 0161777);
 	  continue;
-	}
 
-	if (inst == 000013) {                 /* E32S */
+	case 000013:                 /* E32S */
 	  if (T_FLOW) fprintf(stderr," E32S\n");
 	  newkeys((crs[KEYS] & 0161777) | 1<<10);
 	  continue;
-	}
 
-	if (inst == 001013) {                 /* E32R */
+	case 001013:                 /* E32R */
 	  if (T_FLOW) fprintf(stderr," E32R\n");
 	  newkeys((crs[KEYS] & 0161777) | 3<<10);
 	  continue;
-	}
 
-	if (inst == 001011) {                 /* E64R */
+	case 001011:                 /* E64R */
 	  if (T_FLOW) fprintf(stderr," E64R\n");
 	  newkeys((crs[KEYS] & 0161777) | 2<<10);
 	  continue;
-	}
 
-	if (inst == 000010) {                 /* E64V */
+	case 000010:                 /* E64V */
 	  if (T_FLOW) fprintf(stderr," E64V\n");
 	  newkeys((crs[KEYS] & 0161777) | 6<<10);
 	  continue;
-	}
 
-	if (inst == 001010) {                 /* E32I */
+	case 001010:                 /* E32I */
 	  if (T_FLOW) fprintf(stderr," E32I\n");
 	  if (cpuid < 4)
 	    fault(RESTRICTFAULT, 0, 0);
 	  else
 	    newkeys((crs[KEYS] & 0161777) | 4<<10);
 	  continue;
-	}
 
-	if (inst == 000505) {                 /* SVC */
+	case 000505:                 /* SVC */
 	  if (T_FLOW) fprintf(stderr," SVC\n");
 	  svc();
 	  continue;
-	}
 
-	if (inst == 000111) {                  /* CEA */
+	case 000111:                  /* CEA */
 	  if (T_FLOW) fprintf(stderr," CEA\n");
 	  switch ((crs[KEYS] & 016000) >> 10) {
 	  case 0:                       /* 16S */
@@ -3650,16 +3624,14 @@ irtn:
 	    }
 	  }
 	  continue;
-	}
 
-	if (inst == 000000) {
+	case 000000:
 	  if (T_FLOW) fprintf(stderr," HLT\n");
 	  RESTRICT();
 	  memdump(0,0xFFFF);
 	  fatal("CPU halt");
-	}
 
-	if (inst == 000205) {                /* PIM (R-mode) */
+	case 000205:                /* PIM (R-mode) */
 	  if (T_FLOW) fprintf(stderr," PIM\n");
 #if 0
 	  /* NOTE: this fits the description in the Rev 21 ISG, but fails
@@ -3670,14 +3642,12 @@ irtn:
 	  crs[A] = (crs[A] & 0x8000) | crs[B];
 #endif
 	  continue;
-	}
 
-	if (inst == 000211) {                /* PID (R-mode) */
+	case 000211:                /* PID (R-mode) */
 	  if (T_FLOW) fprintf(stderr," PID\n");
 	  *(int *)(crs+L) = *(short *)(crs+A);
 	  crs[B] &= 0x7fff;
 	  continue;
-	}
 
 	/* DBL activates 31-bit mode (R-mode only):
 
@@ -3691,48 +3661,42 @@ irtn:
 	   PID, DIV, MPY, PIM, INT, FLOT
 	*/
 
-	if (inst == 000007) {                 /* DBL */
+	case 000007:                 /* DBL */
 	  if (T_FLOW) fprintf(stderr," DBL\n");
 	  crs[KEYS] |= 040000;
 	  continue;
-	}
 
-	if (inst == 000041) {
+	case 000041:
 	  if (T_FLOW) fprintf(stderr," SCA\n");
 	  crs[A] = crs[VSC] & 0xFF;
 	  continue;
-	}
 
-	if (inst == 000043) {
+	case 000043:
 	  if (T_FLOW) fprintf(stderr," INK\n");
 	  crs[A] = (crs[KEYS] & 0xFF00) | (crs[VSC] & 0xFF);
 	  continue;
-	}
 
-	if (inst == 000405) {
+	case 000405:
 	  if (T_FLOW) fprintf(stderr," OTK\n");
 	  newkeys((crs[A] & 0xFF00) | (crs[KEYS] & 0xFF));
 	  crs[VSC] = (crs[VSC] & 0xFF00) | (crs[A] & 0xFF);
 	  if ((RP & RINGMASK32) == 0)
 	    inhcount = 1;
 	  continue;
-	}
 
-	if (inst == 000415) {
+	case 000415:
 	  if (T_FLOW) fprintf(stderr," ESIM\n");
 	  RESTRICT();
 	  crs[MODALS] &= ~040000;
 	  continue;
-	}
 
-	if (inst == 000417) {
+	case 000417:
 	  if (T_FLOW) fprintf(stderr," EVIM\n");
 	  RESTRICT();
 	  crs[MODALS] |= 040000;
 	  continue;
-	}
 
-	if (inst == 000101) {
+	case 000101:
 	  if (T_FLOW) fprintf(stderr," NRM\n");
 	  crs[VSC] = 0;
 	  if (crs[A] == 0 && crs[B] == 0)
@@ -3746,45 +3710,53 @@ irtn:
 	  crs[B] &= 0x7FFF;
 	  if (T_INST) fprintf(stderr, " finished with %d shifts: crs[A]=%o, crs[B]=%o\n", crs[VSC], crs[A], crs[B]);
 	  continue;
-	}
 
-	if (inst == 000105) {
+	case 000105:
 	  if (T_FLOW) fprintf(stderr," RTN\n");
 	  m = get16(crs[S]+1);
 	  if (m == 0)
 	    fatal("RTN stack underflow");
 	  crs[S] = get16(crs[S]);
 	  continue;
-	}
 
 	/* unusual instructions */
 
-	if (inst == 3) {
+	case 000003:
 	  if (T_FLOW) fprintf(stderr," gen 3?\n");
 	  //printf("#%d: %o/%o: Generic instruction 3?\n", instcount, RPH, RPL);
 	  continue;
-	}
 
-	for (i=0; i<GEN0TABSIZE; i++) {
-	  if (inst == gen0tab[i]) {
-	    if (T_FLOW) fprintf(stderr," %s\n", gen0nam[i]);
-	    break;
+	default:
+	  for (i=0; i<GEN0TABSIZE; i++) {
+	    if (inst == gen0tab[i]) {
+	      if (T_FLOW) fprintf(stderr," %s\n", gen0nam[i]);
+	      break;
+	    }
 	  }
-	}
-	if (i < GEN0TABSIZE)
-	  continue;
+	  if (i < GEN0TABSIZE)
+	    continue;
 
-	fprintf(stderr," unrecognized generic class 0 instruction!\n");
-	printf("#%d: %o/%o: Unrecognized generic class 0 instruction '%o!\n", instcount, RPH, RPL, inst);
-	//traceflags = ~TB_MAP;
-	fault(UIIFAULT, RPL, 0);
-	fatal(NULL);
+	  if (001100 <= inst && inst <= 001146) {
+	    //traceflags = -1;
+	    if (T_FLOW) fprintf(stderr," X/Z UII %o\n", inst);
+	    fault(UIIFAULT, RPL, RP);
+	    continue;
+	  }
+
+	  fprintf(stderr," unrecognized generic class 0 instruction!\n");
+	  printf("#%d: %o/%o: Unrecognized generic class 0 instruction '%o!\n", instcount, RPH, RPL, inst);
+	  //traceflags = ~TB_MAP;
+	  fault(UIIFAULT, RPL, 0);
+	  fatal(NULL);
+	}
       }
 
       if (class == 3) {
 	if (T_INST) fprintf(stderr," generic class 3\n");
 
-	if (inst == 0141604) {
+	switch (inst) {
+
+	case 0141604:
 	  if (T_FLOW) fprintf(stderr," BCLT\n");
 bclt:
 	  if (crs[KEYS] & 0200)
@@ -3792,9 +3764,8 @@ bclt:
 	  else
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0141600) {
+	case 0141600:
 	  if (T_FLOW) fprintf(stderr," BCLE\n");
 bcle:
 	  if (crs[KEYS] & 0300)
@@ -3802,9 +3773,8 @@ bcle:
 	  else
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0141602) {
+	case 0141602:
 	  if (T_FLOW) fprintf(stderr," BCEQ\n");
 bceq:
 	  if (crs[KEYS] & 0100)
@@ -3812,9 +3782,8 @@ bceq:
 	  else
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0141603) {
+	case 0141603:
 	  if (T_FLOW) fprintf(stderr," BCNE\n");
 bcne:
 	  if (!(crs[KEYS] & 0100))
@@ -3822,9 +3791,8 @@ bcne:
 	  else
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0141605) {
+	case 0141605:
 	  if (T_FLOW) fprintf(stderr," BCGE\n");
 bcge:
 	  if (!(crs[KEYS] & 0200))
@@ -3832,9 +3800,8 @@ bcge:
 	  else
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0141601) {
+	case 0141601:
 	  if (T_FLOW) fprintf(stderr," BCGT\n");
 bcgt:
 	  if (!(crs[KEYS] & 0300))
@@ -3842,37 +3809,32 @@ bcgt:
 	  else
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0141705) {
+	case 0141705:
 	  if (T_FLOW) fprintf(stderr," BCR\n");
 	  if (!(crs[KEYS] & 0100000))
 	    RPL = get16(RP);
 	  else
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0141704) {
+	case 0141704:
 	  if (T_FLOW) fprintf(stderr," BCS\n");
 	  if (crs[KEYS] & 0100000)
 	    RPL = get16(RP);
 	  else
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0141707) {
-	  if (T_FLOW) fprintf(stderr," BLR\n");
-blr:
+	case 0141707:
+	  if (T_FLOW) fprintf(stderr," BMLT/BLR\n");
 	  if (!(crs[KEYS] & 020000))
 	    RPL = get16(RP);
 	  else
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0141706) {
+	case 0141706:
 	  if (T_FLOW) fprintf(stderr," BLS\n");
 bls:
 	  if (crs[KEYS] & 020000)
@@ -3880,106 +3842,89 @@ bls:
 	  else
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0140614) {
+	case 0140614:
 	  if (T_FLOW) fprintf(stderr," BLT\n");
 	  SETCC_A;
 	  goto bclt;
-	}
 
-	if (inst == 0140610) {
+	case 0140610:
 	  if (T_FLOW) fprintf(stderr," BLE\n");
 	  SETCC_A;
 	  goto bcle;
-	}
 
-	if (inst == 0140612) {
+	case 0140612:
 	  if (T_FLOW) fprintf(stderr," BEQ\n");
 	  SETCC_A;
 	  goto bceq;
-	}
 
-	if (inst == 0140613) {
+	case 0140613:
 	  if (T_FLOW) fprintf(stderr," BNE\n");
 	  SETCC_A;
 	  goto bcne;
-	}
 
-	if (inst == 0140615) {
+	case 0140615:
 	  if (T_FLOW) fprintf(stderr," BGE\n");
 	  SETCC_A;
 	  goto bcge;
-	}
 
-	if (inst == 0140611) {
+	case 0140611:
 	  if (T_FLOW) fprintf(stderr," BGT\n");
 	  SETCC_A;
 	  goto bcgt;
 	  continue;
-	}
 
-	if (inst == 0140700) {
+	case 0140700:
 	  if (T_FLOW) fprintf(stderr," BLLE\n");
 	  SETCC_L;
 	  goto bcle;
-	}
 
-	if (inst == 0140702) {
+	case 0140702:
 	  if (T_FLOW) fprintf(stderr," BLEQ\n");
 	  SETCC_L;
 	  goto bceq;
-	}
 
-	if (inst == 0140703) {
+	case 0140703:
 	  if (T_FLOW) fprintf(stderr," BLNE\n");
 	  SETCC_L;
 	  goto bcne;
-	}
 
-	if (inst == 0140701) {
+	case 0140701:
 	  if (T_FLOW) fprintf(stderr," BLGT\n");
 	  SETCC_L;
 	  goto bcgt;
-	}
 
-	if (inst == 0141614) {
+	case 0141614:
 	  if (T_FLOW) fprintf(stderr," BFLT\n");
 	  SETCC_F;
 	  goto bclt;
-	}
 
-	if (inst == 0141610) {
+	case 0141610:
 	  if (T_FLOW) fprintf(stderr," BFLE\n");
 	  SETCC_F;
 	  goto bcle;
-	}
 
-	if (inst == 0141612) {
+	case 0141612:
 	  if (T_FLOW) fprintf(stderr," BFEQ\n");
 	  SETCC_F;
 	  goto bceq;
-	}
 
-	if (inst == 0141613) {
+	case 0141613:
 	  if (T_FLOW) fprintf(stderr," BFNE\n");
 	  SETCC_F;
 	  goto bcne;
-	}
 
-	if (inst == 0141615) {
+	case 0141615:
 	  if (T_FLOW) fprintf(stderr," BFGE\n");
 	  SETCC_F;
 	  goto bcge;
-	}
 
-	if (inst == 0141611) {
+	case 0141611:
 	  if (T_FLOW) fprintf(stderr," BFGT\n");
 	  SETCC_F;
 	  goto bcgt;
-	}
 
-	if (inst == 0141334) {
+	case 0141334:
 	  if (T_FLOW) fprintf(stderr," BIX\n");
 	  crs[X]++;
 bidx:
@@ -3988,9 +3933,8 @@ bidx:
 	  else
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0141324) {
+	case 0141324:
 	  if (T_FLOW) fprintf(stderr," BIY\n");
 	  crs[Y]++;
 bidy:
@@ -3999,15 +3943,13 @@ bidy:
 	  else
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0140724) {
+	case 0140724:
 	  if (T_FLOW) fprintf(stderr," BDY\n");
 	  crs[Y]--;
 	  goto bidy;
-	}
 
-	if (inst == 0140734) {
+	case 0140734:
 	  if (T_FLOW) fprintf(stderr," BDX\n");
 	  crs[X]--;
 #if 1
@@ -4034,9 +3976,8 @@ bidy:
 #else
 	  goto bidx;
 #endif
-	}
 
-	if (inst == 0141206) {
+	case 0141206:
 	  if (T_FLOW) fprintf(stderr," A1A\n");
 a1a:
 	  crs[KEYS] &= ~0120300;                 /* clear C, L, LT, EQ */
@@ -4054,9 +3995,8 @@ a1a:
 	    else
 	      crs[KEYS] |= 0200;
 	  continue;
-	}
 
-	if (inst == 0140304) {
+	case 0140304:
 	  if (T_FLOW) fprintf(stderr," A2A\n");
 	  crs[KEYS] &= ~0120300;                 /* clear C, L, LT, EQ */
 	  utempa = crs[A];
@@ -4073,9 +4013,8 @@ a1a:
 	    else
 	      crs[KEYS] |= 0200;
 	  continue;
-	}
 
-	if (inst == 0141216) {
+	case 0141216:
 	  if (T_FLOW) fprintf(stderr," ACA\n");
 	  if (crs[KEYS] & 0100000)
 	    goto a1a;
@@ -4085,9 +4024,8 @@ a1a:
 	  else if (*(short *)(crs+A) < 0)        /* set LT? */
 	    crs[KEYS] |= 0200;
 	  continue;
-	}
 
-	if (inst == 0140110) {
+	case 0140110:
 	  if (T_FLOW) fprintf(stderr," S1A\n");
 	  crs[KEYS] &= ~0120300;                 /* clear C, L, LT, EQ */
 	  utempl = crs[A];
@@ -4104,9 +4042,8 @@ a1a:
 	    mathexception('i', FC_INT_OFLOW, 0);
 	  }
 	  continue;
-	}
 
-	if (inst == 0140310) {
+	case 0140310:
 	  if (T_FLOW) fprintf(stderr," S2A\n");
 	  crs[KEYS] &= ~0120300;                 /* clear C, L, LT, EQ */
 	  utempa = crs[A];
@@ -4124,25 +4061,21 @@ a1a:
 	    mathexception('i', FC_INT_OFLOW, 0);
 	  }
 	  continue;
-	}
 
-	if (inst == 0141050) {
+	case 0141050:
 	  if (T_FLOW) fprintf(stderr," CAL\n");
 	  crs[A] &= 0xFF;
 	  continue;
-	}
 
-	if (inst == 0141044) {
+	case 0141044:
 	  if (T_FLOW) fprintf(stderr," CAR\n");
 	  crs[A] &= 0xFF00;
 	  continue;
-	}
 
-	if (inst == 0140040) {
+	case 0140040:
 	  if (T_FLOW) fprintf(stderr," CRA\n");
 	  crs[A] = 0;
 	  continue;
-	}
 
 	/* On the P300, the B register is the low-order word of the
 	   DP floating pt fraction, so CRB was used to convert SPFP
@@ -4155,34 +4088,30 @@ a1a:
 	   '16 clears only the low-order DPFP register
 	*/
 
-	if (inst == 0140014) {
+	case 0140014:
 	  if (T_FLOW) fprintf(stderr," P300CRB\n");
 	  crs[B] = 0;
 	  crs[FLTD] = 0;
 	  continue;
-	}
 
-	if (inst == 0140015) {
+	case 0140015:
 	  if (T_FLOW) fprintf(stderr," CRB\n");
 	  crs[B] = 0;
 	  continue;
-	}
 
-	if (inst == 0140016) {
+	case 0140016:
 	  if (T_FLOW) fprintf(stderr," FDBL\n");
 	  crs[FLTD] = 0;
 	  continue;
-	}
 
-	if (inst == 0140010) {
+	case 0140010:
 	  if (T_FLOW) fprintf(stderr," CRL\n");
 	  *(int *)(crs+L) = 0;
 	  continue;
-	}
 
 	/* XXX: this should set the L bit like subtract */
 
-	if (inst == 0140214) {
+	case 0140214:
 	  if (T_FLOW) fprintf(stderr," CAZ\n");
 	  crs[KEYS] &= ~020300;               /* clear L, LT, EQ */
 	  if (*(short *)(crs+A) < 0) {        /* A < 0? */
@@ -4194,111 +4123,95 @@ a1a:
 	  }                                   /* else, A > 0 */
 	  XSETL(0);
 	  continue;
-	}
 
 	/* NOTE: using "if (crs[X]++ == 0)" doesn't work because of
 	   unsigned short type promotion! */
 
-	if (inst == 0140114) {
+	case 0140114:
 	  if (T_FLOW) fprintf(stderr," IRX\n");
 	  crs[X]++;
 	  if (crs[X] == 0)
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0140210) {
+	case 0140210:
 	  if (T_FLOW) fprintf(stderr," DRX\n");
 	  crs[X]--;
 	  if (crs[X] == 0)
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0141240) {
+	case 0141240:
 	  if (T_FLOW) fprintf(stderr," ICR\n");
 	  crs[A] = crs[A] << 8;
 	  continue;
-	}
 
-	if (inst == 0141140) {
+	case 0141140:
 	  if (T_FLOW) fprintf(stderr," ICL\n");
 	  crs[A] = crs[A] >> 8;
 	  continue;
-	}
 
-	if (inst == 0141340) {
+	case 0141340:
 	  if (T_FLOW) fprintf(stderr," ICA\n");
 	  crs[A] = (crs[A] >> 8) | (crs[A] << 8);
 	  continue;
-	}
 
 	/* NOTE: Rev 21 Inst. Guide says CC are indeterminate, other
 	   references say they are set */
 
-	if (inst == 0140417) {
+	case 0140417:
 	  if (T_FLOW) fprintf(stderr," LT\n");
 	  crs[A] = 1;
 	  continue;
-	}
 
-	if (inst == 0140416) {
+	case 0140416:
 	  if (T_FLOW) fprintf(stderr," LF\n");
 	  crs[A] = 0;
 	  continue;
-	}
 
-	if (inst == 0140314) {
+	case 0140314:
 	  if (T_FLOW) fprintf(stderr," TAB\n");
 	  crs[B] = crs[A];
 	  continue;
-	}
 
-	if (inst == 0140504) {
+	case 0140504:
 	  if (T_FLOW) fprintf(stderr," TAX\n");
 	  crs[X] = crs[A];
 	  continue;
-	}
 
-	if (inst == 0140505) {
+	case 0140505:
 	  if (T_FLOW) fprintf(stderr," TAY\n");
 	  crs[Y] = crs[A];
 	  continue;
-	}
 
-	if (inst == 0140604) {
+	case 0140604:
 	  if (T_FLOW) fprintf(stderr," TBA\n");
 	  crs[A] = crs[B];
 	  continue;
-	}
 
-	if (inst == 0141034) {
+	case 0141034:
 	  if (T_FLOW) fprintf(stderr," TXA\n");
 	  crs[A] = crs[X];
 	  continue;
-	}
 
-	if (inst == 0141124) {
+	case 0141124:
 	  if (T_FLOW) fprintf(stderr," TYA\n");
 	  crs[A] = crs[Y];
 	  continue;
-	}
 
-	if (inst == 0140104) {
+	case 0140104:
 	  if (T_FLOW) fprintf(stderr," XCA\n");
 	  crs[B] = crs[A];
 	  crs[A] = 0;
 	  continue;
-	}
 
-	if (inst == 0140204) {
+	case 0140204:
 	  if (T_FLOW) fprintf(stderr," XCB\n");
 	  crs[A] = crs[B];
 	  crs[B] = 0;
 	  continue;
-	}
 
-	if (inst == 0140407) {
+	case 0140407:
 	  if (T_FLOW) fprintf(stderr," TCA\n");
 	  *(short *)(crs+A) = - (*(short *)(crs+A));
 	  SETCC_A;
@@ -4310,9 +4223,8 @@ a1a:
 	    mathexception('i', FC_INT_OFLOW, 0);
 	  }
 	  continue;
-	}
 
-	if (inst == 0141210) {
+	case 0141210:
 	  if (T_FLOW) fprintf(stderr," TCL\n");
 	  *(int *)(crs+L) = - (*(int *)(crs+L));
 	  SETCC_L;
@@ -4324,190 +4236,160 @@ a1a:
 	    mathexception('i', FC_INT_OFLOW, 0);
 	  }
 	  continue;
-	}
 
-	if (inst == 0140600) {
+	case 0140600:
 	  if (T_FLOW) fprintf(stderr," SCB\n");
 	  crs[KEYS] |= 0100000;
 	  continue;
-	}
 
-	if (inst == 0140200) {
+	case 0140200:
 	  if (T_FLOW) fprintf(stderr," RCB\n");
 	  crs[KEYS] &= 077777;
 	  continue;
-	}
 
-	if (inst == 0140024) {
+	case 0140024:
 	  if (T_FLOW) fprintf(stderr," CHS\n");
 	  crs[A] ^= 0x8000;
 	  continue;
-	}
 
-	if (inst == 0140500) {
+	case 0140500:
 	  if (T_FLOW) fprintf(stderr," SSM\n");
 	  crs[A] |= 0100000;
 	  continue;
-	}
 
-	if (inst == 0140100) {
+	case 0140100:
 	  if (T_FLOW) fprintf(stderr," SSP\n");
 	  crs[A] &= 077777;
 	  continue;
-	}
 
-	if (inst == 0140401) {
+	case 0140401:
 	  if (T_FLOW) fprintf(stderr," CMA\n");
 	  crs[A] = ~crs[A];
 	  continue;
-	}
 
-	if (inst == 0140320) {
+	case 0140320:
 	  if (T_FLOW) fprintf(stderr," CSA\n");
 	  crs[KEYS] = (crs[KEYS] & 077777) | (crs[A] & 0x8000);
 	  crs[A] = crs[A] & 077777;
 	  continue;
-	}
 
-	if (inst == 0141500) {
+	case 0141500:
 	  if (T_FLOW) fprintf(stderr," LCLT\n");
 lclt:
 	  crs[A] = ((crs[KEYS] & 0200) != 0);
 	  continue;
-	}
 
-	if (inst == 0141501) {
+	case 0141501:
 	  if (T_FLOW) fprintf(stderr," LCLE\n");
 lcle:
 	  crs[A] = ((crs[KEYS] & 0300) != 0);
 	  continue;
-	}
 
-	if (inst == 0141503) {
+	case 0141503:
 	  if (T_FLOW) fprintf(stderr," LCEQ\n");
 lceq:
 	  crs[A] = ((crs[KEYS] & 0100) != 0);
 	  continue;
-	}
 
-	if (inst == 0141502) {
+	case 0141502:
 	  if (T_FLOW) fprintf(stderr," LCNE\n");
 lcne:
 	  crs[A] = ((crs[KEYS] & 0100) == 0);
 	  continue;
-	}
 
-	if (inst == 0141504) {
+	case 0141504:
 	  if (T_FLOW) fprintf(stderr," LCGE\n");
 lcge:
 	  crs[A] = !(crs[KEYS] & 0200);
 	  continue;
-	}
 
-	if (inst == 0141505) {
+	case 0141505:
 	  if (T_FLOW) fprintf(stderr," LCGT\n");
 lcgt:
 	  crs[A] = ((crs[KEYS] & 0300) == 0);
 	  continue;
-	}
 
-	if (inst == 0140410) {
+	case 0140410:
 	  if (T_FLOW) fprintf(stderr," LLT\n");
 	  SETCC_A;
 	  goto lclt;
-	}
 
-	if (inst == 0140411) {
+	case 0140411:
 	  if (T_FLOW) fprintf(stderr," LLE\n");
 	  SETCC_A;
 	  goto lcle;
-	}
 
-	if (inst == 0140412) {
+	case 0140412:
 	  if (T_FLOW) fprintf(stderr," LNE\n");
 	  SETCC_A;
 	  goto lcne;
-	}
 
-	if (inst == 0140413) {
+	case 0140413:
 	  if (T_FLOW) fprintf(stderr," LEQ\n");
 	  SETCC_A;
 	  goto lceq;
-	}
 
-	if (inst == 0140414) {
+	case 0140414:
 	  if (T_FLOW) fprintf(stderr," LGE\n");
 	  SETCC_A;
 	  goto lcge;
-	}
 
-	if (inst == 0140415) {
+	case 0140415:
 	  if (T_FLOW) fprintf(stderr," LGT\n");
 	  SETCC_A;
 	  goto lcgt;
-	}
 
-	if (inst == 0141511) {
+	case 0141511:
 	  if (T_FLOW) fprintf(stderr," LLLE\n");
 	  SETCC_L;
 	  goto lcle;
-	}
 
-	if (inst == 0141513) {
+	case 0141513:
 	  if (T_FLOW) fprintf(stderr," LLEQ\n");
 	  SETCC_L;
 	  goto lceq;
-	}
 
-	if (inst == 0141512) {
+	case 0141512:
 	  if (T_FLOW) fprintf(stderr," LLNE\n");
 	  SETCC_L;
 	  goto lcne;
-	}
 
-	if (inst == 0141515) {
+	case 0141515:
 	  if (T_FLOW) fprintf(stderr," LLGT\n");
 	  SETCC_L;
 	  goto lcgt;
-	}
 
-	if (inst == 0141110) {
+	case 0141110:
 	  if (T_FLOW) fprintf(stderr," LFLT\n");
 	  SETCC_F;
 	  goto lclt;
-	}
 
-	if (inst == 0141111) {
+	case 0141111:
 	  if (T_FLOW) fprintf(stderr," LFLE\n");
 	  SETCC_F;
 	  goto lcle;
-	}
 
-	if (inst == 0141113) {
+	case 0141113:
 	  if (T_FLOW) fprintf(stderr," LFEQ\n");
 	  SETCC_F;
 	  goto lceq;
-	}
 
-	if (inst == 0141112) {
+	case 0141112:
 	  if (T_FLOW) fprintf(stderr," LFNE\n");
 	  SETCC_F;
 	  goto lcne;
-	}
 
-	if (inst == 0141114) {
+	case 0141114:
 	  if (T_FLOW) fprintf(stderr," LFGE\n");
 	  SETCC_F;
 	  goto lcge;
-	}
 
-	if (inst == 0141115) {
+	case 0141115:
 	  if (T_FLOW) fprintf(stderr," LFGT\n");
 	  SETCC_F;
 	  goto lcgt;
-	}
 
-	if (inst == 0140550) {
+	case 0140550:
 	  if (T_FLOW) fprintf(stderr," FLOT\n");
 	  templ = crs[A];
 	  templ = crs[B] | (templ<<15);
@@ -4517,14 +4399,12 @@ lcgt:
 	  crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
 	  crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
 	  continue;
-	}
 
-	if (inst == 0140534) {
+	case 0140534:
 	  if (T_FLOW) fprintf(stderr," FRN\n");
 	  continue;
-	}
 
-	if (inst == 0140574) {
+	case 0140574:
 	  if (T_FLOW) fprintf(stderr," DFCM\n");
 	  if (T_INST) fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
 	  tempda[0] = crs[FLTH];
@@ -4540,9 +4420,8 @@ lcgt:
 	  crs[FEXP] = tempda[3];
 	  XEXPC(0);
 	  continue;
-	}
 
-	if (inst == 0141000) {
+	case 0141000:
 	  if (T_FLOW) fprintf(stderr," ADLL\n");
 	  if (crs[KEYS] & 020000) {
 	    crs[KEYS] &= ~0120300;                 /* clear C, L, LT, EQ */
@@ -4563,9 +4442,8 @@ lcgt:
 	    SETCC_L;
 	  }
 	  continue;
-	}
 
-	if (inst == 0140530) {
+	case 0140530:
 	  if (T_FLOW) fprintf(stderr," FCM\n");
 	  if (T_INST) fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
 	  *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
@@ -4577,51 +4455,44 @@ lcgt:
 	  crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
 	  XEXPC(0);
 	  continue;
-	}
 
-	if (inst == 0140510) {
+	case 0140510:
 	  if (T_FLOW) fprintf(stderr," FSZE\n");
 	  if (*(int *)(crs+FLTH) == 0)
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0140511) {
+	case 0140511:
 	  if (T_FLOW) fprintf(stderr," FSNZ\n");
 	  if (*(int *)(crs+FLTH) != 0)
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0140512) {
+	case 0140512:
 	  if (T_FLOW) fprintf(stderr," FSMI\n");
 	  if (*(int *)(crs+FLTH) < 0)
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0140513) {
+	case 0140513:
 	  if (T_FLOW) fprintf(stderr," FSPL\n");
 	  if (*(int *)(crs+FLTH) >= 0)
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0140514) {
+	case 0140514:
 	  if (T_FLOW) fprintf(stderr," FSLE\n");
 	  if (*(int *)(crs+FLTH) <= 0)
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0140515) {
+	case 0140515:
 	  if (T_FLOW) fprintf(stderr," FSGT\n");
 	  if (*(int *)(crs+FLTH) > 0)
 	    RPL++;
 	  continue;
-	}
 
-	if (inst == 0140554) {
+	case 0140554:
 	  if (T_FLOW) fprintf(stderr," INT\n");
 	  tempda[0] = crs[FLTH];
 	  tempda[1] = crs[FLTL];
@@ -4636,9 +4507,8 @@ lcgt:
 	  crs[B] = templ & 0x7FFF;
 	  crs[A] = templ >> 15;
 	  continue;
-	}
 
-	if (inst == 0140531) {
+	case 0140531:
 	  if (T_FLOW) fprintf(stderr," INTA\n");
 	  tempda[0] = crs[FLTH];
 	  tempda[1] = crs[FLTL];
@@ -4651,9 +4521,8 @@ lcgt:
 	    CLEARC;
 	  tempa = *(double *)tempda;
 	  continue;
-	}
 
-	if (inst == 0140532) {
+	case 0140532:
 	  if (T_FLOW) fprintf(stderr," FLTA\n");
 	  tempf = *(short *)(crs+A);
 	  ieeepr4(&tempf);
@@ -4661,9 +4530,8 @@ lcgt:
 	  crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
 	  crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
 	  continue;
-	}
 
-	if (inst == 0140533) {
+	case 0140533:
 	  if (T_FLOW) fprintf(stderr," INTL\n");
 	  tempda[0] = crs[FLTH];
 	  tempda[1] = crs[FLTL];
@@ -4676,9 +4544,8 @@ lcgt:
 	    CLEARC;
 	  templ = *(double *)tempda;
 	  continue;
-	}
 
-	if (inst == 0140535) {
+	case 0140535:
 	  if (T_FLOW) fprintf(stderr," FLTL\n");
 	  tempf = *(int *)(crs+L);
 	  ieeepr4(&tempf);
@@ -4686,44 +4553,34 @@ lcgt:
 	  crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
 	  crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
 	  continue;
-	}
 
-	if (inst == 0141707) {
-	  if (T_FLOW) fprintf(stderr," BMLT\n");
-	  goto blr;
-	}
-
-	if (inst == 0141711) {
+	case 0141711:
 	  if (T_FLOW) fprintf(stderr," BMLE\n");
 	  if (!(crs[KEYS] & 020000))
 	    RPL = get16(RP);
 	  else
 	    goto bceq;
 	  continue;
-	}
-
-	if (inst == 0141602) {
-	  if (T_FLOW) fprintf(stderr," BMEQ\n");
-	  goto bceq;
-	}
 
 #if 0
-	if (inst == 0141603) {   /* same opcode as BCNE */
+	case 0141602:   /* same opcode as BCNE */
+	  if (T_FLOW) fprintf(stderr," BMEQ\n");
+	  goto bceq;
+
+	case 0141603:   /* same opcode as BCNE */
 	  if (T_FLOW) fprintf(stderr," BMNE\n");
 	  goto bcne;
-	}
 
 	/* NOTE: BMGE is equivalent to BLS; this opcode doesn't exist
 	   in newer manuals */
 
-	if (inst == 0141606) {
+	case 0141606:
 	  if (T_FLOW) fprintf(stderr," BMGE\n");
 	  printf("WARNING: BMGE instruction '141606 at #%d\n", instcount);
 	  goto bls;
-	}
 #endif
 
-	if (inst == 0141710) {
+	case 0141710:
 #if 0
 	  /* this is good for tracing the failure if cpuid is set to 15 in
 	     Primos boot.  Weird memory maps for 9950 16MB? */
@@ -4734,32 +4591,28 @@ lcgt:
 	    goto bcne;
 	  RPL++;
 	  continue;
-	}
 
-	if (inst == 0141404) {
+	case 0141404:
 	  if (T_FLOW) fprintf(stderr," CRE\n");
 	  *(int *)(crs+E) = 0;
 	  continue;
-	}
 
-	if (inst == 0141410) {
+	case 0141410:
 	  if (T_FLOW) fprintf(stderr," CRLE\n");
 	  *(int *)(crs+L) = 0;
 	  *(int *)(crs+E) = 0;
 	  continue;
-	}
 
-	if (inst == 0141414) {
+	case 0141414:
 	  if (T_FLOW) fprintf(stderr," ILE\n");
 	  templ = *(int *)(crs+L);
 	  *(int *)(crs+L) = *(int *)(crs+E);
 	  *(int *)(crs+E) = templ;
 	  continue;
-	}
 
 	/* queue instructions */
 
-	if (inst == 0141714) {
+	case 0141714:
 	  if (T_FLOW) fprintf(stderr," RTQ\n");
 	  ea = apea(NULL);
 	  qtop = get16(ea);
@@ -4777,9 +4630,8 @@ lcgt:
 	    crs[KEYS] &= ~0100;
 	  }
 	  continue;
-	}
 
-	if (inst == 0141715) {
+	case 0141715:
 	  if (T_FLOW) fprintf(stderr," RBQ\n");
 	  ea = apea(NULL);
 	  qtop = get16(ea);
@@ -4797,9 +4649,8 @@ lcgt:
 	    crs[KEYS] &= ~0100;
 	  }
 	  continue;
-	}
 
-	if (inst == 0141716) {
+	case 0141716:
 	  if (T_FLOW) fprintf(stderr," ABQ\n");
 	  ea = apea(NULL);
 	  qtop = get16(ea);
@@ -4816,9 +4667,8 @@ lcgt:
 	    crs[KEYS] &= ~0100;
 	  }
 	  continue;
-	}
 
-	if (inst == 0141717) {
+	case 0141717:
 	  if (T_FLOW) fprintf(stderr," ATQ\n");
 	  ea = apea(NULL);
 	  qtop = get16(ea);
@@ -4835,9 +4685,8 @@ lcgt:
 	    crs[KEYS] &= ~0100;
 	  }
 	  continue;
-	}
 
-	if (inst == 0141757) {
+	case 0141757:
 	  if (T_FLOW) fprintf(stderr," TSTQ\n");
 	  ea = apea(NULL);
 	  qtop = get16(ea);
@@ -4846,19 +4695,19 @@ lcgt:
 	  crs[A] = (qbot-qtop) & qmask;
 	  SETCC_A;
 	  continue;
-	}
 
-	if (T_INST) fprintf(stderr," unrecognized generic class 3 instruction!\n");
-	printf(" unrecognized generic class 3 instruction %o!\n", inst);
+	default:
+	  if (T_INST) fprintf(stderr," unrecognized generic class 3 instruction!\n");
+	  printf(" unrecognized generic class 3 instruction %o!\n", inst);
 
-	/* XXX: these are hacks for CPU.FAULT; not sure how to determine whether
-	   an instruction is illegal or unimplemented... */
-	if (inst == 0141700)
-	  fault(ILLINSTFAULT, RPL, 0);
-	else
-	  fault(UIIFAULT, RPL, 0);
-	fatal(NULL);
-	
+	  /* XXX: these are hacks for CPU.FAULT; not sure how to determine whether
+	     an instruction is illegal or unimplemented... */
+	  if (inst == 0141700)
+	    fault(ILLINSTFAULT, RPL, 0);
+	  else
+	    fault(UIIFAULT, RPL, 0);
+	  fatal(NULL);
+	}	
       }
 
 
@@ -5295,16 +5144,17 @@ keys = 14200, modals=100177
     /* NOTE: basic and dbasic execute instructions from the register file 
        with TRACE ON */
 
-    if (opcode == 00100) {
+    switch (opcode) {
+
+    case 00100:
       if (T_FLOW) fprintf(stderr," JMP\n");
       RP = ea;
       continue;
-    }
 
     /* NOTE: don't use get32 for DLD/DST, because it doesn't handle register
        address traps */
 
-    if (opcode == 00200) {
+    case 00200:
       crs[A] = get16(ea);
       if ((crs[KEYS] & 050000) == 040000) {  /* R-mode and DP */
 	if (T_FLOW) fprintf(stderr," DLD\n");
@@ -5313,9 +5163,8 @@ keys = 14200, modals=100177
 	if (T_FLOW) fprintf(stderr," LDA ='%o/%d\n", crs[A], *(short *)(crs+A));
       }
       continue;
-    }
 
-    if (opcode == 00400) {
+    case 00400:
       put16(crs[A],ea);
       if ((crs[KEYS] & 050000) == 040000) {
 	if (T_FLOW) fprintf(stderr," DST\n");
@@ -5324,12 +5173,11 @@ keys = 14200, modals=100177
 	if (T_FLOW) fprintf(stderr," STA\n");
       }
       continue;
-    }
 
     /* NOTE: EQ and LT can be set in the same instruction if overflow
        occurs, for example, '100000+'100000 */
 
-    if (opcode == 00600) {
+    case 00600:
       crs[KEYS] &= ~0120300;                 /* clear C, L, LT, EQ */
       utempa = crs[A];
       m = get16(ea);
@@ -5371,9 +5219,8 @@ keys = 14200, modals=100177
 	  crs[KEYS] |= 0200;
       }
       continue;
-    }
 
-    if (opcode == 00700) {
+    case 00700:
       crs[KEYS] &= ~0120300;   /* clear C, L, and CC */
       utempa = crs[A];
       m = get16(ea);
@@ -5416,30 +5263,26 @@ keys = 14200, modals=100177
 	  crs[KEYS] |= 0200;
       }
       continue;
-    }
 
-    if (opcode == 00300) {
+    case 00300:
       m = get16(ea);
       if (T_FLOW) fprintf(stderr," ANA ='%o\n",m);
       crs[A] &= m;
       continue;
-    }
 
-    if (opcode == 00500) {
+    case 00500:
       m = get16(ea);
       if (T_FLOW) fprintf(stderr," ERA ='%o\n", m);
       crs[A] ^= m;
       continue;
-    }
 
-    if (opcode == 00302) {
+    case 00302:
       m = get16(ea);
       if (T_FLOW) fprintf(stderr," ORA ='%o\n", m);
       crs[A] |= m;
       continue;
-    }
 
-    if (opcode == 01000) {
+    case 01000:
       if (T_FLOW) fprintf(stderr," JST\n");
 
 #if 0
@@ -5454,11 +5297,10 @@ keys = 14200, modals=100177
       if ((RP & RINGMASK32) == 0)
 	inhcount = 1;
       continue;
-    }
 
     /* this should set the C and L bits like subtract */
 
-    if (opcode == 01100) {
+    case 01100:
       m = get16(ea);
       if (T_FLOW) fprintf(stderr," CAS ='%o/%d\n", m, *(short *)&m);
 #if 1
@@ -5494,46 +5336,40 @@ keys = 14200, modals=100177
       XSETL(0);
 #endif
       continue;
-    }
 
-    if (opcode == 01200) {
+    case 01200:
       if (T_FLOW) fprintf(stderr," IRS\n");
       m = get16(ea) + 1;
       put16(m,ea);
       if (m == 0)
 	RPL++;
       continue;
-    }
 
-    if (opcode == 01300) {
+    case 01300:
       if (T_FLOW) fprintf(stderr," IMA\n");
       m = get16(ea);
       put16(crs[A],ea);
       crs[A] = m;
       continue;
-    }
 
-    if (opcode == 01400) {
+    case 01400:
       if (T_FLOW) fprintf(stderr," JSY\n");
       crs[Y] = RPL;
       RP = ea;
       continue;
-    }
 
-    if (opcode == 01402) {
+    case 01402:
       if (T_FLOW) fprintf(stderr," JSXB\n");
       *(unsigned int *)(crs+XB) = RP;
       RP = ea;
       continue;
-    }
 
-    if (opcode == 01500) {
+    case 01500:
       if (T_FLOW) fprintf(stderr," STX\n");
       put16(crs[X],ea);
       continue;
-    }
 
-    if (opcode == 01600) {
+    case 01600:
       m = get16(ea);
       if (T_FLOW) fprintf(stderr," MPY ='%o/%d\n", m, *(short *)&m);
       templ = *(short *)(crs+A) * *(short *)&m;
@@ -5549,18 +5385,16 @@ keys = 14200, modals=100177
 	}
       }
       continue;
-    }
 
-    if (opcode == 01603) {
+    case 01603:
       templ = get32(ea);
       if (T_FLOW) fprintf(stderr," MPL ='%o/%d\n", templ, *(int *)&templ);
       templl = (long long)(*(int *)(crs+L)) * (long long)templ;
       *(long long *)(crs+L) = templl;
       CLEARC;
       continue;
-    }
 
-    if (opcode == 01700) {
+    case 01700:
       m = get16(ea);
       if (T_FLOW) fprintf(stderr," DIV ='%o/%d\n", m, *(short *)&m);
       if (crs[KEYS] & 010000) {          /* V/I mode */
@@ -5580,9 +5414,8 @@ keys = 14200, modals=100177
 	//printf("DIV overflow\n");
       }
       continue;
-    }
 
-    if (opcode == 01703) {
+    case 01703:
       templ = get32(ea);
       if (T_FLOW) fprintf(stderr," DVL ='%o/%d\n", templ, *(int *)&templ);
       templl = *(long long *)(crs+L);
@@ -5593,26 +5426,23 @@ keys = 14200, modals=100177
       } else
 	SETC;
       continue;
-    }
 
-    if (opcode == 03500) {
+    case 03500:
       if (T_FLOW) fprintf(stderr," LDX\n");
       crs[X] = get16(ea);
       continue;
-    }
 
-    if (opcode == 00101) {
+    case 00101:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	if (T_FLOW) fprintf(stderr," EAL\n");
-	*(unsigned int *)(crs+L) = ea;
+	*(ea_t *)(crs+L) = ea;
       } else {
 	if (T_FLOW) fprintf(stderr," EAA\n");
 	crs[A] = ea;
       }
       continue;
-    }
 
-    if (opcode == 00203) {
+    case 00203:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	if (T_FLOW) fprintf(stderr," LDL\n");
 	*(unsigned int *)(crs+L) = get32(ea);
@@ -5622,9 +5452,8 @@ keys = 14200, modals=100177
 	  RPL = ea;
       }
       continue;
-    }
 
-    if (opcode == 00703) {
+    case 00703:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	utempl2 = get32(ea);
 	if (T_FLOW) fprintf(stderr," SBL ='%o/%d\n", utempl2, *(int *)&utempl2);
@@ -5650,9 +5479,8 @@ keys = 14200, modals=100177
 	  RPL = ea;
       }
       continue;
-    }
 
-    if (opcode == 01002) {
+    case 01002:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	//traceflags = ~TB_MAP;
 	//if (T_FLOW || T_PCL) fprintf(stderr,"#%d %o/%o: PCL %o/%o\n", instcount, RPH, RPL-2, ea>>16, ea&0xFFFF);
@@ -5664,9 +5492,8 @@ keys = 14200, modals=100177
 	RPL = ea;
       }
       continue;
-    }
 
-    if (opcode == 00503) {
+    case 00503:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	utempl = get32(ea);
 	if (T_FLOW) fprintf(stderr," ERL ='%o\n", utempl);
@@ -5677,9 +5504,8 @@ keys = 14200, modals=100177
 	  RPL = ea;
       }
       continue;
-    }
 
-    if (opcode == 00403) {
+    case 00403:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	if (T_FLOW) fprintf(stderr," STL\n");
 	put32(*(unsigned int *)(crs+L),ea);
@@ -5689,9 +5515,8 @@ keys = 14200, modals=100177
 	  RPL = ea;
       }
       continue;
-    }
 
-    if (opcode == 00603) {
+    case 00603:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	utempl2 = get32(ea);
 	if (T_FLOW) fprintf(stderr," ADL ='%o/%d\n", utempl2, *(int *)&utempl2);
@@ -5716,9 +5541,8 @@ keys = 14200, modals=100177
 	  RPL = ea;
       }
       continue;
-    }
 
-    if (opcode == 00303) {
+    case 00303:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	utempl = get32(ea);
 	if (T_FLOW) fprintf(stderr," ANL ='%o\n", utempl);
@@ -5729,15 +5553,13 @@ keys = 14200, modals=100177
 	  RPL = ea;
       }
       continue;
-    }
 
-    if (opcode == 01202) {
+    case 01202:
       if (T_FLOW) fprintf(stderr," EAXB\n");
       *(ea_t *)(crs+XB) = ea;
       continue;
-    }
 
-    if (opcode == 01502) {
+    case 01502:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	if (T_FLOW) fprintf(stderr," DFLX\n");
 	crs[X] = get16(ea) * 4;
@@ -5748,15 +5570,13 @@ keys = 14200, modals=100177
 	  RPL = ea;
       }
       continue;
-    }
 
-    if (opcode == 03502) {
+    case 03502:
       if (T_FLOW) fprintf(stderr," STY\n");
       put16(crs[Y],ea);
       continue;
-    }
 
-    if (opcode == 01503) {
+    case 01503:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	if (T_FLOW) fprintf(stderr," QFLX\n");
 	crs[X] = get16(ea) * 8;
@@ -5767,36 +5587,26 @@ keys = 14200, modals=100177
 	  RPL = ea;
       }
       continue;
-    }
 
-    if (opcode == 01501) {
+    case 01501:
       if (T_FLOW) fprintf(stderr," FLX\n");
       crs[X] = get16(ea) * 2;
       continue;
-    }
 
-    if (opcode == 03501) {
+    case 03501:
       if (T_FLOW) fprintf(stderr," LDY\n");
       crs[Y] = get16(ea);
       continue;
-    }
 
-    if (opcode == 0101) {
-      if (T_FLOW) fprintf(stderr," EAL\n");
-      *(ea_t *)(crs+L) = ea;
-      continue;
-    }
-
-    if (opcode == 03503) {
+    case 03503:
       if (T_FLOW) fprintf(stderr," JSX\n");
       crs[X] = RPL;
       RP = ea;
       continue;
-    }
 
     /* XXX: this should set the L bit like subtract */
 
-    if (opcode == 01103) {
+    case 01103:
       if (T_FLOW) fprintf(stderr," CLS\n");
       templ = get32(ea);
       crs[KEYS] &= ~0300;
@@ -5809,9 +5619,8 @@ keys = 14200, modals=100177
       }
       XSETL(0);
       continue;
-    }
 
-    if (opcode == 00601) {
+    case 00601:
       if (T_FLOW) fprintf(stderr," FAD\n");
       if (T_INST) fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       //if (T_INST) fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
@@ -5826,11 +5635,10 @@ keys = 14200, modals=100177
       crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
       XEXPC(0);
       continue;
-    }
 
     /* this is implemented as a subtract on some models */
 
-    if (opcode == 01101) {
+    case 01101:
       if (T_FLOW) fprintf(stderr," FCS\n");
       if (T_INST) fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       //if (T_INST) fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
@@ -5847,9 +5655,8 @@ keys = 14200, modals=100177
 	crs[KEYS] |= 0200;
       }
       continue;
-    }
 
-    if (opcode == 01701) {
+    case 01701:
       if (T_FLOW) fprintf(stderr," FDV\n");
       if (T_INST) fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       //if (T_INST) fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
@@ -5864,18 +5671,16 @@ keys = 14200, modals=100177
       crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
       XEXPC(0);
       continue;
-    }
 
-    if (opcode == 0201) {
+    case 0201:
       if (T_FLOW) fprintf(stderr," FLD\n");
       crs[FLTH] = get16(ea);
       m = get16(ea+1);
       crs[FLTL] = m & 0xFF00;
       crs[FEXP] = m & 0xFF;
       continue;
-    }
 
-    if (opcode == 01601) {
+    case 01601:
       if (T_FLOW) fprintf(stderr," FMP\n");
       if (T_INST) fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       //if (T_INST) fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
@@ -5890,9 +5695,8 @@ keys = 14200, modals=100177
       crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
       XEXPC(0);
       continue;
-    }
 
-    if (opcode == 00701) {
+    case 00701:
       if (T_FLOW) fprintf(stderr," FSB\n");
       if (T_INST) fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       //if (T_INST) fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
@@ -5907,9 +5711,8 @@ keys = 14200, modals=100177
       crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
       XEXPC(0);
       continue;
-    }
 
-    if (opcode == 0401) {
+    case 0401:
       if (T_FLOW) fprintf(stderr," FST\n");
       if (crs[FEXP] & 0xFF00)
 	mathexception('f', FC_SFP_STORE, ea);
@@ -5917,9 +5720,8 @@ keys = 14200, modals=100177
       put16((crs[FLTL] & 0xFF00) | crs[FEXP],ea+1);
       CLEARC;
       continue;
-    }
 
-    if (opcode == 0602) {
+    case 0602:
       if (T_FLOW) fprintf(stderr," DFAD\n");
       if (T_INST) fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       //if (T_INST) fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
@@ -5938,9 +5740,8 @@ keys = 14200, modals=100177
       crs[FEXP] = tempda[3];
       XEXPC(0);
       continue;
-    }
 
-    if (opcode == 01102) {
+    case 01102:
       if (T_FLOW) fprintf(stderr, " DFCS\n");
       m = get16(ea);
       if ((crs[FLTH] & 0x8000) == (m & 0x8000)) {
@@ -5979,9 +5780,8 @@ keys = 14200, modals=100177
       }
 #endif
       continue;
-    }
 
-    if (opcode == 01702) {
+    case 01702:
       if (T_FLOW) fprintf(stderr," DFDV\n");
       if (T_INST) fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       //if (T_INST) fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
@@ -6000,9 +5800,8 @@ keys = 14200, modals=100177
       crs[FEXP] = tempda[3];
       XEXPC(0);
       continue;
-    }
 
-    if (opcode == 0202) {
+    case 0202:
       if (T_FLOW) fprintf(stderr," DFLD\n");
       *(double *)tempda = get64(ea);
       crs[FLTH] = tempda[0];
@@ -6010,9 +5809,8 @@ keys = 14200, modals=100177
       crs[FLTD] = tempda[2];
       crs[FEXP] = tempda[3];
       continue;
-    }
 
-    if (opcode == 01602) {
+    case 01602:
       if (T_FLOW) fprintf(stderr," DFMP\n");
       if (T_INST) fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       //if (T_INST) fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
@@ -6031,9 +5829,8 @@ keys = 14200, modals=100177
       crs[FEXP] = tempda[3];
       XEXPC(0);
       continue;
-    }
 
-    if (opcode == 0702) {
+    case 0702:
       if (T_FLOW) fprintf(stderr," DFSB\n");
       if (T_INST) fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       //if (T_INST) fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
@@ -6052,9 +5849,8 @@ keys = 14200, modals=100177
       crs[FEXP] = tempda[3];
       XEXPC(0);
       continue;
-    }
 
-    if (opcode == 0402) {
+    case 0402:
       if (T_FLOW) fprintf(stderr," DFST\n");
       tempda[0] = crs[FLTH];
       tempda[1] = crs[FLTL];
@@ -6062,13 +5858,11 @@ keys = 14200, modals=100177
       tempda[3] = crs[FEXP];
       put64(*(double *)tempda, ea);
       continue;
-    }
 
-    if (opcode == 01302) {
+    case 01302:
       if (T_FLOW) fprintf(stderr," EALB\n");
       *(ea_t *)(crs+LB) = ea;
       continue;
-    }
 
     /* NOTE: during Primos coldstart, when setting PPA:
 
@@ -6086,7 +5880,7 @@ keys = 14200, modals=100177
        Not sure what the C-bit means here... maybe multi-processor stuff?
     */
 
-    if (opcode == 0301) {
+    case 0301:
       if (T_FLOW) fprintf(stderr," STLR\n");
       utempa = ea;                 /* word number portion only */
       if (utempa & 040000) {       /* absolute RF addressing */
@@ -6098,9 +5892,8 @@ keys = 14200, modals=100177
 	*(((int *)crs)+utempa) = *(int *)(crs+L);
       }
       continue;
-    }
 
-    if (opcode == 0501) {
+    case 0501:
       if (T_FLOW) fprintf(stderr," LDLR\n");
       utempa = ea;                 /* word number portion only */
       if (utempa & 040000) {       /* absolute RF addressing */
@@ -6112,16 +5905,14 @@ keys = 14200, modals=100177
 	*(int *)(crs+L) = *(((int *)crs)+utempa);
       }
       continue;
-    }
 
-    if (opcode == 01401) {
+    case 01401:
       if (T_FLOW) fprintf(stderr," EIO\n");
       crs[KEYS] &= ~0100;      /* reset EQ */
       pio(ea & 0xFFFF);
       continue;
-    }
 
-    if (opcode == 00102) {
+    case 00102:
       if (T_FLOW) fprintf(stderr," XEC\n");
       utempa = get16(ea);
       //utempl = RP-2;
@@ -6129,26 +5920,26 @@ keys = 14200, modals=100177
       inst = utempa;
       earp = INCVA(ea,1);
       goto xec;
-    }
 
-    if (opcode == 00103) {
+    case 00103:
       if (T_FLOW) fprintf(stderr," ENTR\n");
       utempa = crs[S];
       crs[S] -= ea;
       put16(utempa,crs[S]);
       continue;
-    }
 
+    default:
 #if 0
-    if (mem[066] != 0) {
-      if (T_FLOW) fprintf(stderr," JST* '66 [%o]\n", mem[066]);
-      mem[mem[066]] = RPL;
-      RPL = mem[066]+1;
-      continue;
-    }
+      if (mem[066] != 0) {
+	if (T_FLOW) fprintf(stderr," JST* '66 [%o]\n", mem[066]);
+	mem[mem[066]] = RPL;
+	RPL = mem[066]+1;
+	continue;
+      }
 #endif
-    printf("Unknown memory reference opcode: %o\n", opcode);
-    fatal(NULL);
+      printf("Unknown memory reference opcode: %o\n", opcode);
+      fatal(NULL);
+    }
   }
 }
     

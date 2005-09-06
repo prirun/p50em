@@ -223,17 +223,13 @@ void devasr (short class, short func, short device) {
 
   case 1:
     if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
-    if (needflush) {
-      fflush(stdout);
-      needflush = 0;
-      devpoll[device] = 0;
-    }
     if (func == 7) {         /* skip if received a char */
       timeout.tv_sec = 0;
 #if 0
       timeout.tv_usec = 100000;
 #else
       timeout.tv_usec = 1;
+      timeout.tv_usec = 0;
 #endif
       if (select(1, &readfds, NULL, NULL, &timeout) == 1)
 	IOSKIP;
@@ -326,6 +322,9 @@ readasr:
     } else if (func == 1) {       /* write control word */
       IOSKIP;
     } else if (04 <= func && func <= 07) {  /* write control register 1/2 */
+      IOSKIP;
+    } else if (func == 013) {
+      /* NOTE: does this in rev 20 on settime command (Option A maybe?) */
       IOSKIP;
     } else if (func == 017) {
       /* NOTE: 9950 does this in rev 20, others don't */
