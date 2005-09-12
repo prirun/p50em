@@ -66,13 +66,6 @@ typedef unsigned int pa_t;            /* physical address */
   else if (*(int *)(crs+L) < 0) \
     crs[KEYS] |= 0200;
 
-#define SETCC_LE \
-  crs[KEYS] &= ~0300; \
-  if (*(int *)(crs+L) == 0 && *(int *)(crs+E) == 0) \
-    crs[KEYS] |= 0100; \
-  else if (*(int *)(crs+L) < 0) \
-    crs[KEYS] |= 0200;
-
 /* NOTE: in previous versions, exponent must be zero for 0.0, but DIAG
    test CPU.FLOAT.V considers a zero fraction and non-zero exponent to
    also be 0.0 (this is a "dirty zero") */
@@ -130,16 +123,16 @@ typedef unsigned int pa_t;            /* physical address */
    print something when they're encountered */
 
 unsigned short gen0tab[] = {
-  000503,          /* EMCM */
-  000501,          /* LMCM */
-  001304,          /* MDEI */
-  001305,          /* MDII */
-  001324,          /* MDIW */
-  001306,          /* MDRS */
-  001307,          /* MDWC */
-  000021,          /* RMC */
-  000311,          /* VIFY */
-  001113};         /* XVFY */
+  000503,          /* EMCM - enter machine check mode */
+  000501,          /* LMCM - leave machine check mode */
+  001304,          /* MDEI - memory diagnostic */
+  001305,          /* MDII - memory diagnostic */
+  001324,          /* MDIW - memory diagnostic */
+  001306,          /* MDRS - memory diagnostic */
+  001307,          /* MDWC - memory diagnostic */
+  000021,          /* RMC - reset machine check */
+  000311,          /* VIFY - ucode verify */
+  001113};         /* XVFY - extended ucode verify */
 
 #define GEN0TABSIZE sizeof(gen0tab)/sizeof(unsigned short)
 
@@ -218,7 +211,7 @@ unsigned long instcount=0;           /* global instruction count */
 
 unsigned short inhcount = 0;         /* number of instructions to stay inhibited */
 
-unsigned int instpermsec = 2400;     /* initial assumption for inst/msec */
+unsigned int instpermsec = 2600;     /* initial assumption for inst/msec */
 
 jmp_buf jmpbuf;                      /* for longjumps to the fetch loop */
 
@@ -598,7 +591,7 @@ unsigned short get16r(ea_t ea, ea_t rpring) {
 
   /* check for live register access */
 
-  if (ea & 0x80000000 || (!(crs[KEYS] & 010000) && (ea & 0xFFFF) < 040)) {
+  if (ea & 0x80000000) {
     ea = ea & 0xFFFF;
     if (ea < 7)
       return crs[memtocrs[ea]];
@@ -623,7 +616,7 @@ unsigned int get32r(ea_t ea, ea_t rpring) {
   /* check for live register access */
 
   if (ea & 0x80000000)
-    fatal("Address trap in get32!");
+    warn("address trap in get32");
 
   pa = mapva(ea, RACC, &access, rpring);
 
@@ -644,7 +637,7 @@ double get64r(ea_t ea, ea_t rpring) {
   /* check for live register access */
 
   if (ea & 0x80000000)
-    fatal("Address trap in get64!");
+    warn("address trap in get64");
 
   pa = mapva(ea, RACC, &access, rpring);
   if ((pa & 01777) <= 01774)
@@ -663,7 +656,7 @@ put16r(unsigned short value, ea_t ea, ea_t rpring) {
   pa_t pa;
   unsigned short access;
 
-  if (ea & 0x80000000 || (!(crs[KEYS] & 010000) && (ea & 0xFFFF) < 040)) {
+  if (ea & 0x80000000) {
     ea = ea & 0xFFFF;
     if (ea < 7)
       crs[memtocrs[ea]] = value;
@@ -694,7 +687,7 @@ put32r(unsigned int value, ea_t ea, ea_t rpring) {
   /* check for live register access */
 
   if (ea & 0x80000000)
-    fatal("Address trap in put32!");
+    warn("address trap in put32");
 
   pa = mapva(ea, WACC, &access, rpring);
   if ((pa & 01777) <= 01776)
@@ -714,7 +707,7 @@ put64r(double value, ea_t ea, ea_t rpring) {
   /* check for live register access */
 
   if (ea & 0x80000000)
-    fatal("Address trap in put32!");
+    warn("address trap in put32");
 
   pa = mapva(ea, WACC, &access, rpring);
   if ((pa & 01777) <= 01774)
@@ -917,12 +910,15 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
 
 
 fatal(char *msg) {
-  printf("Fatal error: instruction #%d at %o/%o: %o %o\n", instcount, prevpc >> 16, prevpc & 0xFFFF, get16(prevpc), get16(prevpc+1));
+  printf("Fatal error: instruction #%d at %o/%o %s: %o %o keys=%o, modals=%o\n", instcount, prevpc >> 16, prevpc & 0xFFFF, searchloadmap(prevpc,' '), get16(prevpc), get16(prevpc+1), crs[KEYS], crs[MODALS]);
   if (msg)
     printf("%s\n", msg);
-  printf("keys = %o, modals=%o\n", crs[KEYS], crs[MODALS]);
   /* should do a register dump, RL dump, PCB dump, etc. here... */
   exit(1);
+}
+
+warn(char *msg) {
+  printf("emulator warning:\n  instruction #%d at %o/%o: %o %o keys=%o, modals=%o\n  %s\n", instcount, prevpc >> 16, prevpc & 0xFFFF, get16(prevpc), get16(prevpc+1),crs[KEYS], crs[MODALS], msg);
 }
     
 /* I/O device map table, containing function pointers to handle device I/O */
@@ -955,9 +951,13 @@ unsigned short readshort () {
 
 ea_t ea16s (unsigned short inst, short i, short x) {
   
-  unsigned short ea, m, rpl, amask;
+  unsigned short ea, m, rpl, amask, live;
   ea_t va;
 
+  if (crs[MODALS] & 4)                           /* segmentation enabled? */
+    live = 010;                                  /* yes, limit register traps */
+  else
+    live = 040;
   amask = 037777;
   rpl = prevpc;
   if (inst & 001000)
@@ -969,8 +969,7 @@ ea_t ea16s (unsigned short inst, short i, short x) {
       ea += crs[X];
     if (!i)                                      /* not indirect */
       break;
-    /* NOTE: this test is already in get16... */
-    if (ea < 040)
+    if (ea < live)
       m = get16(0x80000000|ea);
     else
       m = get16(MAKEVA(RPH,ea));
@@ -979,7 +978,7 @@ ea_t ea16s (unsigned short inst, short i, short x) {
     ea = m & 037777;                             /* go indirect */
   }
   va = MAKEVA(RPH, ea);
-  if (ea < 040)                                  /* flag live register ea */
+  if (ea < live)                                  /* flag live register ea */
     return va | 0x80000000;
   return va;
 }
@@ -989,9 +988,14 @@ ea_t ea16s (unsigned short inst, short i, short x) {
 
 ea_t ea32s (unsigned short inst, short i, short x) {
   
-  unsigned short ea, m,rpl,amask;
+  unsigned short ea, m,rpl, amask, live;
   ea_t va;
 
+  if (crs[MODALS] & 4)                           /* segmentation enabled? */
+    live = 010;                                  /* yes, limit register traps */
+  else
+    live = 040;
+  amask = 077777;
   rpl = prevpc;
   if (inst & 001000)
     ea = (rpl & 077000) | (inst & 0777);         /* current sector */
@@ -1014,7 +1018,7 @@ ea_t ea32s (unsigned short inst, short i, short x) {
     ea += crs[X];
   ea &= amask;
   va = MAKEVA(RPH, ea);
-  if (ea < 040)                                  /* flag live register ea */
+  if (ea < live)                                  /* flag live register ea */
     return va | 0x80000000;
   return va;
 }
@@ -1026,10 +1030,16 @@ ea_t ea32s (unsigned short inst, short i, short x) {
 
 ea_t ea32r64r (ea_t earp, unsigned short inst, short i, short x, unsigned short *opcode) {
 
-  short class;
-  unsigned short ea,m,rph,rpl;
+  unsigned short live, ea, m, rph, rpl, amask, class;
   ea_t va;
 
+  if (crs[MODALS] & 4)                           /* segmentation enabled? */
+    live = 010;                                  /* yes, limit register traps */
+  else
+    live = 040;
+  amask = 0177777;
+  if ((crs[KEYS] & 016000) == 06000)             /* 32R mode? */
+    amask = 077777;
   rpl = earp;
   rph = (earp >> 16) & 0x7FFF;     /* clear fault (live register) bit from RP */
   if (T_EAR) fprintf(stderr," ea32r64r: i=%o, x=%o, amask=%o\n", i!= 0, x!=0, amask);
@@ -1051,7 +1061,7 @@ ea_t ea32r64r (ea_t earp, unsigned short inst, short i, short x, unsigned short 
     }
   }
   while (i) {
-    if (ea < 040)
+    if (ea < live)
       m = get16(0x80000000|ea);
     else
       m = get16(MAKEVA(rph,ea));
@@ -1070,7 +1080,7 @@ ea_t ea32r64r (ea_t earp, unsigned short inst, short i, short x, unsigned short 
   }
   ea &= amask;
   va = MAKEVA(rph, ea);
-  if (ea < 040)                                  /* flag live register ea */
+  if (ea < live)                                  /* flag live register ea */
     return va | 0x80000000;
   return va;
 
@@ -1090,7 +1100,7 @@ special:
       if (T_EAR) fprintf(stderr," Preindex, new ea=%o\n", ea);
     }
     while (i) {
-      if (ea < 040)
+      if (ea < live)
 	m = get16(0x80000000|ea);
       else
 	m = get16(MAKEVA(rph,ea));
@@ -1105,12 +1115,12 @@ special:
 
   } else if (i && x) {                           /* class 2/3, ix=11 */
     if (T_EAR) fprintf(stderr," class 2/3, ix=11\n");
-    ea = get16(MAKEVA(rph,RPL++));               /* get A from next word */
+    ea = get16(MAKEVA(RPH,RPL++));               /* get A from next word */
     if (T_EAR) fprintf(stderr," ea=%o\n", ea);
     if (class == 3)
       ea += (short) crs[S];
     while (i) {
-      if (ea < 040)
+      if (ea < live)
 	m = get16(0x80000000|ea);
       else
 	m = get16(MAKEVA(rph,ea));
@@ -1133,7 +1143,7 @@ special:
       ea = --crs[S];
     if (T_EAR) fprintf(stderr," Class 2/3, new ea=%o, new S=%o\n", ea, crs[S]);
     if (x) {
-      if (ea < 040)
+      if (ea < live)
 	m = get16(0x80000000|ea);
       else
 	m = get16(MAKEVA(rph,ea));
@@ -1142,7 +1152,7 @@ special:
       ea = m & amask;
     }
     while (i) {
-      if (ea < 040)
+      if (ea < live)
 	m = get16(0x80000000|ea);
       else
 	m = get16(MAKEVA(rph,ea));
@@ -1157,7 +1167,7 @@ special:
   }
   ea &= amask;
   va = MAKEVA(rph, ea);
-  if (ea < 040)                                  /* flag live register ea */
+  if (ea < live)                                  /* flag live register ea */
     return va | 0x80000000;
   return va;
 }
@@ -2751,7 +2761,7 @@ main (int argc, char **argv) {
       traceflags = ~TB_MAP;
 #endif
 
-#if 0
+#if 1
     if (traceflags != 0)
       savetraceflags = traceflags;
     if (crs[OWNERL] == 0100100 && savetraceflags)
@@ -3463,6 +3473,7 @@ stfa:
 	    stlb[utempa].valid = 0;
 	    if (T_INST) fprintf(stderr," invalidated STLB index %d\n", utempa);
 	  }
+#if 0
 	  /* HACK for DIAG to suppress ITLB loop in trace */
 	  if (RP == 0106070)
 	    if (*(int *)(crs+L) == 0) {
@@ -3473,6 +3484,7 @@ stfa:
 	      fprintf(stderr," Restoring DIAG trace\n");
 	      traceflags = savetraceflags;
 	    }
+#endif
 	  continue;
 
 	case 000711:
@@ -3497,8 +3509,8 @@ stfa:
 	  fault(UIIFAULT, RPL, RP);
 	  continue;
 
-	/* I think this is an invalid opcode that Prime uses when unexpected
-	   things happen, for example:
+	/* JW: I think this is an invalid opcode that Prime uses when
+	   unexpected things happen, for example:
 
 	   LDA modals        get modals
 	   SAS 1             interrupts enabled?
@@ -4391,13 +4403,16 @@ lcgt:
 
 	case 0140550:
 	  if (T_FLOW) fprintf(stderr," FLOT\n");
-	  templ = crs[A];
+	  templ = *(short *)(crs+A);
 	  templ = crs[B] | (templ<<15);
 	  tempf = templ;
+	  tempf1 = tempf;
 	  ieeepr4(&tempf);
 	  crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
 	  crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
 	  crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
+	  crs[FLTD] = 0;
+	  if (T_INST) fprintf(stderr," A|B=%d, conv=%f, FEXP=%d (dec), FLTH='%o, FLTL='%o\n", templ, tempf1, crs[FEXP], crs[FLTH], crs[FLTL]);
 	  continue;
 
 	case 0140534:
@@ -4499,13 +4514,15 @@ lcgt:
 	  tempda[2] = crs[FLTD];
 	  tempda[3] = crs[FEXP];
 	  prieee8(tempda);
+	  if (T_INST) fprintf(stderr," DFAC value=%f, FEXP=%d (dec), FLTH='%o, FLTL='%o, fltd='%o\n", *(double *)tempda, crs[FEXP], crs[FLTH], crs[FLTL], crs[FLTD]);
+	  templ = *(double *)tempda;
+	  if (T_INST) fprintf(stderr," INT value=%d\n", templ);
+	  crs[B] = templ & 0x7FFF;
+	  crs[A] = templ >> 15;
 	  if (*(double *)tempda > 1073741823.0 || *(double *)tempda < -1073741824.0)
 	    mathexception('f', FC_DFP_OFLOW, ea);
 	  else
 	    CLEARC;
-	  templ = *(double *)tempda;
-	  crs[B] = templ & 0x7FFF;
-	  crs[A] = templ >> 15;
 	  continue;
 
 	case 0140531:
@@ -4519,7 +4536,7 @@ lcgt:
 	    mathexception('f', FC_DFP_OFLOW, ea);
 	  else
 	    CLEARC;
-	  tempa = *(double *)tempda;
+	  *(short *)(crs+A) = *(double *)tempda;
 	  continue;
 
 	case 0140532:
@@ -4529,6 +4546,7 @@ lcgt:
 	  crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
 	  crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
 	  crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
+	  crs[FLTD] = 0;
 	  continue;
 
 	case 0140533:
@@ -4542,7 +4560,7 @@ lcgt:
 	    mathexception('f', FC_DFP_OFLOW, ea);
 	  else
 	    CLEARC;
-	  templ = *(double *)tempda;
+	  *(int *)(crs+L) = *(double *)tempda;
 	  continue;
 
 	case 0140535:
@@ -4552,6 +4570,7 @@ lcgt:
 	  crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
 	  crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
 	  crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
+	  crs[FLTD] = 0;
 	  continue;
 
 	case 0141711:
@@ -4563,7 +4582,7 @@ lcgt:
 	  continue;
 
 #if 0
-	case 0141602:   /* same opcode as BCNE */
+	case 0141602:   /* same opcode as BCEQ */
 	  if (T_FLOW) fprintf(stderr," BMEQ\n");
 	  goto bceq;
 
@@ -4581,11 +4600,6 @@ lcgt:
 #endif
 
 	case 0141710:
-#if 0
-	  /* this is good for tracing the failure if cpuid is set to 15 in
-	     Primos boot.  Weird memory maps for 9950 16MB? */
-	  traceflags = -1;
-#endif
 	  if (T_FLOW) fprintf(stderr," BMGT\n");
 	  if (crs[KEYS] & 020000)
 	    goto bcne;
@@ -4908,7 +4922,7 @@ lcgt:
 	  break;
 
 	default:
-	  printf("WARNING: unrecognized shift instruction %o at %o/%o\n", inst, RPH, RPL);
+	  printf("emulator warning: unrecognized shift instruction %o at %o/%o\n", inst, RPH, RPL);
 	  if (T_INST) fprintf(stderr," unrecognized shift instruction!: %o\n", inst);
 	}
 	continue;
@@ -5128,7 +5142,8 @@ keys = 14200, modals=100177
       break;
     case 4:  /* 32I */
       ea = ea32i(earp, inst, i, x);
-      fatal("32I not supported");
+      warn("32I mode not supported");
+      fault(RESTRICTFAULT, 0, 0);
       break;
     case 6:  /* 64V */
       ea = ea64v(earp, inst, i, x, &opcode, &eabit);
@@ -5208,7 +5223,7 @@ keys = 14200, modals=100177
 	crs[A] = utempl;
 	if (utempl & 0x10000)                  /* set L-bit if carry */
 	  crs[KEYS] |= 020000;  
-	/* NOTE: the EQ test prevents use from reusing the ADD code :( */
+	/* NOTE: this EQ test prevents reusing the ADD code :( */
 	if (*(int *)(crs+L) == 0)              /* set EQ? */
 	  crs[KEYS] |= 0100; 
 	if (((~utempa ^ m) & (utempa ^ crs[A])) & 0x8000) {
@@ -5285,9 +5300,11 @@ keys = 14200, modals=100177
     case 01000:
       if (T_FLOW) fprintf(stderr," JST\n");
 
-#if 0
-      ea = MAKEVA(RPH, ea & 0xFFFF);
-#endif
+      /* NOTE: amask should be recomputed here if in R/S mode, so it
+	 can be removed as a global variable.  Flaky errors occur if
+	 keys are changed w/o calling newkeys(), because amask would
+	 be wrong (see dispatcher comment) */
+
       if (amask == 0177777)
 	m = RPL;
       else
@@ -5297,8 +5314,6 @@ keys = 14200, modals=100177
       if ((RP & RINGMASK32) == 0)
 	inhcount = 1;
       continue;
-
-    /* this should set the C and L bits like subtract */
 
     case 01100:
       m = get16(ea);
@@ -5622,17 +5637,19 @@ keys = 14200, modals=100177
 
     case 00601:
       if (T_FLOW) fprintf(stderr," FAD\n");
-      if (T_INST) fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
-      //if (T_INST) fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
       *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
       prieee4(&tempf);
+      if (T_INST) fprintf(stderr," FAC value=%f, FEXP=%d (dec), FLTH='%o, FLTL='%o\n", tempf, crs[FEXP], crs[FLTH], crs[FLTL]);
       *(int *)&tempf1 = get32(ea);
       prieee4(&tempf1);
+      if (T_INST) fprintf(stderr," ea value=%f, EXP=%d (dec), ea H='%o, ea L='%o\n", tempf1, get16(ea+1) & 0xFF, get16(ea), get16(ea+1) & 0xFF00);
       tempf += tempf1;
+      tempf1 = tempf;
       ieeepr4(&tempf);
       crs[FLTH] = (*(unsigned int *)&tempf) >> 16;
       crs[FLTL] = (*(unsigned int *)&tempf) & 0xFF00;
       crs[FEXP] = (*(unsigned int *)&tempf) & 0xFF;
+      if (T_INST) fprintf(stderr," FAC value=%f, FEXP=%d (dec), FLTH='%o, FLTL='%o\n", tempf1, crs[FEXP], crs[FLTH], crs[FLTL]);
       XEXPC(0);
       continue;
 
@@ -5640,12 +5657,12 @@ keys = 14200, modals=100177
 
     case 01101:
       if (T_FLOW) fprintf(stderr," FCS\n");
-      if (T_INST) fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
-      //if (T_INST) fprintf(stderr," ea EXP=%d (dec), ea H='%o, ea L='%o\n", (mem[ea+1] & 0xFF), mem[ea], (mem[ea+1] & 0xFF00));
       *(int *)&tempf = (crs[FLTH]<<16) | (crs[FLTL] & 0xFF00) | (crs[FEXP] & 0xFF);
       prieee4(&tempf);
+      if (T_INST) fprintf(stderr," FAC value=%f, FEXP=%d (dec), FLTH='%o, FLTL='%o\n", tempf, crs[FEXP], crs[FLTH], crs[FLTL]);
       *(int *)&tempf1 = get32(ea);
       prieee4(&tempf1);
+      if (T_INST) fprintf(stderr," ea value=%f, EXP=%d (dec), ea H='%o, ea L='%o\n", tempf1, get16(ea+1) & 0xFF, get16(ea), get16(ea+1) & 0xFF00);
       crs[KEYS] &= ~0300;
       if (tempf == tempf1) {
 	RPL++;
@@ -5674,10 +5691,12 @@ keys = 14200, modals=100177
 
     case 0201:
       if (T_FLOW) fprintf(stderr," FLD\n");
-      crs[FLTH] = get16(ea);
-      m = get16(ea+1);
-      crs[FLTL] = m & 0xFF00;
-      crs[FEXP] = m & 0xFF;
+      utempl = get32(ea);
+      crs[FLTH] = utempl >> 16;
+      crs[FLTL] = utempl & 0xFF00;
+      crs[FEXP] = utempl & 0xFF;
+      crs[FLTD] = 0;
+      if (T_INST) fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       continue;
 
     case 01601:
@@ -5714,6 +5733,7 @@ keys = 14200, modals=100177
 
     case 0401:
       if (T_FLOW) fprintf(stderr," FST\n");
+      if (T_INST) fprintf(stderr," FEXP=%d (dec), FLTH='%o, FLTL='%o\n", crs[FEXP], crs[FLTH], crs[FLTL]);
       if (crs[FEXP] & 0xFF00)
 	mathexception('f', FC_SFP_STORE, ea);
       put16(crs[FLTH],ea);
@@ -5929,14 +5949,6 @@ keys = 14200, modals=100177
       continue;
 
     default:
-#if 0
-      if (mem[066] != 0) {
-	if (T_FLOW) fprintf(stderr," JST* '66 [%o]\n", mem[066]);
-	mem[mem[066]] = RPL;
-	RPL = mem[066]+1;
-	continue;
-      }
-#endif
       printf("Unknown memory reference opcode: %o\n", opcode);
       fatal(NULL);
     }
@@ -6232,7 +6244,7 @@ svc() {
   /* if location '65 is set, do indirect JST to handle svc */
 
   /* if the svc fault vector is zero, interpret the svc here.  This
-     allows the emulator to run r-mode programs directly */
+     allows the emulator to run R-mode programs directly */
 
   if ((crs[MODALS] & 010) || get16(065) != 0) {
     fault(SVCFAULT, 0, 0);

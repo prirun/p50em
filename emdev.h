@@ -57,6 +57,7 @@
 #include <sys/time.h>
 #include <sys/select.h>
 #include <unistd.h>
+#include <termios.h>
 
 /* this macro is used when I/O is successful.  In VI modes, it sets
    the EQ condition code bit.  In SR modes, it does a skip */
@@ -68,15 +69,19 @@
     RPL++
 
 /* macro to detect if an I/O instruction is followed by JMP *-1 (SR modes)
-   or BCNE *-2 (VI modes) */
+   or BCNE *-2 (VI modes).  If process exchange is enabled, I/O can never
+   block. */
 
 #if 1
 #define BLOCKIO \
-  (get16(RP) == 03776 || (get16(RP) == 0141603 && get16(RP+1) == RPL-2))
+  (!(crs[MODALS] & 010) && (get16(RP) == 03776 || (get16(RP) == 0141603 && get16(RP+1) == RPL-2)))
 #else
 #define BLOCKIO 0
 #endif
 
+
+
+/* this is a template for device handlers */
 
 void devnull (short class, short func, short device) {
 
@@ -128,8 +133,8 @@ void devnull (short class, short func, short device) {
 /* Device '4: system console
 
    NOTES:
-   - needs to set -icanon -icrnl on system console tty
-   - only works with ASRATE 3410 - not 7672 (19,200 bps)
+   - needs to reset tty attributes when emulator shuts down
+   - Primos only handles ASRATE 110 (10cps), 1010 (30cps), 3410 (960 cps)
    - input ID is wrong, causes OCP '0477 on clock interrupt
    - instruction counters on output are bogus, need to intercept TNOUA instead
 
@@ -187,6 +192,7 @@ void devnull (short class, short func, short device) {
 
 */
 
+
 void devasr (short class, short func, short device) {
 
   static int ttydev;
@@ -194,7 +200,8 @@ void devasr (short class, short func, short device) {
   static int needflush;     /* true if data has been written but not flushed */
   static int atbol=1;       /* true if cursor is at bol */
   static int atnewl=1;      /* true if cursor is on a blank line */
-  fd_set readfds;
+  static struct termios terminfo;
+  static fd_set fds;
   struct timeval timeout;
   unsigned char ch;
   int newflags;
@@ -213,8 +220,19 @@ void devasr (short class, short func, short device) {
       perror(" unable to get tty flags");
       fatal(NULL);
     }
-    FD_ZERO(&readfds);
-    FD_SET(ttydev, &readfds);
+    FD_ZERO(&fds);
+    if (tcgetattr(ttydev, &terminfo) == -1) {
+      perror(" unable to get tty attributes");
+      fatal(NULL);
+    }
+    terminfo.c_iflag &= ~(INLCR | ICRNL);
+    terminfo.c_lflag &= ~(ECHOCTL | ICANON);
+    terminfo.c_cc[VMIN] = 0;
+    terminfo.c_cc[VTIME] = 0;
+    if (tcsetattr(ttydev, TCSANOW, &terminfo) == -1) {
+      perror(" unable to set tty attributes");
+      fatal(NULL);
+    }
     break;
 
   case 0:
@@ -223,27 +241,46 @@ void devasr (short class, short func, short device) {
 
   case 1:
     if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
-    if (func == 7) {         /* skip if received a char */
-      timeout.tv_sec = 0;
+
+    if (func == 6) {               /* skip if room for a character */
 #if 0
-      timeout.tv_usec = 100000;
-#else
-      timeout.tv_usec = 1;
+      timeout.tv_sec = 0;
       timeout.tv_usec = 0;
-#endif
-      if (select(1, &readfds, NULL, NULL, &timeout) == 1)
+      FD_SET(ttydev, &fds);
+      n = select(ttydev+1, NULL, &fds, NULL, &timeout);
+      if (n == -1) {
+	perror(" unable to do write select on ttydev");
+	fatal(NULL);
+      }
+      if (n) {
 	IOSKIP;
+      }
+#else
+      IOSKIP;                      /* assume there is room under Unix */
+#endif
+
+    } else if (func == 7) {        /* skip if received a char */
+      if (crs[MODALS] & 010)       /* PX enabled? */
+	timeout.tv_sec = 0;        /* yes, can't delay */
+      else
+	timeout.tv_sec = 1;
+      timeout.tv_usec = 0;
+      FD_SET(ttydev, &fds);
+      n = select(ttydev+1, &fds, NULL, NULL, &timeout);
+      if (n == -1) {
+	perror(" unable to do select on tty");
+	fatal(NULL);
+      }
+      if (n) {
+	IOSKIP;
+      }
+
     } else if (func <= 014)
       IOSKIP;                     /* assume it's always ready */
     break;
 
   case 2:
     if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
-    if (needflush) {
-      fflush(stdout);
-      needflush = 0;
-      devpoll[device] = 0;
-    }
     if (func == 0 || func == 010) {
       if (BLOCKIO)
 	newflags = ttyflags & ~O_NONBLOCK;
@@ -254,6 +291,11 @@ void devasr (short class, short func, short device) {
 	fatal(NULL);
       }
       ttyflags = newflags;
+      if (needflush && BLOCKIO) {
+	fflush(stdout);
+	needflush = 0;
+	devpoll[device] = 0;
+      }
 readasr:
       n = read(ttydev, &ch, 1);
       if (n < 0) {
@@ -263,16 +305,19 @@ readasr:
 	}
       } else if (n == 1) {
 	if (ch == '') {
-	  traceflags = -1;
-	  traceflags = ~TB_MAP;
-	  fprintf(stderr,"\nTRACE ENABLED:\n\n");
-	  memdump(0, 0xFFFF);
+	  traceflags = ~traceflags;
+	  traceflags &= ~TB_MAP;
+	  if (traceflags == 0)
+	    fprintf(stderr,"\nTRACE DISABLED:\n\n");
+	  else
+	    fprintf(stderr,"\nTRACE ENABLED:\n\n");
+	  //memdump(0, 0xFFFF);
 	  goto readasr;
 	}
 	if (func >= 010)
 	  crs[A] = 0;
 	crs[A] = crs[A] | ch;
-	if (T_INST) fprintf(stderr," character read=%o: %c\n", crs[A], crs[A]);
+	if (T_INST) fprintf(stderr," character read=%o: %c\n", crs[A], crs[A] & 0x7f);
 	IOSKIP;
       } else  if (n != 0) {
 	printf("Unexpected error reading from tty, n=%d", n);
@@ -301,24 +346,39 @@ readasr:
     if (func == 0) {
       ch = crs[A] & 0x7f;
       if (T_INST) fprintf(stderr," char to write=%o: %c\n", crs[A], ch);
-      if (ch > 0) {
-#if 0
-	if (atbol && atnewl)
-	  printf("%10d| ", instcount);
-#endif
-	putchar(ch);
-	if (ch == 015)
-	  atbol = 1;
-	else if (ch == 012)
-	  atnewl = 1;
-	else {
-	  atbol = 0;
-	  atnewl = 0;
-	}
-	needflush = 1;
-	devpoll[device] = instpermsec*100;
+      if (ch == 0 || ch == 0x7f) {
+	IOSKIP;
+	return;
       }
-      IOSKIP;                     /* OTA '0004 always works on Unix */
+#if 0
+      timeout.tv_sec = 0;
+      timeout.tv_usec = 0;
+      FD_SET(2, &fds);
+      n = select(2+1, NULL, &fds, NULL, &timeout);
+      if (n == -1) {
+	perror(" unable to do write select on stdout");
+	fatal(NULL);
+      }
+      if (!n)
+	return;
+#endif
+#if 0
+      if (atbol && atnewl)
+	printf("%10d| ", instcount);
+#endif
+      putchar(ch);
+      if (ch == 015)
+	atbol = 1;
+      else if (ch == 012)
+	atnewl = 1;
+      else {
+	atbol = 0;
+	atnewl = 0;
+      }
+      needflush = 1;
+      if (devpoll[device] == 0)
+	devpoll[device] = instpermsec*100;
+      IOSKIP;
     } else if (func == 1) {       /* write control word */
       IOSKIP;
     } else if (04 <= func && func <= 07) {  /* write control register 1/2 */
@@ -336,10 +396,13 @@ readasr:
     break;
 
   case 4:
+    /* since the tty device is in non-blocking mode under Primos, keep
+       flushing output every .1 seconds for smoothest and fastest
+       output */
     if (needflush) {
       fflush(stdout);
-      needflush = 0;
-      devpoll[device] = 0;
+      needflush = 1;
+      devpoll[device] = instpermsec*100;
     }
   }
 }
@@ -655,11 +718,6 @@ void devdisk (short class, short func, short device) {
 
     if (func == 01)          /* read device id, clear A first */
       crs[A] = CID4005 + device;
-#if 0
-    /* this happens when the clock poll rate is set to 100000 (?) */
-    else if (func == 06)     /* don't know what this is... */
-      return;
-#endif
     else if (func == 011)    /* read device id, don't clear A */
       crs[A] |= (CID4005 + device);
     else if (func == 017) {  /* read OAR */
@@ -727,7 +785,7 @@ void devdisk (short class, short func, short device) {
 	  dc[device].status = 0100001;
 	} else if (order == 2) {
 	  if (T_INST || T_DIO) fprintf(stderr," Format order\n");
-	  fatal("DFORMAT channel order not implemented");
+	  //fatal("DFORMAT channel order not implemented");
 	} else {            /* order = 5 (read) or 6 (write) */
 
 	  /* translate head/track/sector to drive record address */
@@ -799,7 +857,7 @@ void devdisk (short class, short func, short device) {
 
       case 7: /* DSTALL = Stall */
 	if (T_INST || T_DIO) fprintf(stderr," stall\n");
-#if 1
+#if 0
 	devpoll[device] = instpermsec/5;   /* 200 microseconds, sb 210 */
 	return;
 #else
