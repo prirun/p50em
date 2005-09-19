@@ -52,6 +52,8 @@
 #define FCODE 44
 #define FADDR 46
 #define TIMER 48
+#define TIMERH 48
+#define TIMERL 49
 
 /* these are 32-bit offsets into crsl (current register set long) */
 

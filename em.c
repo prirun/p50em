@@ -532,13 +532,12 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
 	pmaddr = ptaddr + 2*PAGENO(ea);
 	pte = mem[pmaddr];
 	ppn = mem[pmaddr+1];
-	if (T_MAP) fprintf(stderr,"        ptaddr=%o, pmaddr=%o, pte=%o\n", ptaddr, pmaddr, pte);
       } else {
 	pmaddr = ptaddr + PAGENO(ea);
 	pte = mem[pmaddr];
 	ppn = pte & 0xFFF;
-	if (T_MAP) fprintf(stderr,"        ptaddr=%o, pmaddr=%o, pte=%o\n", ptaddr, pmaddr, pte);
       }
+      if (T_MAP) fprintf(stderr,"        ptaddr=%o, pmaddr=%o, pte=%o\n", ptaddr, pmaddr, pte);
       if (!(pte & 0x8000))
 	fault(PAGEFAULT, 0, ea);
       mem[pmaddr] |= 040000;     /* set referenced bit */
@@ -582,8 +581,6 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
 #define put32(value, ea) (put32r((value),(ea),RP))
 #define put64(value, ea) (put64r((value),(ea),RP))
 
-/* Can V-mode do JMP# 4 to start executing from the register file?
-   Might need to "or" 0x80000000 with RPH to indicate this?? */ 
 
 unsigned short get16r(ea_t ea, ea_t rpring) {
   pa_t pa;
@@ -1881,7 +1878,7 @@ argt() {
 	if (ea & EXTMASK32)
 	  put16(bit<<12, stackfp+crs[Y]+2);
       }
-      if (T_PCL) fprintf(stderr," Stored\n");
+      if (T_PCL) fprintf(stderr," Stored arg IP at %o/%o\n\n", stackfp>>16, (stackfp+crs[Y]) & 0xFFFF);
       argsleft--;
       advancey = 1;
     }
@@ -1925,7 +1922,7 @@ pxregsave(unsigned short wait) {
   pcbp = *(unsigned int *)(crs+OWNER);
   regp = pcbp+PCBREGS;
   mask = 0;
-  for (i=(wait?12:0); i<16; i++) {
+  for (i=(wait?014:0); i<020; i++) {
     if (crsl[i] != 0) {
       mask |= bitmask16[i+1];
       put32r(crsl[i], regp, 0);
@@ -1933,7 +1930,8 @@ pxregsave(unsigned short wait) {
     }
   }
   put16r(mask, pcbp+PCBMASK, 0);
-  crs[KEYS] |= 1;
+  put32r(*(unsigned int *)(crs+TIMER), pcbp+PCBIT, 0);  /* save interval timer */
+  crs[KEYS] |= 1;                     /* set save done bit */
   put16r(crs[KEYS], pcbp+PCBKEYS, 0);
 }
 
@@ -1950,7 +1948,7 @@ pxregload (ea_t pcbp) {
   if (T_PX) fprintf(stderr,"pxregload loading registers for process %o/%o\n", pcbp>>16, pcbp&0xFFFF);
   regp = pcbp+PCBREGS;
   mask = get16r(pcbp+PCBMASK, 0);
-  for (i=0; i<16; i++) {
+  for (i=0; i<020; i++) {
     if (mask & bitmask16[i+1]) {
       crsl[i] = get32r(regp, 0);
       regp += 2;
@@ -1961,6 +1959,7 @@ pxregload (ea_t pcbp) {
   newkeys(get16r(pcbp+PCBKEYS, 0));
   *(unsigned int *)(crs+DTAR2) = get32r(pcbp+PCBDTAR2, 0);
   *(unsigned int *)(crs+DTAR3) = get32r(pcbp+PCBDTAR3, 0);
+  *(unsigned int *)(crs+TIMER) = get32r(pcbp+PCBIT, 0);
   crs[OWNERL] = pcbp & 0xFFFF;
 
   if (T_PX) fprintf(stderr,"pxregload: registers loaded, ownerl=%o, modals=%o\n", crs[OWNERL], crs[MODALS]);
@@ -2141,7 +2140,6 @@ dispatcher() {
     pxregload(pcbp);
   }
 
-  crs[TIMER] = get16r(pcbp+PCBIT, 0);
   RP = *(unsigned int *)(crs+PB);
   crs[PBL] = 0;
   crs[KEYS] &= ~3;                           /* erase "in dispatcher" and "save done" */
@@ -2152,6 +2150,7 @@ dispatcher() {
   utempa = get16r(pcbp+PCBABT, 0);
   if (utempa != 0) {
     if (T_PX) fprintf(stderr,"dispatch: abort flags for %o are %o\n", crs[OWNERL], utempa);
+    //printf("dispatch: abort flags for %o are %o\n", crs[OWNERL], utempa);
     put16r(0, pcbp+PCBABT, 0);
     fault(PROCESSFAULT, utempa, 0);
     fatal("fault returned after process fault");    
@@ -2271,14 +2270,14 @@ pwait() {
   short count;
 
   ea = apea(NULL);
-  if (T_PX) fprintf(stderr,"%o/%o: WAIT on %o/%o, pcb %o, keys=%o, modals=%o\n", RPH, RPL, ea>>16, ea&0xFFFF, crs[OWNERL], crs[KEYS], crs[MODALS]);
+  if (T_PX) fprintf(stderr,"%o/%o: wait on %o/%o, pcb %o, keys=%o, modals=%o\n", RPH, RPL, ea>>16, ea&0xFFFF, crs[OWNERL], crs[KEYS], crs[MODALS]);
   utempl = get32r(ea, 0);     /* get count and BOL */
   count = utempl>>16;         /* count (signed) */
   bol = utempl & 0xFFFF;      /* beginning of wait list */
   if (T_PX) fprintf(stderr," wait list count was %d, bol was %o\n", count, bol);
   count++;
   if (count > 0) {      /* I have to wait */
-#if 0
+#if 1
     if (count == 1 && bol != 0)
       fatal("WAIT: count == 1 but bol != 0");
 #else
@@ -2299,13 +2298,15 @@ keys = 14200, modals=137
       printf("WAIT: pcba=%o != ownerl=%o\n", regs.sym.pcba, crs[OWNERL]);
       fatal(NULL);
     }
-    mylev = get32r(*(ea_t *)(crs+OWNER),0);
+    mylev = get16r(*(ea_t *)(crs+OWNER),0);
 
     if (bol != 0) {
       pcbp = MAKEVA(crs[OWNERH],bol);
       pcblevnext = get32r(pcbp, 0);
       pcblev = pcblevnext >> 16;
     }
+    if (T_PX) fprintf(stderr," my level=%o, pcblev=%o\n", mylev, pcblev);
+
     if (count == 1 || mylev < pcblev) {   /* add me to the beginning */
       utempl = (count<<16) | crs[OWNERL];
       put32r(utempl, ea, 0);    /* update semaphore count/bol */
@@ -2322,6 +2323,7 @@ keys = 14200, modals=137
       }
       put16r(crs[OWNERL], prevpcbp+PCBLINK, 0);
       put16r(*(unsigned short *)&count, ea, 0);    /* update count */
+      if (T_PX) fprintf(stderr," new count=%d, new link for pcb %o=%o, bol=%o\n", prevpcbp&0xffff, crs[OWNERL], bol);
     }
     unready(ea, bol);
     dispatcher();
@@ -2343,6 +2345,7 @@ nfy(unsigned short inst) {
   ea_t ea, pcbp;
   unsigned int utempl;
   short scount;
+  static char *nfyname[] = {"nfye","nfyb"," "," ","inen","inbn","inec","inbc"};
 
   resched = 0;
   begend = inst & 1;
@@ -2356,7 +2359,7 @@ nfy(unsigned short inst) {
   utempl = get32r(ea, 0);     /* get count and BOL */
   scount = utempl>>16;        /* count (signed) */
   bol = utempl & 0xFFFF;      /* beginning of wait list */
-  if (T_PX) fprintf(stderr,"%o/%o: NFYB/E opcode %o, ea=%o/%o, count=%d, bol=%o, I am %o\n", RPH, RPL, inst, ea>>16, ea&0xFFFF, scount, bol, crs[OWNERL]);
+  if (T_PX) fprintf(stderr,"%o/%o: opcode %o %s, ea=%o/%o, count=%d, bol=%o, I am %o\n", RPH, RPL, inst, nfyname[inst-01200], ea>>16, ea&0xFFFF, scount, bol, crs[OWNERL]);
   if (scount > 0) {
     if (bol == 0) {
       printf("NFYB: bol is zero, count is %d for semaphore at %o/%o\n", scount, ea>>16, ea&0xFFFF);
@@ -2557,6 +2560,7 @@ main (int argc, char **argv) {
   float tempf,tempf1,tempf2;
   double tempd,tempd1,tempd2;
   unsigned short tempda[4],tempda1[4];
+  ea_t tempea;
   unsigned int ea32;                   /* full V/I mode eff address */
   ea_t ea;                             /* final MR effective address */
   ea_t earp;                           /* RP to use for eff address calcs */
@@ -2711,10 +2715,9 @@ main (int argc, char **argv) {
 
     for (i=0; i<9; i++)
       rvec[i] = readshort();
-    if (T_FLOW) fprintf(stderr,"SA=%o, EA=%o, P=%o, A=%o, B=%o, X=%o, K=%o\n\n", rvec[0], rvec[1],
-	    rvec[2], rvec[3], rvec[4], rvec[5], rvec[6]);
+    if (T_FLOW) fprintf(stderr,"SA=%o, EA=%o, P=%o, A=%o, B=%o, X=%o, K=%o\n\n", rvec[0], rvec[1], rvec[2], rvec[3], rvec[4], rvec[5], rvec[6]);
     if (rvec[2] > rvec[1])
-      fatal("Program start > EA: runfile is trashed");
+      fatal("Program start > ending: runfile is trashed");
   }
 
   /* read memory image from SA to EA inclusive */
@@ -2762,6 +2765,11 @@ main (int argc, char **argv) {
 #endif
 
 #if 1
+    if (traceflags != 0)
+      savetraceflags = traceflags;
+#endif
+
+#if 0
     if (traceflags != 0)
       savetraceflags = traceflags;
     if (crs[OWNERL] == 0100100 && savetraceflags)
@@ -2870,9 +2878,12 @@ main (int argc, char **argv) {
     earp = RP;
 
     if (crs[MODALS] & 010) {     /* px enabled, bump 1ms process timer */
-      if ((instcount & instpermsecmask) == 0) {
-
+      if (crs[TIMERL]++ > instpermsec) {
+	crs[TIMERL] = 0;
 #if 0
+	if (crs[OWNERL] == 0100100)
+	  printf("SUP timer=%d\n", *(short *)(crs+TIMER));
+
 	/* bump all timers, applying corrections based on actual time
 	   if necessary */
 
@@ -2882,11 +2893,12 @@ main (int argc, char **argv) {
 
 	/* if 1ms resolution process timer overflows, set pcb abort flag */
 
-	if (++crs[TIMER] == 0) {
-	  if (T_PX) printf("pcb %o timer overflow\n", crs[OWNERL]);
+	crs[TIMER]++;
+	if (crs[TIMER] == 0) {
+	  if (T_PX) fprintf(stderr, "#%d: pcb %o timer overflow\n", instcount, crs[OWNERL]);
 	  ea = *(ea_t *)(crs+OWNER);
-	  m = get16(ea+4) | 1;       /* set process abort flag */
-	  put16(m, ea+4);
+	  m = get16r(ea+4, 0) | 1;       /* set process abort flag */
+	  put16r(m, ea+4, 0);
 	}
       }
     }
@@ -2901,7 +2913,14 @@ main (int argc, char **argv) {
 #endif
 
 xec:
-    if (T_FLOW) fprintf(stderr,"\n			#%u [%s %o] SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%:0d B='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d K=%o M=%o\n", instcount, searchloadmap(*(unsigned int *)(crs+OWNER),'x'), crs[OWNERL], crs[SBH], crs[SBL], crs[LBH], crs[LBL], searchloadmap(*(unsigned int *)(crs+LBH),'l'), crs[XBH], crs[XBL], RPH, RPL-1, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&020000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, crs[KEYS], crs[MODALS]);
+    /* NOTE: don't trace JMP * instructions (used to test PX) */
+
+    if (inst != 03777 && savetraceflags)
+      traceflags = savetraceflags;
+    else
+      traceflags = 0;
+
+    if (T_FLOW) fprintf(stderr,"\n			#%u [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%:0d B='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d K=%o M=%o\n", instcount, searchloadmap(*(unsigned int *)(crs+OWNER),'x'), crs[OWNERL], *(short *)(crs+TIMER), crs[SBH], crs[SBL], crs[LBH], crs[LBL], searchloadmap(*(unsigned int *)(crs+LBH),'l'), crs[XBH], crs[XBL], RPH, RPL-1, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&020000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, crs[KEYS], crs[MODALS]);
 
     /* begin instruction decode: generic? */
 
@@ -3283,6 +3302,7 @@ stfa:
 	      ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
 	    } else
 	      zch1 = zspace;
+	    if (T_INST) fprintf(stderr," zch1=%o (%c)\n", zch1, zch1&0x7f);
 	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
 	  }
 	  crs[KEYS] |= 0100;
@@ -3304,6 +3324,7 @@ stfa:
 	  zclen2 = 0;
 	  while (zlen2) {
 	    ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+	    if (T_INST) fprintf(stderr," zch1=%o (%c)\n", zch1, zch1&0x7f);
 	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
 	  }
 	  crs[KEYS] |= 0100;
@@ -3321,10 +3342,10 @@ stfa:
 	  zea2 = crsl[FAR1];
 	  if (crsl[FLR1] & 0x8000)
 	    zea2 |= EXTMASK32;
-	  if (T_INST) fprintf(stderr," ea=%o/%o, len=%d\n", zea2>>16, zea2&0xffff, GETFLR(1));
+	  zch2 = crs[A];
+	  if (T_INST) fprintf(stderr," ea=%o/%o, len=%d, fill=%o (%c)\n", zea2>>16, zea2&0xffff, GETFLR(1), zch2, zch2&0x7f);
 	  //printf("ZFIL: ea=%o/%o, len=%d\n", zea2>>16, zea2&0xffff, GETFLR(1));
 	  zclen2 = 0;
-	  zch2 = crs[A];
 	  while (zlen2) {
 	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch2);
 	    //printf(" after put, zlen2=%d, zcp2=%x, zclen2=%d, zch2=%o\n", zlen2, zcp2, zclen2, zch2);
@@ -3355,12 +3376,11 @@ stfa:
 	      ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
 	    } else
 	      zch1 = zspace;
-	    if (T_INST) fprintf(stderr," zch1=%o\n", zch1);
 	    if (zlen2) {
 	      ZGETC(zea2, zlen2, zcp2, zclen2, zch2);
 	    } else
 	      zch2 = zspace;
-	    if (T_INST) fprintf(stderr," zch2=%o\n", zch2);
+	    if (T_INST) fprintf(stderr," zch1=%o (%c), zch2=%o (%c)\n", zch1, zch1&0x7f, zch2, zch2&0x7f);
 	    if (zch1 < zch2) {
 	      zresult = 0200;
 	      break;
@@ -3416,7 +3436,7 @@ stfa:
 	case 001215:
 	case 001216:
 	case 001217:
-	  if (T_FLOW) fprintf(stderr," NFY(%o)\n", inst);
+	  if (T_FLOW) fprintf(stderr," NFY\n", inst);
 	  RESTRICT();
 	  nfy(inst);
 	  continue;
@@ -3978,6 +3998,13 @@ bidy:
 		devpoll[i] -= utempl;
 	    usleep(utempl*1000/instpermsec);
 	    crs[X] = 0;
+	    utempa = crs[TIMER];
+	    crs[TIMER] += utempl/instpermsec;
+	    if (crs[TIMER] < utempa) {
+	      tempea = *(ea_t *)(crs+OWNER);
+	      utempa = get16r(tempea+4, 0) | 1;    /* set process abort flag */
+	      put16r(utempa, tempea+4, 0);
+	    }
 	    instcount += utempl;
 	  }
 	  if (crs[X] != 0)
@@ -6030,6 +6057,7 @@ svc() {
   short class;                     /* SVC class, from bits 5-10 */
   short func;                      /* SVC func within class, bits 11-16 */
   short temp16;
+  short dolocal;
 
   static struct {
     char name[8];                  /* svc routine name */
@@ -6215,7 +6243,16 @@ svc() {
       printf("Class %o, func %o: %s %d args %o\n", class,func, svcinfo[class][func].name, svcinfo[class][func].numargs, svcinfo[class][func].locargs);
 #endif
 
-  if (T_INST || T_FLOW) {
+  /* if location '65 is set, do indirect JST to handle svc */
+
+  /* if the svc fault vector is zero, interpret the svc here.  This
+     allows the emulator to run R-mode programs directly */
+
+  dolocal = 1;
+  if ((crs[MODALS] & 010) || get16(065) != 0)
+    dolocal = 0;
+
+  if (dolocal || T_INST || T_FLOW) {
 
     /* get svc code word, break into class and function */
 
@@ -6241,12 +6278,7 @@ svc() {
     if (T_FLOW) fprintf(stderr," name=%s, #args=%d, LOC args=%o\n", svcinfo[class][func].name, svcinfo[class][func].numargs, svcinfo[class][func].locargs);
   }
 
-  /* if location '65 is set, do indirect JST to handle svc */
-
-  /* if the svc fault vector is zero, interpret the svc here.  This
-     allows the emulator to run R-mode programs directly */
-
-  if ((crs[MODALS] & 010) || get16(065) != 0) {
+  if (!dolocal) {
     fault(SVCFAULT, 0, 0);
     fatal("Returned from SVC fault");
   }

@@ -320,7 +320,7 @@ readasr:
 	if (T_INST) fprintf(stderr," character read=%o: %c\n", crs[A], crs[A] & 0x7f);
 	IOSKIP;
       } else  if (n != 0) {
-	printf("Unexpected error reading from tty, n=%d", n);
+	printf("Unexpected error reading from tty, n=%d\n", n);
 	fatal(NULL);
       }
     } else if (04 <= func && func <= 07) {  /* read control register 1/2 */
@@ -484,32 +484,13 @@ void devcp (short class, short func, short device) {
   static unsigned short clkvec;
   static short clkpic;
 
-#if 0
-  /* NOTE: setting this to 64,000 causes pointer faults when doing console
-     I/O during coldstart:
-OCP '1520
-C Pointer fault, ea_s=6, ea_w=42266, [ea]=100015
- Pointer fault, ea_s=6, ea_w=42266, [ea]=100015
-
-     Setting it to 300,000 causes:
-CUnimplemented INA device '26 function '06
-Fatal error: instruction #75661720 at 6/54305: 71404 101100
-keys = 14000, modals=137
-
-     Setting it to 600,000 works, but console output is very slow
-     Setting it to 200,000 causes undefined INA '0626
-     Setting it to 100,000 causes a hang after "Coldstarting PRIMOS..."
- */
-  #define SETCLKPOLL devpoll[device] = 600000;
-#else
-  #define SETCLKPOLL devpoll[device] = instpermsec*(-clkpic*3.2)/1000;
-#endif
+#define SETCLKPOLL devpoll[device] = instpermsec*(-clkpic*3.2)/1000;
 
   switch (class) {
 
   case 0:
     if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
-    //printf("OCP '%02o%02o\n", func, device);
+    printf("OCP '%02o%02o\n", func, device);
 
     if (func == 0 || func == 015) {
       fprintf(stderr,"Clock process initialized!\n");
@@ -652,6 +633,7 @@ void devdisk (short class, short func, short device) {
   unsigned short dmareg, dmaaddr;
   unsigned short iobuf[4096];                /* local I/O buf, before mapped I/O */
   unsigned short *iobufp;
+  unsigned short access;
   short dmanw, dmanw1, dmanw2;
   unsigned int utempl;
   char ordertext[8];
@@ -803,18 +785,19 @@ void devdisk (short class, short func, short device) {
 	    dmaaddr = regs.sym.regdmx[dmareg+1];
 	    if (T_INST || T_DIO) fprintf(stderr, " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dc[device].dmanch, dc[device].dmachan, regs.sym.regdmx[dmareg], dc[device].dmachan+1, dmaaddr, dmanw);
 	    
-	    /* later, use mapva to do page-based mapped I/O in pieces */
-
 	    if (order == 5) {
 	      if (crs[MODALS] & 020)
-		iobufp = iobuf;
+		if ((dmaaddr & 01777) || dmanw > 1024)
+		  iobufp = iobuf;
+		else
+		  iobufp = mem+mapva(dmaaddr, WACC, &access, 0);
 	      else
 		iobufp = mem+dmaaddr;
 	      if (read(dc[device].unit[u].devfd, (char *)iobufp, dmanw*2) != dmanw*2) {
 		perror("Unable to read drive file");
 		fatal(NULL);
 	      }
-	      if (crs[MODALS] & 020)
+	      if (iobufp == iobuf)
 		for (i=0; i<dmanw; i++)
 		  put16r(iobuf[i], dmaaddr+i, 0);
 	    } else {
@@ -837,6 +820,11 @@ void devdisk (short class, short func, short device) {
 	}
 	break;
 
+	/* NOTE: for seek command, the track should probably be stored
+	   in a state variable, then checked for equality on
+	   read/write.  If not equal, a disk fault should occur rather
+	   than reading/writing from the wrong cylinder. */
+
       case 3: /* SSEEK = Seek */
 	track = m1 & 01777;
 	if (T_INST || T_DIO) fprintf(stderr," seek track %d, restore=%d, clear=%d\n", track, (m1 & 0100000) != 0, (m1 & 040000) != 0);
@@ -857,12 +845,19 @@ void devdisk (short class, short func, short device) {
 
       case 7: /* DSTALL = Stall */
 	if (T_INST || T_DIO) fprintf(stderr," stall\n");
-#if 0
+
+	/* NOTE: technically, the stall command is supposed to wait
+	   210 usecs, so that the disk controller doesn't hog the I/O
+	   bus by looping in a channel program waiting for I/O to
+	   complete.  With the emulator, this delay isn't necessary,
+	   although it will cause DIAG tests to fail if the delay is
+	   omitted.  Hence the PX test.  Ignoring stall gives a 25%
+	   increase in I/O's per second on a 2GHz Mac (8MB emulator). */
+
+	if (crs[MODALS] & 010)             /* PX enabled? */
+	  break;                           /* yes, no stall */
 	devpoll[device] = instpermsec/5;   /* 200 microseconds, sb 210 */
 	return;
-#else
-	break;
-#endif
 
       case 9: /* DSTAT = Store status to memory */
 	if (T_INST || T_DIO) fprintf(stderr, " store status='%o to '%o\n", dc[device].status, m1);
@@ -878,24 +873,6 @@ void devdisk (short class, short func, short device) {
 	dc[device].dmanch = m & 017;
 	dc[device].dmachan = m1;
 	if (T_INST || T_DIO) fprintf(stderr, " set DMA channels, nch-1=%d, channel='%o\n", dc[device].dmanch, dc[device].dmachan);
-#if 0
-	dmareg = ((m1 & 036) << 1) | (m1 & 1);
-	//for (i=0; i<4; i++)
-	//fprintf(stderr, " dmareg+%d = %o  ", i, regs.sym.regdmx[dmareg+i]);
-	//fprintf(stderr, "\n");
-
-	dmanw1 = regs.sym.regdmx[dmareg];
-	dmanw1 = -(dmanw1>>4);
-	dmanw2 = regs.sym.regdmx[dmareg+4];
-	dmanw2 = -(dmanw2>>4);
-	if (T_INST || T_DIO) fprintf(stderr, " dmareg=%d, nch=%d, dmanw1=%d, dmanw2=%d\n", dmareg, dc[device].dmanch, dmanw1, dmanw2);
-	if (dc[device].dmanch == 1 && dmanw1 == 1024 && dmanw2 == 16) {
-	  if (T_INST || T_DIO) fprintf(stderr, " swapped DMA channels!\n");
-	  utempl = *(int *)(regs.sym.regdmx+dmareg);
-	  *(int *)(regs.sym.regdmx+dmareg) = *(int *)(regs.sym.regdmx+dmareg+4);
-	  *(int *)(regs.sym.regdmx+dmareg+4) = utempl;
-	}
-#endif
 	break;
 
       case 14: /* DINT = generate interrupt through vector address */

@@ -33,7 +33,11 @@ os_c1in(short *charg) {
   int n;
 
   fprintf(stderr," c1in waiting for data\n");
-  n = read(os.ttydev, &ch, 1);
+  do {
+    n = read(os.ttydev, &ch, 1);
+    if (n == 0)
+      sleep(1);
+  } while (n == 0);
   if (n < 0) {
     perror(" error reading from tty");
     exit(1);
@@ -42,6 +46,8 @@ os_c1in(short *charg) {
     fprintf(stderr," unexpected error reading from tty, n=%d", n);
     exit(1);
   }
+  if (ch == 015)
+    ch = 012;
   *charg = ch | 0x80;
 }
 
