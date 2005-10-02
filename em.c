@@ -311,6 +311,7 @@ int domemdump;                       /* --memdump arg */
 int boot;                            /* true if reading a boot record */
 int pmap32bits;                      /* true if 32-bit page maps */
 int csoffset;                        /* concealed stack segment offset */
+int tport;                           /* --port option (incoming terminals) */
 
 /* load map related data, specified with --map */
 
@@ -907,7 +908,8 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
 
 
 fatal(char *msg) {
-  printf("Fatal error: instruction #%d at %o/%o %s: %o %o keys=%o, modals=%o\n", instcount, prevpc >> 16, prevpc & 0xFFFF, searchloadmap(prevpc,' '), get16(prevpc), get16(prevpc+1), crs[KEYS], crs[MODALS]);
+
+  printf("Fatal error: instruction #%d at %o/%o %s: %o %o\nowner=%o %s, keys=%o, modals=%o\n", instcount, prevpc >> 16, prevpc & 0xFFFF, searchloadmap(prevpc,' '), get16(prevpc), get16(prevpc+1), crs[OWNERL], searchloadmap(*(unsigned int *)(crs+OWNER),' '), crs[KEYS], crs[MODALS]);
   if (msg)
     printf("%s\n", msg);
   /* should do a register dump, RL dump, PCB dump, etc. here... */
@@ -924,15 +926,27 @@ long devpoll[64] = {0};
 
 #include "emdev.h"
 
-void (*devmap[64])(short, short, short) = {
-  0,0,0,0,devasr,0,0,0,
-  0,0,0,devmt,devmt,0,0,0,
-  devcp,0,0,0,0,0,devdisk,0,
-  0,0,0,0,0,0,0,0,
-  0,0,0,0,0,0,0,0,
-  0,0,0,0,0,0,0,0,
-  0,0,0,0,0,0,0,0,
-  0,0,0,0,0,0,0,0};
+#if 0
+int (*devmap[64])(short, short, short) = {
+  /* '0x */ 0,0,0,0,devasr,0,0,0,
+  /* '1x */ devnone,devnone,0,devmt,devmt,devamlc, devamlc, devamlc,
+  /* '2x */ devcp,0,devdisk,devdisk,devdisk,devdisk,devdisk,devdisk,
+  /* '3x */ 0,0,devamlc,0,0,devamlc,devnone,devnone,
+  /* '4x */ 0,0,0,0,0,0,0,0,
+  /* '5x */ devnone,devnone,devamlc,devamlc,devamlc,0,devnone,0,
+  /* '6x */ 0,0,0,0,0,0,0,0,
+  /* '7x */ 0,0,0,0,0,devnone,devnone,0};
+#else
+int (*devmap[64])(short, short, short) = {
+  /* '0x */ 0,0,0,0,devasr,0,0,0,
+  /* '1x */ devnone,devnone,0,devmt,devmt,devnone, devnone, devnone,
+  /* '2x */ devcp,0,devdisk,devdisk,devdisk,devdisk,devdisk,devdisk,
+  /* '3x */ 0,0,devnone,0,0,devnone,devnone,devnone,
+  /* '4x */ 0,0,0,0,0,0,0,0,
+  /* '5x */ devnone,devnone,devnone,devnone,devamlc,0,devnone,0,
+  /* '6x */ 0,0,0,0,0,0,0,0,
+  /* '7x */ 0,0,0,0,0,devnone,devnone,0};
+#endif
 
 /* read a short (16-bit) integer in big-endian from stdin */
 
@@ -2549,6 +2563,59 @@ stc(n) {
 }
 
 
+/* queue instructions where physical queues may be involved */
+
+int rtq(ea_t qcbea, unsigned short *qent, ea_t rp) {
+
+  unsigned int qtop, qbot, qtemp;
+  unsigned short qseg, qmask;
+  ea_t qentea;
+
+  qtop = get16r(qcbea, rp);
+  qbot = get16r(qcbea+1, rp);
+
+  if (qtop == qbot)
+    return 0;               /* queue is empty */
+  qseg = get16r(qcbea+2, rp);
+  qmask = get16r(qcbea+3, rp);
+  qentea = MAKEVA(qseg & 0xfff, qtop);
+  if (qseg & 0x8000)        /* virtual queue */
+    *qent = get16r(qentea, rp);
+  else {
+    RESTRICTR(rp);
+    *qent = mem[qentea];
+  }
+  qtop = (qtop & ~qmask) | ((qtop+1) & qmask);
+  put16r(qtop & 0xFFFF, qcbea, rp);
+  return 1;
+}
+
+
+int abq(ea_t qcbea, unsigned short qent, ea_t rp) {
+
+  unsigned int qtop, qbot, qtemp;
+  unsigned short qseg, qmask;
+  ea_t qentea;
+
+  qtop = get16r(qcbea, rp);
+  qbot = get16r(qcbea+1, rp);
+  qseg = get16r(qcbea+2, rp);
+  qmask = get16r(qcbea+3, rp);
+  qtemp = (qbot & ~qmask) | ((qbot+1) & qmask);
+  if (qtemp == qtop)         /* queue full */
+    return 0;
+  qentea = MAKEVA(qseg & 0xfff,qbot);
+  if (qseg & 0x8000)         /* virtual queue */
+    put16r(crs[A], qentea, rp);
+  else {
+    RESTRICTR(rp);
+    mem[qentea] = qent;
+  }
+  put16r(qtemp, qcbea+1, rp);
+  return 1;
+}
+
+
 main (int argc, char **argv) {
 
   short tempa,tempa1,tempa2;
@@ -2621,6 +2688,7 @@ main (int argc, char **argv) {
   boot = 0;
   pmap32bits = 0;
   csoffset = 0;
+  tport = 0;
 
   /* check args */
 
@@ -2644,6 +2712,12 @@ main (int argc, char **argv) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[i+1],"%d", &templ);
 	cpuid = templ;
+      } else
+	fprintf(stderr,"--cpuid needs an argument\n");
+    } else if (strcmp(argv[i],"--port") == 0) {
+      if (i+1 < argc && argv[i+1][0] != '-') {
+	sscanf(argv[i+1],"%d", &templ);
+	tport = templ;
       } else
 	fprintf(stderr,"--cpuid needs an argument\n");
     } else if (strcmp(argv[i],"--trace") == 0)
@@ -2689,6 +2763,8 @@ main (int argc, char **argv) {
   pmap32bits = (cpuid == 15 || cpuid == 18 || cpuid == 19 || cpuid == 24 || cpuid >= 26);
   if ((26 <= cpuid && cpuid <= 29) || cpuid >= 35)
     csoffset = 1;
+  if (tport == 0)
+    tport = 8000;
 
   fprintf(stderr,"Sense switches set to %o\n", sswitch);
 
@@ -2696,7 +2772,11 @@ main (int argc, char **argv) {
 
   for (i=0; i<64; i++)
     if (devmap[i])
-      devmap[i](-1, 0, i);
+      if (devmap[i](-1, 0, i)) {   /* if initialization fails, */
+	devmap[i] = devnone;       /* remove device */
+	printf("emulator: device '%o removed\n", i);
+      }
+
 
   os_init();
 
@@ -2764,23 +2844,23 @@ main (int argc, char **argv) {
       traceflags = ~TB_MAP;
 #endif
 
-#if 1
+#if 0
     if (traceflags != 0)
       savetraceflags = traceflags;
 #endif
 
-#if 0
+#if 1
     if (traceflags != 0)
       savetraceflags = traceflags;
-    if (crs[OWNERL] == 0100100 && savetraceflags)
+    if (crs[OWNERL] == 0100200 && savetraceflags)
       traceflags = savetraceflags;
     else
       traceflags = 0;
 #endif
 
 #if 0
-    /* NOTE: this tends to hang if the location being monitored isn't
-       wired */
+    /* NOTE: this tends to cause a page fault loop if the location
+       being monitored isn't wired */
 
     if (trapaddr != 0 && (crs[OWNERL] & 0100000) && (crs[MODALS] & 010)) {
       traceflags = -1;
@@ -2800,6 +2880,10 @@ main (int argc, char **argv) {
       if (devpoll[i] && (--devpoll[i] == 0)) {
 	if (!devmap[i])
 	  fatal("devpoll set but devmap is null");
+#if 0
+	if (i == 054)
+	  traceflags = savetraceflags;
+#endif
 	devmap[i](4, 0, i);
       }
 
@@ -2915,12 +2999,10 @@ main (int argc, char **argv) {
 xec:
     /* NOTE: don't trace JMP * instructions (used to test PX) */
 
-    if (inst != 03777 && savetraceflags)
-      traceflags = savetraceflags;
-    else
+    if (inst == 03777)
       traceflags = 0;
 
-    if (T_FLOW) fprintf(stderr,"\n			#%u [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%:0d B='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d K=%o M=%o\n", instcount, searchloadmap(*(unsigned int *)(crs+OWNER),'x'), crs[OWNERL], *(short *)(crs+TIMER), crs[SBH], crs[SBL], crs[LBH], crs[LBL], searchloadmap(*(unsigned int *)(crs+LBH),'l'), crs[XBH], crs[XBL], RPH, RPL-1, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&020000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, crs[KEYS], crs[MODALS]);
+    if (T_FLOW) fprintf(stderr,"\n			#%u [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%:0d B='%o/%d L='%o/%d E='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d K=%o M=%o\n", instcount, searchloadmap(*(unsigned int *)(crs+OWNER),'x'), crs[OWNERL], *(short *)(crs+TIMER), crs[SBH], crs[SBL], crs[LBH], crs[LBL], searchloadmap(*(unsigned int *)(crs+LBH),'l'), crs[XBH], crs[XBL], RPH, RPL-1, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), *(unsigned int *)(crs+L), *(int *)(crs+L), *(unsigned int *)(crs+E), *(int *)(crs+E), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&020000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, crs[KEYS], crs[MODALS]);
 
     /* begin instruction decode: generic? */
 
@@ -3539,11 +3621,14 @@ stfa:
 
 	case 001702:
 	  if (T_FLOW) fprintf(stderr," 1702?\n", inst);
-	  printf(" 1702? at #%d, OWNERL=%o, RP=%o/%o\n", instcount, crs[OWNERL], RPH, RPL);
+#if 1
+	  fatal("Primos software assertion failure");
+#else
 	  RESTRICT();
 	  //fault(UIIFAULT, RPL, RP);
 	  traceflags = ~TB_MAP;
 	  dispatcher();
+#endif
 	  continue;
 
 	case 000601:
@@ -4651,24 +4736,21 @@ lcgt:
 	  *(int *)(crs+E) = templ;
 	  continue;
 
-	/* queue instructions */
+	/* queue instructions
+
+	   NOTE: ABQ is typically used in software to add an item to a
+	   hardware (physical) queue and RTQ is used by DMQ hardware
+	   to fetch items from the queue. */
 
 	case 0141714:
 	  if (T_FLOW) fprintf(stderr," RTQ\n");
 	  ea = apea(NULL);
-	  qtop = get16(ea);
-	  qbot = get16(ea+1);
-	  if (qtop == qbot) {
+	  if (rtq(ea,&utempa,RP)) {
+	    crs[A] = utempa;
+	    crs[KEYS] &= ~0100;
+	  } else {
 	    crs[A] = 0;
 	    crs[KEYS] |= 0100;
-	  } else {
-	    qseg = get16(ea+2) & 0x7FFF;
-	    qmask = get16(ea+3);
-	    qea = MAKEVA(qseg,qtop);
-	    crs[A] = get16(qea);
-	    qtop = (qtop & ~qmask) | ((qtop+1) & qmask);
-	    put16(qtop, ea);
-	    crs[KEYS] &= ~0100;
 	  }
 	  continue;
 
@@ -4694,19 +4776,10 @@ lcgt:
 	case 0141716:
 	  if (T_FLOW) fprintf(stderr," ABQ\n");
 	  ea = apea(NULL);
-	  qtop = get16(ea);
-	  qbot = get16(ea+1);
-	  qseg = get16(ea+2) & 0x7FFF;
-	  qmask = get16(ea+3);
-	  qtemp = (qbot & ~qmask) | ((qbot+1) & qmask);
-	  if (qtemp == qtop) {  /* queue full */
-	    crs[KEYS] |= 0100;
-	  } else {
-	    qea = MAKEVA(qseg,qbot);
-	    put16(crs[A],qea);
-	    put16(qtemp, ea+1);
+	  if (abq(ea, crs[A], RP))
 	    crs[KEYS] &= ~0100;
-	  }
+	  else
+	    crs[KEYS] |= 0100;
 	  continue;
 
 	case 0141717:
@@ -6627,8 +6700,11 @@ pio(unsigned int inst) {
   if (devmap[device])
     devmap[device](class, func, device);
   else {
-    fprintf(stderr,"pio: no handler for device '%o\n", device);
-    return;
+#if 1
+    printf("pio: no handler, class=%d, func='%o, device='%o, A='%o\n", class, func, device, crs[A]);
     fatal(NULL);
+#else
+    fprintf(stderr, "pio: no handler, class=%d, func='%o, device='%o, A='%o\n", class, func, device, crs[A]);
+#endif
   }
 }

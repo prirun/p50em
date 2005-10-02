@@ -8,29 +8,37 @@
    INA/OTA instructions skip if they succeed (data was read/written)
 
    Device numbers:
+   '00 = polling (?)
    '01 = paper tape reader
    '02 = paper tape punch
-   '03 = 1st MPC (line printer/card reader/card punch)
+   '03 = #1 MPC/URC (line printer/card reader/card punch)
    '04 = SOC board (system console/user terminal)
-   '05 = 2nd MPC (line printer/card reader/card punch)
+   '05 = #2 MPC/URC (line printer/card reader/card punch)
    '06 = card punch? (RTOS User Guide, A-1) / IPC (Engr Handbook p.101)
-   '07 = PNC
-   '12 = diskette
-   '13 = 2nd magtape controller
-   '14 = 1st magtape controller
+   '06 = Interproc. Channel (IPC) (R20 Hacker's Guide)
+   '07 = #1 PNC
+   '10 = ICS2 #1 or ICS1
+   '11 = ICS2 #2 or ICS1
+   '12 = floppy disk/diskette
+   '13 = #2 magtape controller
+   '14 = #1 magtape controller
+   '15 = #5 AMLC or ICS1
+   '16 = #6 AMLC or ICS1
+   '17 = #7 AMLC or ICS1
    '20 = control panel / real-time clock
-   '21 = 1st 4002 disk controller
-   '22 = disk
-   '23 = disk
-   '24 = disk
-   '25 = disk
+   '21 = 1st 4002 (Option B') disk controller
+   '22 = disk #3
+   '23 = disk #4
+   '24 = disk (was Writable Control Store)
+   '25 = disk (was 4000 disk controller)
    '26 = 1st disk controller
    '27 = 2nd disk controller
    '30-32 = BPIOC #1-3 (RTOS User Guide, A-1)
-   '33 = 1st Versatec (verdim)
-   '34 = 2nd Versatec
-   '35 = 4th AMLC
-   '36-37 = ELFBUS #1 & 2
+   '32 = AMLC #8 or ICS1
+   '33 = #1 Versatec (verdim)
+   '34 = #2 Versatec
+   '35 = #4 AMLC or ICS1
+   '36-37 = ELFBUS #1 & 2 (ICS1 #1, ICS1 #2)
    '40 = A/D converter type 6000
    '41 = digital input type 6020
    '42 = digital input #2
@@ -38,26 +46,34 @@
    '44 = digital output #2
    '45 = disk (was D/A converter type 6060 (analog output) - obsolete)
    '46 = disk
-   '50 = 1st HSSMLC (cs/slcdim.pma)
-   '51 = 2nd HSSMLC
-   '52 = 3rd AMLC
-   '53 = 2nd AMLC 
-   '54 = 1st AMLC
+   '47 = #2 PNC
+   '50 = #1 HSSMLC (cs/slcdim.pma)
+   '51 = #2 HSSMLC
+   '52 = #3 AMLC or ICS1
+   '53 = #2 AMLC 
+   '54 = #1 AMLC
    '55 = MACI autocall unit
-   '56 = old SMLC (RTOS User Guide, A-1)
-   '60-67 = reserved for user devices
+   '56 = old SMLC (RTOS User Guide, A-1 & Hacker's Guide)
+   '60-67 = reserved for user devices (GPIB)
    '70-'73 = Megatek graphics terminals
 
-   Devices emulated by Primos in ks/ptrap.ftn:
-     '04 = console, '01 = paper tape reader, '02 = paper tape punch, 
-     '20 = control panel
+   Devices emulated by Primos in ks/ptrap.ftn for I/O instructions in Ring 3:
+     '01 = paper tape reader
+     '02 = paper tape punch
+     '04 = console
+     '20 = control panel lights & sense switches
 */
 
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/time.h>
 #include <sys/select.h>
 #include <unistd.h>
 #include <termios.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <time.h>
 
 /* this macro is used when I/O is successful.  In VI modes, it sets
    the EQ condition code bit.  In SR modes, it does a skip */
@@ -81,15 +97,18 @@
 
 
 
-/* this is a template for device handlers */
+/* this is a template for new device handlers */
 
-void devnull (short class, short func, short device) {
+int devnew (short class, short func, short device) {
 
   switch (class) {
 
+  case -1:
+    return 0;
+
   case 0:
     if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
-    if (func == 0) {
+    if (func == 99) {
       ;
     } else {
       printf("Unimplemented OCP device '%02o function '%02o\n", device, func);
@@ -99,7 +118,7 @@ void devnull (short class, short func, short device) {
 
   case 1:
     if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
-    if (func == 0)
+    if (func == 99)
       IOSKIP;                     /* assume it's always ready */
     else {
       printf("Unimplemented SKS device '%02o function '%02o\n", device, func);
@@ -109,7 +128,7 @@ void devnull (short class, short func, short device) {
 
   case 2:
     if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
-    if (func == 0) {
+    if (func == 99) {
       ;
     } else {
       printf("Unimplemented INA device '%02o function '%02o\n", device, func);
@@ -119,12 +138,44 @@ void devnull (short class, short func, short device) {
 
   case 3:
     if (T_INST) fprintf(stderr," OTA '%02o%02o\n", func, device);
-    if (func == 0 | func == 1) {
-      IOSKIP;                     /* OTA '0004 always works on Unix */
+    if (func == 99) {
+      IOSKIP;
     } else {
-      printf("Unimplemented OTA device '%02o function '%02o\n", device, func);
+      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
       fatal(NULL);
     }
+    break;
+  }
+}
+
+
+/* this is a template for null (not present) devices */
+
+int devnone (short class, short func, short device) {
+
+  switch (class) {
+
+  case -1:
+    return 0;
+
+  case 0:
+    if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
+    fprintf(stderr, " unimplemented device '%o\n", device);
+    break;
+
+  case 1:
+    if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
+    fprintf(stderr, " unimplemented device '%o\n", device);
+    break;
+
+  case 2:
+    if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
+    fprintf(stderr, " unimplemented device '%o\n", device);
+    break;
+
+  case 3:
+    if (T_INST) fprintf(stderr," OTA '%02o%02o\n", func, device);
+    fprintf(stderr, " unimplemented device '%o\n", device);
     break;
   }
 }
@@ -193,7 +244,7 @@ void devnull (short class, short func, short device) {
 */
 
 
-void devasr (short class, short func, short device) {
+int devasr (short class, short func, short device) {
 
   static int ttydev;
   static int ttyflags;
@@ -211,6 +262,7 @@ void devasr (short class, short func, short device) {
   switch (class) {
 
   case -1:
+    setsid();
     ttydev = open("/dev/tty", O_RDWR, 0);
     if (ttydev < 0) {
       perror(" error opening /dev/tty");
@@ -233,7 +285,7 @@ void devasr (short class, short func, short device) {
       perror(" unable to set tty attributes");
       fatal(NULL);
     }
-    break;
+    return 0;
 
   case 0:
     if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
@@ -390,7 +442,7 @@ readasr:
       /* NOTE: 9950 does this in rev 20, others don't */
       IOSKIP;
     } else {
-      printf("Unimplemented OTA '04 function '%02o\n", func);
+      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
       fatal(NULL);
     }
     break;
@@ -413,9 +465,12 @@ readasr:
 /* Device '14 - magtape controller #1
  */
 
-void devmt (short class, short func, short device) {
+int devmt (short class, short func, short device) {
 
   switch (class) {
+
+  case -1:
+    return 0;
 
   case 0:
     if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
@@ -479,29 +534,51 @@ void devmt (short class, short func, short device) {
    IMPORTANT NOTE: this device ('20) never skips!
 */
 
-void devcp (short class, short func, short device) {
+int devcp (short class, short func, short device) {
   static short enabled = 0;
   static unsigned short clkvec;
   static short clkpic;
+
+  int datnow, i;
+  time_t unixtime;
+  ea_t datnowea;
+  struct tm *tms;
 
 #define SETCLKPOLL devpoll[device] = instpermsec*(-clkpic*3.2)/1000;
 
   switch (class) {
 
+  case -1:
+    return 0;
+
   case 0:
     if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
-    printf("OCP '%02o%02o\n", func, device);
 
-    if (func == 0 || func == 015) {
-      fprintf(stderr,"Clock process initialized!\n");
+    if (func == 01) {           /* ack PIC interrupt */
+      ;
+
+    } else if (func == 015) {   /* set interrupt mask */
+      fprintf(stderr,"Clock interrupt enabled!\n");
       /* this enables tracing when the clock process initializes */
       //traceflags = ~TB_MAP;
       enabled = 1;
-#if 0
+#if 1
       SETCLKPOLL;
 #else
       devpoll[device] = 600000;
 #endif
+      datnowea = 0;
+      for (i=0; i<numsyms; i++) {
+	if (strcmp(mapsym[i].symname, "DATNOW") == 0)
+	  datnowea = mapsym[i].address;
+      }
+      if (datnowea != 0) {
+	unixtime = time(NULL);
+	tms = localtime(&unixtime);
+	datnow = tms->tm_year<<25 | (tms->tm_mon+1)<<21 | tms->tm_mday<<16 | ((tms->tm_hour*3600 + tms->tm_min*60 + tms->tm_sec)/4);
+	put32(datnow, datnowea);
+      }
+
     } else if (func == 016 || func == 017) {
       enabled = 0;
       devpoll[device] = 0;
@@ -521,7 +598,7 @@ void devcp (short class, short func, short device) {
   case 2:
     if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
     if (func == 011) {             /* input ID */
-      crs[A] != 0120;               /* this is the SOC board */
+      crs[A] = 0120;               /* this is the SOC board */
     } else if (func == 016) {
       crs[A] = sswitch;
     } else if (func == 017) {      /* read switches in momentary down position */
@@ -537,15 +614,15 @@ void devcp (short class, short func, short device) {
     if (func == 02) {            /* set PIC interval */
       clkpic = *(short *)(crs+A);
       SETCLKPOLL;
-      printf("Clock PIC interval set to %d\n", clkpic);
+      //printf("Clock PIC interval set to %d\n", clkpic);
     } else if (func == 07) {
-      printf("Clock control register set to '%o\n", crs[A]);
+      //printf("Clock control register set to '%o\n", crs[A]);
     } else if (func == 013) {
       clkvec = crs[A];
-      printf("Clock interrupt vector address = '%o\n", clkvec);
+      //printf("Clock interrupt vector address = '%o\n", clkvec);
     } else if (func == 017) {           /* write lights */
     } else {
-      printf("Unimplemented OTA device '%02o function '%02o\n", device, func);
+      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
       fatal(NULL);
     }
     break;
@@ -594,11 +671,13 @@ void devcp (short class, short func, short device) {
 
  */
 
-void devdisk (short class, short func, short device) {
+int devdisk (short class, short func, short device) {
 
 #define S_HALT 0
 #define S_RUN 1
 #define S_INT 2
+
+#define MAXDRIVES 8
 
 #if 0
   #define CID4005 0100
@@ -620,7 +699,7 @@ void devdisk (short class, short func, short device) {
       unsigned short spt;                  /* sectors per track */
       int devfd;                           /* Unix device file descriptor */
       int readnum;                         /* increments on each read */
-    } unit[4];
+    } unit[MAXDRIVES];
   } dc[64];
 
   short i,u;
@@ -638,6 +717,7 @@ void devdisk (short class, short func, short device) {
   unsigned int utempl;
   char ordertext[8];
   int theads, spt, phyra;
+  int nb;                   /* number of bytes returned from read/write */
   char devfile[8];
   char rtfile[16];          /* read trace file name */
   int rtnw;                 /* total number of words read (all channels) */
@@ -649,7 +729,7 @@ void devdisk (short class, short func, short device) {
       dc[i].state = S_HALT;
       dc[i].status = 0100000;
       dc[i].usel = -1;
-      for (u=0; u<4; u++) {
+      for (u=0; u<MAXDRIVES; u++) {
 	dc[i].unit[u].rtfd = -1;
 	dc[i].unit[u].theads = 40;
 	dc[i].unit[u].spt = 9;
@@ -657,7 +737,7 @@ void devdisk (short class, short func, short device) {
 	dc[i].unit[u].readnum = -1;
       }
     }
-    break;
+    return 0;
       
   case 0:
     if (T_INST || T_DIO) fprintf(stderr," OCP '%2o%2o\n", func, device);
@@ -718,7 +798,7 @@ void devdisk (short class, short func, short device) {
       dc[device].oar = crs[A];
       devpoll[device] = 1;
     } else {
-      printf("Unimplemented OTA device '%02o function '%02o\n", device, func);
+      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
       fatal(NULL);
     }
     IOSKIP;
@@ -793,9 +873,10 @@ void devdisk (short class, short func, short device) {
 		  iobufp = mem+mapva(dmaaddr, WACC, &access, 0);
 	      else
 		iobufp = mem+dmaaddr;
-	      if (read(dc[device].unit[u].devfd, (char *)iobufp, dmanw*2) != dmanw*2) {
-		perror("Unable to read drive file");
-		fatal(NULL);
+	      if ((nb=read(dc[device].unit[u].devfd, (char *)iobufp, dmanw*2)) != dmanw*2) {
+		fprintf(stderr, "Disk read error: device='%o, u=%d, fd=%d, nb=%d\n", device, u, dc[device].unit[u].devfd, nb);
+		if (nb == -1) perror("Unable to read drive file");
+		memset((char *)iobufp, 0, dmanw*2);
 	      }
 	      if (iobufp == iobuf)
 		for (i=0; i<dmanw; i++)
@@ -897,5 +978,481 @@ void devdisk (short class, short func, short device) {
 	fatal(NULL);
       }
     }
+  }
+}
+
+/* 
+  AMLC I/O operations:
+
+  OCP '0054 - stop clock
+  OCP '0154 - single step clock
+
+  OCP '1234 - set normal/DMT mode
+  OCP '1354 - set diagnostic/DMQ mode
+  OCP '1554 - enable interrupts
+  OCP '1654 - disable interrupts
+  OCP '1754 - initialize AMLC
+
+  SKS '0454 - skip if NOT interrupting
+
+  INA '0054 - input data set sense bit for all lines (read clear to send)
+  INA '0754 - input AMLC status and clear (always skips)
+  INA '1154 - input AMLC controller ID
+  INA '1454 - input DMA/C channel number
+  INA '1554 - input DMT/DMQ base address
+  INA '1654 - input interrupt vector address
+
+  OTA '0054 - output line number for INA '0054 (older models only)
+  OTA '0154 - output line configuration for 1 line
+  OTA '0254 - output line control for 1 line
+  OTA '1454 - output DMA/C channel number
+  OTA '1554 - output DMT/DMQ base address
+  OTA '1654 - output interrupt vector address
+  OTA '1754 - output programmable clock constant
+
+  Primos AMLC usage:
+
+  OCP '17xx
+  - initialize controller
+  - clear all registers and flip-flops
+  - start line clock
+  - clear all line control bits during the 1st line scan
+  - responds not ready until 1 line scan is complete
+
+  INA '11xx
+  - read AMLC ID
+  - emulator always returns '20054 (DMQ, 16 lines)
+
+  OTA '17xx
+  - set AMLC programmable clock constant
+  - ignored by the emulator
+
+  OTA '14xx
+  - set DMC channel address for double input buffers
+  - emulator stores in a structure
+
+  OCP '13xx
+  - set dmq mode (used to be "set diagnostic mode")
+  - ignored by the emulator
+
+  OTA '15xx
+  - set DMT Base Address
+  - also used for DMQ address?
+  - emulator stores in a structure
+
+  OTA '16xx
+  - set interrupt vector address
+  - emulator stores in a structure
+
+  OTA '01xx
+  - set line configuration
+  - emulator ignores: all lines are 8-bit raw
+
+  OTA '02xx
+  - set line control
+  - emulator ignores: all lines are enabled
+
+  OCP '15xx/'16xx
+  - enable/disable interrupts
+  - emulator stores in a structure
+*/
+
+int devamlc (short class, short func, short device) {
+
+#define MAXLINES 128
+#define MAXFD MAXLINES+20
+#define MAXBOARDS 8
+  /* AMLC poll rate in milliseconds */
+#define AMLCPOLL 50
+
+#if 1
+  #define QAMLC 020000   /* this is to enable QAMLC/DMQ functionality */
+#else
+  #define QAMLC 0
+#endif
+
+  static short inited = 0;
+  static short devices[MAXBOARDS];         /* list of AMLC devices initialized */
+  static int tsfd;                         /* socket fd for terminal server */
+  static struct {                          /* maps socket fd to device & line */
+    int device;
+    int line;
+  } socktoline[MAXLINES];
+  static struct {
+    char dmqmode;                          /* 0=DMT, 1=DMQ */
+    char bufnum;                           /* 0=1st input buffer, 1=2nd */
+    char eor;                              /* 1=End of Range on input */
+    unsigned short dmcchan;                /* DMC channel (for input) */
+    unsigned short baseaddr;               /* DMT/Q base address (for output) */
+    unsigned short intvector;              /* interrupt vector */
+    char intenable;                        /* interrupts enabled? */
+    char interrupting;                     /* am I interrupting? */
+    unsigned short xmitenabled;            /* 1 bit per line */
+    unsigned short recvenabled;            /* 1 bit per line */
+    unsigned short ctinterrupt;            /* 1 bit per line */
+    unsigned short dss;                    /* 1 bit per line */
+    unsigned short sockfd[16];             /* Unix socket fd, 1 per line */
+  } dc[64];
+
+  int lx;
+  unsigned short utempa;
+  unsigned int utempl;
+  ea_t qcbea, dmcea, dmcbufbegea, dmcbufendea;
+  unsigned short dmcnw;
+  int dmcpair;
+  int optval;
+  int tsflags;
+  struct sockaddr_in addr;
+  int fd;
+  unsigned int addrlen;
+  unsigned char buf[1024];
+  int i, n, nw, newdevice;
+
+  switch (class) {
+
+  case -1:
+
+    /* this part of initialization only occurs once, no matter how many
+       AMLC boards are configured */
+
+    if (!inited) {
+      for (i=0; i<MAXBOARDS; i++)
+	devices[i] = 0;
+      if (tport != 0) {
+	tsfd = socket(AF_INET, SOCK_STREAM, 0);
+	if (tsfd == -1) {
+	  perror("socket failed for AMLC");
+	  fatal(NULL);
+	}
+	optval = 1;
+	if (setsockopt(tsfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval))) {
+	  perror("setsockopt failed for AMLC");
+	  fatal(NULL);
+	}
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(tport);
+	addr.sin_addr.s_addr = INADDR_ANY;
+	if(bind(tsfd, (struct sockaddr *)&addr, sizeof(addr))) {
+	  perror("bind: unable to bind for AMLC");
+	  fatal(NULL);
+	}
+	if(listen(tsfd, 10)) {
+	  perror("listen failed for AMLC");
+	  fatal(NULL);
+	}
+	if (fcntl(tsfd, F_GETFL, tsflags) == -1) {
+	  perror("unable to get ts flags for AMLC");
+	  fatal(NULL);
+	}
+	tsflags |= O_NONBLOCK;
+	if (fcntl(tsfd, F_SETFL, tsflags) == -1) {
+	  perror("unable to set ts flags for AMLC");
+	  fatal(NULL);
+	}
+      } else
+	printf("--tport is zero, can't start AMLC devices");
+      inited = 1;
+    }
+
+    /* this part of initialization occurs for every AMLC board */
+
+    if (!inited)
+      return -1;
+
+    /* add this device to the devices array, in the proper slot
+       so we can tell what order the boards should be in */
+
+    switch (device) {
+    case 054: devices[0] = device; break;
+    case 053: devices[1] = device; break;
+    case 052: devices[2] = device; break;
+    case 035: devices[3] = device; break;
+    case 015: devices[4] = device; break;
+    case 016: devices[5] = device; break;
+    case 017: devices[6] = device; break;
+    case 032: devices[7] = device; break;
+    }
+    return 0;
+
+  case 0:
+    if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
+    //printf(" OCP '%02o%02o\n", func, device);
+
+    if (func == 012) {            /* set normal (DMT) mode */
+      dc[device].dmqmode = 0;
+
+    } else if (func == 013 && QAMLC) {     /* set diagnostic (DMQ) mode */
+      dc[device].dmqmode = 1;
+
+    } else if (func == 015) {     /* enable interrupts */
+      dc[device].intenable = 1;
+
+    } else if (func == 016) {     /* disable interrupts */
+      dc[device].intenable = 0;
+
+    } else if (func == 017) {     /* initialize AMLC */
+      dc[device].dmqmode = 0;
+      dc[device].bufnum = 0;
+      dc[device].dmcchan = 0;
+      dc[device].baseaddr = 0;
+      dc[device].intvector = 0;
+      dc[device].intenable = 0;
+      dc[device].interrupting = 0;
+      dc[device].xmitenabled = 0;
+      dc[device].recvenabled = 0;
+      dc[device].ctinterrupt = 0;
+      dc[device].dss = 0;         /* NOTE: this is stored inverted: 1=connected */
+      dc[device].eor = 0;
+
+    } else {
+      printf("Unimplemented OCP device '%02o function '%02o\n", device, func);
+      fatal(NULL);
+    }
+    break;
+
+  case 1:
+    if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
+
+    if (func == 04) {             /* skip if not interrupting */
+      if (!dc[device].interrupting)
+	IOSKIP;
+
+    } else {
+      printf("Unimplemented SKS device '%02o function '%02o\n", device, func);
+      fatal(NULL);
+    }
+    break;
+
+  case 2:
+    if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
+
+    if (func == 00) {              /* input Data Set Sense (carrier) */
+      crs[A] = ~dc[device].dss;    /* to the outside world, 1 = no carrier*/
+      IOSKIP;
+
+    } else if (func == 07) {       /* input AMLC status */
+      crs[A] = 040000 | (dc[device].bufnum<<8) | (dc[device].intenable<<5) || (dc[device].dmqmode<<4);
+      if (dc[device].eor) {
+	crs[A] |= 0100000;
+	dc[device].eor = 0;
+      }
+      if (dc[device].ctinterrupt)
+	if (dc[device].ctinterrupt & 0xfffe)
+	  crs[A] |= 0xcf;          /* multiple char time interrupt */
+	else
+	  crs[A] |= 0x8f;          /* last line cti */
+      dc[device].interrupting = 0;
+      //printf("INA '07%02o returns 0x%x\n", device, crs[A]);
+      IOSKIP;
+
+    } else if (func == 011) {      /* input ID */
+      crs[A] = QAMLC | 054;
+      IOSKIP;
+
+    } else {
+      printf("Unimplemented INA device '%02o function '%02o\n", device, func);
+      fatal(NULL);
+    }
+    break;
+
+  case 3:
+    if (T_INST) fprintf(stderr," OTA '%02o%02o\n", func, device);
+
+    if (func == 01) {              /* set line configuration */
+      lx = crs[A] >> 12;
+      //printf("OTA '01%02o: AMLC line %d config = %x\n", device, lx, crs[A]);
+      /* if DTR drops on a connected line, disconnect */
+      if (!(crs[A] & 0x400) && (dc[device].dss & bitmask16[lx+1])) {
+	/* see similar code below */
+	write(dc[device].sockfd[lx], "\r\nDisconnecting on logout\r\n", 27);
+	close(dc[device].sockfd[lx]);
+	dc[device].dss &= ~bitmask16[lx+1];
+	printf("Closing AMLC line %d on device '%o\n", lx, device);
+      }
+      IOSKIP;
+
+    } else if (func == 02) {      /* set line control */
+      //printf("OTA '02%02o: AMLC line control = %x\n", device, crs[A]);
+      lx = (crs[A]>>12);
+      if (crs[A] & 040)           /* character time interrupt enable/disable */
+	dc[device].ctinterrupt |= bitmask16[lx+1];
+      else
+	dc[device].ctinterrupt &= ~bitmask16[lx+1];
+      if (crs[A] & 010)           /* transmit enable/disable */
+	dc[device].xmitenabled |= bitmask16[lx+1];
+      else
+	dc[device].xmitenabled &= ~bitmask16[lx+1];
+      if (crs[A] & 01)            /* receive enable/disable */
+	dc[device].recvenabled |= bitmask16[lx+1];
+      else
+	dc[device].recvenabled &= ~bitmask16[lx+1];
+      if ((dc[device].ctinterrupt || dc[device].xmitenabled || dc[device].recvenabled) && devpoll[device] == 0)
+	devpoll[device] = AMLCPOLL*instpermsec;  /* setup another poll */
+      IOSKIP;
+
+    } else if (func == 014) {      /* set DMA/C channel (for input) */
+      dc[device].dmcchan = crs[A] & 0x7ff;
+      //printf("OTA '14%02o: AMLC chan = %o\n", device, dc[device].dmcchan);
+      if (!(crs[A] & 0x800))
+	fatal("Can't run AMLC in DMA mode!");
+      IOSKIP;
+
+    } else if (func == 015) {      /* set DMT/DMQ base address (for output) */
+      dc[device].baseaddr = crs[A];
+      IOSKIP;
+
+    } else if (func == 016) {      /* set interrupt vector */
+      dc[device].intvector = crs[A];
+      IOSKIP;
+
+    } else if (func == 017) {      /* set programmable clock constant */
+      IOSKIP;
+
+    } else {
+      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
+      fatal(NULL);
+    }
+    break;
+
+  case 4:
+    //printf("poll device '%o, cti=%x, xmit=%x, recv=%x, dss=%x\n", device, dc[device].ctinterrupt, dc[device].xmitenabled, dc[device].recvenabled, dc[device].dss);
+    
+    /* check for new connections */
+
+conloop:
+
+    while ((fd = accept(tsfd, (struct sockaddr *)&addr, &addrlen)) == -1 && errno == EINTR)
+      ;
+    if (fd == -1) {
+      if (errno != EWOULDBLOCK) {
+	perror("accept error for AMLC");
+	fatal("accept error for AMLC");
+      }
+    } else {
+      if (fd >= MAXFD)
+	fatal("New connection fd is too big");
+      newdevice = 0;
+      for (i=0; !newdevice && i<MAXBOARDS; i++)
+	if (devices[i])
+	  for (lx=0; lx<16; lx++)
+	    if (!(dc[devices[i]].dss & bitmask16[lx+1])) {
+	      newdevice = devices[i];
+	      socktoline[fd].device = newdevice;
+	      socktoline[fd].line = lx;
+	      dc[newdevice].dss |= bitmask16[lx+1];
+	      dc[newdevice].sockfd[lx] = fd;
+	      printf("AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
+	      break;
+	    }
+      if (!newdevice) {
+	warn("No free AMLC connection");
+	write(fd, "\rAll AMLC lines are in use!\r\n", 29);
+	close(fd);
+      }
+      goto conloop;
+    }
+
+    /* do a receive/transmit scan loop for every line
+       NOTE: should probably do a read & write select to find lines to process */
+
+    for (lx = 0; lx < 16; lx++) {
+      if (dc[device].xmitenabled & bitmask16[lx+1]) {
+	n = 0;
+	if (dc[device].dmqmode) {
+	  qcbea = dc[device].baseaddr + lx*4;
+	  if (dc[device].dss & bitmask16[lx+1]) {
+	    while (n < sizeof(buf) && rtq(qcbea, &utempa, 0)) {
+	      if (utempa & 0x8000) {           /* valid character */
+		//printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
+		buf[n++] = utempa ^ 0x80;
+	      }
+	    }
+	  } else {         /* no line connected, just drain queue */
+	    //printf("Draining output queue on line %d\n", lx);
+	    put16r(get16r(qcbea, 0), qcbea+1, 0);
+	  }
+	} else {  /* DMT */
+	  utempa = get16r(dc[device].baseaddr + lx, 0);
+	  if (utempa != 0) {
+	    if ((utempa & 0x8000) && (dc[device].dss & bitmask16[lx+1])) {
+	      //printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
+	      buf[n++] = utempa ^ 0x80;
+	    }
+	    put16r(0, dc[device].baseaddr + lx, 0);
+	  }
+	  /* need to setup DMT xmit poll here, and/or look for char time interrupt */
+	}
+	
+	/* NOTE: probably need to check for partial writes here, or put the
+	   socket in blocking mode.  Would be best to know how many characters
+	   to remove from the queue in the loop above. */
+
+	if (n > 0)
+	  if ((nw = write(dc[device].sockfd[lx], buf, n)) != n) {
+	    perror("Writing to AMLC");
+	    fatal("Writing to AMLC");
+	  }
+      }
+
+      /* process input, but only as much as will fit into the DMC buffer */
+
+      if ((dc[device].dss & dc[device].recvenabled & bitmask16[lx+1]) && !dc[device].eor) {
+	if (dc[device].bufnum)
+	  dmcea = dc[device].dmcchan ^ 2;
+	else
+	  dmcea = dc[device].dmcchan;
+	dmcpair = get32r(dmcea, 0);
+	dmcbufbegea = dmcpair>>16;
+	dmcbufendea = dmcpair & 0xffff;
+	dmcnw = dmcbufendea - dmcbufbegea + 1;
+	if (dmcnw <= 0)
+	  continue;
+	if (dmcnw > sizeof(buf))
+	  dmcnw = sizeof(buf);
+	while ((n = read(dc[device].sockfd[lx], buf, dmcnw)) == -1 && errno == EINTR)
+	  ;
+	//printf("processing recv on device %o, line %d, b#=%d, dmcnw=%d, n=%d\n", device, lx, dc[device].bufnum, dmcnw, n);
+	if (n == 0) {
+	  n = -1;
+	  errno = EPIPE;
+	}
+	if (n == -1) {
+	  n = 0;
+	  if (errno == EAGAIN || errno == EWOULDBLOCK)
+	    ;
+	  else if (errno == EPIPE) {
+	    /* see similar code above */
+	    close(dc[device].sockfd[lx]);
+	    dc[device].dss &= ~bitmask16[lx+1];
+	    printf("Closing AMLC line %d on device '%o\n", lx, device);
+	  } else {
+	    perror("Reading AMLC");
+	    fatal("Reading AMLC");
+	  }
+	}
+
+	if (n > 0) {
+	  for (i=0; i<n; i++) {
+	    utempa = lx<<12 | 0x0200 | buf[i];
+	    put16r(utempa, dmcbufbegea, 0);
+	    //printf("******* stored character %o (%c) at %o\n", utempa, utempa&0x7f, dmcbufbegea);
+	    dmcbufbegea = INCVA(dmcbufbegea, 1);
+	  }
+	  put16r(dmcbufbegea, dmcea, 0);
+	  if (dmcbufbegea > dmcbufendea) {          /* end of range has occurred */
+	    dc[device].bufnum = 1-dc[device].bufnum;
+	    dc[device].eor = 1;
+	  }
+	}
+      }
+    }
+    if (intvec == -1 && dc[device].intenable && (dc[device].ctinterrupt || dc[device].eor)) {
+      intvec = dc[device].intvector;
+      dc[device].interrupting = 1;
+    }
+
+    if ((dc[device].ctinterrupt || dc[device].xmitenabled || dc[device].recvenabled) && devpoll[device] == 0)
+      devpoll[device] = AMLCPOLL*instpermsec;  /* setup another poll */
+    break;
   }
 }
