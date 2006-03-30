@@ -311,7 +311,8 @@ int domemdump;                       /* --memdump arg */
 int boot;                            /* true if reading a boot record */
 int pmap32bits;                      /* true if 32-bit page maps */
 int csoffset;                        /* concealed stack segment offset */
-int tport;                           /* --port option (incoming terminals) */
+int tport;                           /* --tport option (incoming terminals) */
+int nport;                           /* --nport option (PNC/Ringnet) */
 
 /* load map related data, specified with --map */
 
@@ -894,7 +895,12 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
     if (m != 0) {
       if (1 || T_FLOW) fprintf(stderr," fault JST* '%o [%o]\n", fvec, m);
       put16(faultrp & 0xFFFF, m);
+      /* NOTE: should this set RP to m (segment 0), or just set RPL? */
+#if 0
+      RPL = m;
+#else
       RP = m;
+#endif
       RPL++;
     } else {
       printf("#%d: fault '%o, fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", instcount, fvec, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
@@ -928,7 +934,7 @@ long devpoll[64] = {0};
 
 #if 0
 int (*devmap[64])(short, short, short) = {
-  /* '0x */ 0,0,0,0,devasr,0,0,0,
+  /* '0x */ 0,0,0,0,devasr,0,0,devpnc,
   /* '1x */ devnone,devnone,0,devmt,devmt,devamlc, devamlc, devamlc,
   /* '2x */ devcp,0,devdisk,devdisk,devdisk,devdisk,devdisk,devdisk,
   /* '3x */ 0,0,devamlc,0,0,devamlc,devnone,devnone,
@@ -938,11 +944,11 @@ int (*devmap[64])(short, short, short) = {
   /* '7x */ 0,0,0,0,0,devnone,devnone,0};
 #else
 int (*devmap[64])(short, short, short) = {
-  /* '0x */ 0,0,0,0,devasr,0,0,0,
+  /* '0x */ 0,0,0,0,devasr,0,0,devpnc,
   /* '1x */ devnone,devnone,0,devmt,devmt,devnone, devnone, devnone,
   /* '2x */ devcp,0,devdisk,devdisk,devdisk,devdisk,devdisk,devdisk,
   /* '3x */ 0,0,devnone,0,0,devnone,devnone,devnone,
-  /* '4x */ 0,0,0,0,0,0,0,0,
+  /* '4x */ 0,0,0,0,0,0,0,devnone,
   /* '5x */ devnone,devnone,devnone,devnone,devamlc,0,devnone,0,
   /* '6x */ 0,0,0,0,0,0,0,0,
   /* '7x */ 0,0,0,0,0,devnone,devnone,0};
@@ -2688,7 +2694,8 @@ main (int argc, char **argv) {
   boot = 0;
   pmap32bits = 0;
   csoffset = 0;
-  tport = 0;
+  tport = -1;
+  nport = -1;
 
   /* check args */
 
@@ -2714,12 +2721,18 @@ main (int argc, char **argv) {
 	cpuid = templ;
       } else
 	fprintf(stderr,"--cpuid needs an argument\n");
-    } else if (strcmp(argv[i],"--port") == 0) {
+    } else if (strcmp(argv[i],"--tport") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[i+1],"%d", &templ);
 	tport = templ;
       } else
-	fprintf(stderr,"--cpuid needs an argument\n");
+	fprintf(stderr,"--tport needs an argument\n");
+    } else if (strcmp(argv[i],"--nport") == 0) {
+      if (i+1 < argc && argv[i+1][0] != '-') {
+	sscanf(argv[i+1],"%d", &templ);
+	nport = templ;
+      } else
+	fprintf(stderr,"--nport needs an argument\n");
     } else if (strcmp(argv[i],"--trace") == 0)
       while (i+1 < argc && argv[i+1][0] != '-') {
 	if (strcmp(argv[i+1],"ear") == 0)
@@ -2763,8 +2776,10 @@ main (int argc, char **argv) {
   pmap32bits = (cpuid == 15 || cpuid == 18 || cpuid == 19 || cpuid == 24 || cpuid >= 26);
   if ((26 <= cpuid && cpuid <= 29) || cpuid >= 35)
     csoffset = 1;
-  if (tport == 0)
+  if (tport == -1)
     tport = 8000;
+  if (nport == -1)
+    nport = 8001;
 
   fprintf(stderr,"Sense switches set to %o\n", sswitch);
 
@@ -2786,7 +2801,7 @@ main (int argc, char **argv) {
     rvec[2] = 01000;
     rvec[3] = rvec[4] = rvec[5] = 0;
     rvec[6] = 0;
-    /* setup DMA register '21 for the next boot record */
+    /* setup DMA register '20 (address only) for the next boot record */
     regs.sym.regdmx[041] = 03000;
 
   } else {
@@ -2849,7 +2864,7 @@ main (int argc, char **argv) {
       savetraceflags = traceflags;
 #endif
 
-#if 1
+#if 0
     if (traceflags != 0)
       savetraceflags = traceflags;
     if (crs[OWNERL] == 0100200 && savetraceflags)
@@ -2954,8 +2969,7 @@ main (int argc, char **argv) {
     /* while a process is running, RP is the real program counter, PBH
        is the active procedure segment, and PBL is zero.  When a
        process stops running, RP is copied to PB.  When a process
-       starts running again, PB is copied to RP.  See seg14.pma,
-       WRMSAV. */
+       starts running again, PB is copied to RP. */
 
     crs[PBH] = RPH;
     crs[PBL] = 0;
@@ -3604,11 +3618,6 @@ stfa:
 	  ea = *(unsigned int *)(crs+XB);
 	  put64(*(double *)(stpm+0), ea);
 	  put64(*(double *)(stpm+4), INCVA(ea,4));
-	  continue;
-
-	case 040310:
-	  if (T_FLOW) fprintf(stderr," SSSN\n", inst);
-	  fault(UIIFAULT, RPL, RP);
 	  continue;
 
 	/* JW: I think this is an invalid opcode that Prime uses when
@@ -4887,6 +4896,15 @@ lcgt:
 	  *(unsigned int *)(crs+L) = utempl;
 	  break;
 
+	case 00300: 
+	  if (inst == 040310) {
+	    printf("SSSN @ %o/%o\n", RPH, RPL);
+	    if (T_FLOW) fprintf(stderr," SSSN\n", inst);
+	    fault(UIIFAULT, RPL, RP);
+	    break;
+	  }
+	  goto badshift;
+
 	case 00400: /* ARL */
 	  if (T_FLOW) fprintf(stderr," ARL %d\n", scount);
 	  crs[KEYS] &= ~0120000;              /* clear C,L */
@@ -5022,6 +5040,7 @@ lcgt:
 	  break;
 
 	default:
+badshift:
 	  printf("emulator warning: unrecognized shift instruction %o at %o/%o\n", inst, RPH, RPL);
 	  if (T_INST) fprintf(stderr," unrecognized shift instruction!: %o\n", inst);
 	}
@@ -6002,6 +6021,8 @@ keys = 14200, modals=100177
 
     case 0301:
       if (T_FLOW) fprintf(stderr," STLR\n");
+      if (MAKEVA(012,037122) <= ea && ea <= MAKEVA(012,042664))
+	printf("STLR in PNCDIM at %o/%o, ea=%o/%o, L=%o/%o\n", RPH, RPL-2, ea>>16, ea&0xffff, crs[A], crs[B]);
       utempa = ea;                 /* word number portion only */
       if (utempa & 040000) {       /* absolute RF addressing */
 	RESTRICT();

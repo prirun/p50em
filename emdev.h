@@ -19,7 +19,7 @@
    '07 = #1 PNC
    '10 = ICS2 #1 or ICS1
    '11 = ICS2 #2 or ICS1
-   '12 = floppy disk/diskette
+   '12 = floppy disk/diskette (magtape controller #3 at rev 22.1?)
    '13 = #2 magtape controller
    '14 = #1 magtape controller
    '15 = #5 AMLC or ICS1
@@ -153,6 +153,8 @@ int devnew (short class, short func, short device) {
 
 int devnone (short class, short func, short device) {
 
+  static short lastdev=-1;
+
   switch (class) {
 
   case -1:
@@ -160,24 +162,23 @@ int devnone (short class, short func, short device) {
 
   case 0:
     if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
-    fprintf(stderr, " unimplemented device '%o\n", device);
     break;
 
   case 1:
     if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
-    fprintf(stderr, " unimplemented device '%o\n", device);
     break;
 
   case 2:
     if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
-    fprintf(stderr, " unimplemented device '%o\n", device);
     break;
 
   case 3:
     if (T_INST) fprintf(stderr," OTA '%02o%02o\n", func, device);
-    fprintf(stderr, " unimplemented device '%o\n", device);
     break;
   }
+  if (device != lastdev)
+    fprintf(stderr, " unimplemented device '%o\n", device);
+  lastdev = device;
 }
 
 
@@ -501,10 +502,10 @@ int devmt (short class, short func, short device) {
 
 /* Device '20: control panel switches and lights, and realtime clock
 
-   OCP '0020 = start Line Frequency Clock, enable mem increment, ack previous overflow
+   OCP '0020 = start Line Frequency Clock, enable mem increment, ack previous overflow (something else on VCP?)
    OCP '0120 = ack PIC interrupt
    OCP '0220 = stop LFC, disable mem increment, ack previous overflow
-   OCP '0420 = select LFC for memory increment
+   OCP '0420 = select LFC for memory increment (something else on VCP?)
    OCP '0520 = select external clock for memory increment
    OCP '0620 = starts a new 50-ms watchdog timeout interval
    OCP '0720 = stops the watchdog timer
@@ -554,19 +555,28 @@ int devcp (short class, short func, short device) {
   case 0:
     if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
 
-    if (func == 01) {           /* ack PIC interrupt */
+    if (func == 00) {           /* does something on VCP after OCP '0420 */
+      ;
+
+    } else if (func == 01) {    /* ack PIC interrupt */
+      ; 
+
+    } else if (func == 02) {    /* stop LFC (IO.PNC DIAG) */
+      ; 
+
+    } else if (func == 04) {    /* does something on VCP during boot */
       ;
 
     } else if (func == 015) {   /* set interrupt mask */
-      fprintf(stderr,"Clock interrupt enabled!\n");
       /* this enables tracing when the clock process initializes */
       //traceflags = ~TB_MAP;
+      //fprintf(stderr,"Clock interrupt enabled!\n");
       enabled = 1;
-#if 1
       SETCLKPOLL;
-#else
-      devpoll[device] = 600000;
-#endif
+
+      /* if --map is used, lookup DATNOW symbol and set the 32-bit 
+	 Primos time value (DATNOW+TIMNOW) */
+
       datnowea = 0;
       for (i=0; i<numsyms; i++) {
 	if (strcmp(mapsym[i].symname, "DATNOW") == 0)
@@ -598,10 +608,13 @@ int devcp (short class, short func, short device) {
   case 2:
     if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
     if (func == 011) {             /* input ID */
+      crs[A] = 020;                /* this is the Option-A board */
+      crs[A] = 0220;               /* VCP board? */
       crs[A] = 0120;               /* this is the SOC board */
+      //traceflags = ~TB_MAP;
     } else if (func == 016) {
       crs[A] = sswitch;
-    } else if (func == 017) {      /* read switches in momentary down position */
+    } else if (func == 017) {      /* read switches pushed down */
       crs[A] = 0;
     } else {
       printf("Unimplemented INA device '%02o function '%02o\n", device, func);
@@ -628,13 +641,11 @@ int devcp (short class, short func, short device) {
     break;
 
   case 4:
-#if 1
     if (enabled) {
       if (intvec == -1)
 	intvec = clkvec;
       SETCLKPOLL;
     }
-#endif
     break;
   }
 }
@@ -677,7 +688,10 @@ int devdisk (short class, short func, short device) {
 #define S_RUN 1
 #define S_INT 2
 
-#define MAXDRIVES 8
+/* this should be 8, but not sure how it is supported on controllers */
+
+#define MAXDRIVES 4
+#define HASHMAX 4451
 
 #if 0
   #define CID4005 0100
@@ -697,8 +711,10 @@ int devdisk (short class, short func, short device) {
       int rtfd;                            /* read trace file descriptor */
       unsigned short theads;               /* total heads (cfg file) */
       unsigned short spt;                  /* sectors per track */
+      unsigned short curtrack;             /* current head position */
       int devfd;                           /* Unix device file descriptor */
       int readnum;                         /* increments on each read */
+      unsigned char** modrecs;             /* hash table of modified records */
     } unit[MAXDRIVES];
   } dc[64];
 
@@ -710,17 +726,28 @@ int devdisk (short class, short func, short device) {
   unsigned short m,m1,m2;
   short head, track, rec, recsize, nwords;
   unsigned short dmareg, dmaaddr;
-  unsigned short iobuf[4096];                /* local I/O buf, before mapped I/O */
+  unsigned char *hashp;
+
+
+  /* NOTE: this iobuf size looks suspicious; probably should be 2080 bytes,
+     the largest disk record size, and there probably should be some checks
+     that no individual DMA exceeds this size, that no individual disk
+     read or write exceeds 1040 words.  Maybe it's 4096 bytes because this
+     is the largest DMA transfer request size... */
+
+  unsigned short iobuf[4096];             /* local I/O buf (for mapped I/O) */
   unsigned short *iobufp;
   unsigned short access;
   short dmanw, dmanw1, dmanw2;
   unsigned int utempl;
   char ordertext[8];
-  int theads, spt, phyra;
+  int theads, spt, phyra, phyra2;
   int nb;                   /* number of bytes returned from read/write */
   char devfile[8];
   char rtfile[16];          /* read trace file name */
   int rtnw;                 /* total number of words read (all channels) */
+
+  //traceflags |= TB_DIO;
 
   switch (class) {
 
@@ -733,8 +760,10 @@ int devdisk (short class, short func, short device) {
 	dc[i].unit[u].rtfd = -1;
 	dc[i].unit[u].theads = 40;
 	dc[i].unit[u].spt = 9;
+	dc[i].unit[u].curtrack = 0;
 	dc[i].unit[u].devfd = -1;
 	dc[i].unit[u].readnum = -1;
+	dc[i].unit[u].modrecs = NULL;
       }
     }
     return 0;
@@ -747,9 +776,9 @@ int devdisk (short class, short func, short device) {
 	devpoll[device] = 1;
       }
     } else if (func == 017) {         /* reset controller */
-      dc[i].state = S_HALT;
-      dc[i].status = 0100000;
-      dc[i].usel = -1;
+      dc[device].state = S_HALT;
+      dc[device].status = 0100000;
+      dc[device].usel = -1;
     } else {
       fprintf(stderr," Unrecognized OCP '%2o%2o\n", func, device);
       fatal(NULL);
@@ -812,6 +841,9 @@ int devdisk (short class, short func, short device) {
       if (T_INST || T_DIO) fprintf(stderr,"\nDIOC %o: %o %o %o\n", dc[device].oar, m, m1, get16r(dc[device].oar+2, 0));
       dc[device].oar += 2;
       order = m>>12;
+
+      /* this is for conditional execution, and needs some work... */
+
       if (m & 04000) {   /* "execute if ..." */
 	if (order == 2 || order == 5 || order == 6)
 	  dc[device].oar++;
@@ -841,9 +873,24 @@ int devdisk (short class, short func, short device) {
 	  strcpy(ordertext,"Read");
 	else if (order == 6)
 	  strcpy(ordertext,"Write");
-	if (T_INST || T_DIO) fprintf(stderr," %s, head=%d, track=%d, rec=%d, recsize=%d\n", ordertext, head, track, rec, recsize);
+	if (T_INST || T_DIO) fprintf(stderr,"%s, head=%d, track=%d, rec=%d, recsize=%d\n", ordertext, head, track, rec, recsize);
+	if (u == -1) {
+	  fprintf(stderr," Device '%o, order %d with no unit selected\n", device, order);
+	  dc[device].status |= 2;      /* select error (right?)... */
+	  break;
+	}
+	if (recsize != 0) {
+	  fprintf(stderr," Device '%o, order %d, recsize=%d\n", device, order, recsize);
+	  dc[device].status |= 02000;  /* header check (right error?) */
+	  break;
+	}
+	if (track != dc[device].unit[u].curtrack) {
+	  fprintf(stderr," Device '%o, order %d at track %d, but already positioned to track %d\n", device, order, track, dc[device].unit[u].curtrack);
+	  dc[device].status |= 4;      /* illegal seek */
+	  break;
+	}
 	if (dc[device].unit[u].devfd == -1) {
-	  if (T_INST || T_DIO) fprintf(stderr," Unit not selected or not ready\n");
+	  if (T_INST || T_DIO) fprintf(stderr," Device '%o unit %d not ready\n", device, u);
 	  dc[device].status = 0100001;
 	} else if (order == 2) {
 	  if (T_INST || T_DIO) fprintf(stderr," Format order\n");
@@ -854,12 +901,58 @@ int devdisk (short class, short func, short device) {
 
 	  phyra = (track*dc[device].unit[u].theads*dc[device].unit[u].spt) + head*9 + rec;
 	  if (T_INST || T_DIO) fprintf(stderr, " Unix ra=%d, byte offset=%d\n", phyra, phyra*2080);
-	  if (lseek(dc[device].unit[u].devfd, phyra*2080, SEEK_SET) == -1) {
-	    perror("Unable to seek drive file");
-	    fatal(NULL);
+
+	  /* does this record exist in the disk unit hash table?  If it does,
+	     we'll do I/O to the hash entry.  If it doesn't, then for read,
+	     go to the disk file; for write, make a new hash entry */
+
+	  hashp = NULL;
+
+#ifndef DISKMOD
+	  //fprintf(stderr," R/W, modrecs=%p\n", dc[device].unit[u].modrecs);
+	  for (hashp = dc[device].unit[u].modrecs[phyra%HASHMAX]; hashp != NULL; hashp = *((unsigned char **)hashp)) {
+	    //fprintf(stderr," lookup, hashp=%p\n", hashp);
+	    if (phyra == *((int *)(hashp+sizeof(void *))))
+	      break;
 	  }
+	  //fprintf(stderr,"After search, hashp=%p\n", hashp);
+
+	  if (hashp == NULL)
+	    if (order == 5) {        /* read */
+#endif
+	      if (lseek(dc[device].unit[u].devfd, phyra*2080, SEEK_SET) == -1) {
+		perror("Unable to seek drive file");
+		fatal(NULL);
+	      }
+#ifndef DISKMOD
+	    } else {                 /* write */
+	      hashp = malloc(1040*2 + sizeof(void*) + sizeof(int));
+	      *(unsigned char **)hashp = dc[device].unit[u].modrecs[phyra%HASHMAX];
+	      *((int *)(hashp+sizeof(void *))) = phyra;
+	      //fprintf(stderr," Write, new hashp = %p, old bucket head = %p\n", hashp, *(unsigned char **)hashp);
+	      dc[device].unit[u].modrecs[phyra%HASHMAX] = hashp;
+	      hashp = hashp + sizeof(void*) + sizeof(int);
+	    }
+	  else
+	    hashp = hashp + sizeof(void*) + sizeof(int);
+	  //fprintf(stderr," Before disk op %d, hashp=%p\n", order, hashp);
+#endif
+
+#if 0
+	  if (order == 6) {
+	    dmareg = dc[device].dmachan << 1;
+	    dmanw = regs.sym.regdmx[dmareg];
+	    dmanw = -(dmanw>>4);
+	    dmaaddr = regs.sym.regdmx[dmareg+1];
+	    phyra2 = get16r(dmaaddr+0, 0);
+	    phyra2 = phyra2<<16 | get16r(dmaaddr+1, 0);
+	    if (phyra2 != phyra)
+	      fprintf(stderr,"devdisk: phyra=%d, phyra2=%d; CRA mismatch (dmanw = %d)!\n", phyra, phyra2, dmanw);
+	  }
+#endif
+	    
 	  while (dc[device].dmanch >= 0) {
-	    dmareg = ((dc[device].dmachan & 036) << 1) | (dc[device].dmachan & 1);
+	    dmareg = dc[device].dmachan << 1;
 	    dmanw = regs.sym.regdmx[dmareg];
 	    dmanw = -(dmanw>>4);
 	    dmaaddr = regs.sym.regdmx[dmareg+1];
@@ -873,7 +966,10 @@ int devdisk (short class, short func, short device) {
 		  iobufp = mem+mapva(dmaaddr, WACC, &access, 0);
 	      else
 		iobufp = mem+dmaaddr;
-	      if ((nb=read(dc[device].unit[u].devfd, (char *)iobufp, dmanw*2)) != dmanw*2) {
+	      if (hashp != NULL) {
+		memcpy((char *)iobufp, hashp, dmanw*2);
+		hashp += dmanw*2;
+	      } else if ((nb=read(dc[device].unit[u].devfd, (char *)iobufp, dmanw*2)) != dmanw*2) {
 		fprintf(stderr, "Disk read error: device='%o, u=%d, fd=%d, nb=%d\n", device, u, dc[device].unit[u].devfd, nb);
 		if (nb == -1) perror("Unable to read drive file");
 		memset((char *)iobufp, 0, dmanw*2);
@@ -888,7 +984,10 @@ int devdisk (short class, short func, short device) {
 		  iobuf[i] = get16r(dmaaddr+i, 0);
 	      } else
 		iobufp = mem+dmaaddr;
-	      if (write(dc[device].unit[u].devfd, (char *)iobufp, dmanw*2) != dmanw*2) {
+	      if (hashp != NULL) {
+		memcpy(hashp, (char *)iobufp, dmanw*2);
+		hashp += dmanw*2;
+	      } else if (write(dc[device].unit[u].devfd, (char *)iobufp, dmanw*2) != dmanw*2) {
 		perror("Unable to write drive file");
 		fatal(NULL);
 	      }
@@ -901,27 +1000,56 @@ int devdisk (short class, short func, short device) {
 	}
 	break;
 
-	/* NOTE: for seek command, the track should probably be stored
-	   in a state variable, then checked for equality on
-	   read/write.  If not equal, a disk fault should occur rather
-	   than reading/writing from the wrong cylinder. */
-
       case 3: /* SSEEK = Seek */
-	track = m1 & 01777;
+	u = dc[device].usel;
+	if (u == -1) {
+	  fprintf(stderr," Device '%o, order %d with no unit selected\n", device, order);
+	  dc[device].status |= 2;      /* select error (right?)... */
+	  break;
+	}
+	if (m1 & 0100000)
+	  track = 0;
+	else
+	  track = m1 & 01777;
 	if (T_INST || T_DIO) fprintf(stderr," seek track %d, restore=%d, clear=%d\n", track, (m1 & 0100000) != 0, (m1 & 040000) != 0);
+	dc[device].unit[u].curtrack = track;
 	break;
 
       case 4: /* DSEL = Select unit */
-	u = (m1 & 017) >> 1;       /* unit = 0/1/2/4 */
-	if (u == 4) u = 3;         /* unit = 0/1/2/3 */
+	u = (m1 & 017);            /* get unit bits */
+	if (u == 0) {
+	  dc[device].usel = -1;    /* de-select */
+	  if (T_INST || T_DIO) fprintf(stderr," de-select\n");
+	  break;
+	}
+	if (u != 1 && u != 2 && u != 4 && u != 8) {
+	  fprintf(stderr," Device '%o, bad select '%o\n", device, u);
+	  dc[device].usel = -1;    /* de-select */
+	  dc[device].status != 2;  /* select error */
+	  break;
+	}
+	u = u >> 1;                /* unit => 0/1/2/4 */
+	if (u == 4) u = 3;         /* unit => 0/1/2/3 */
+	if (T_INST || T_DIO) fprintf(stderr," select unit %d\n", u);
 	dc[device].usel = u;
 	if (dc[device].unit[u].devfd == -1) {
 	  snprintf(devfile,sizeof(devfile),"dev%ou%d", device, u);
-	  if (T_INST || T_DIO) fprintf(stderr," filename for unit %d is %s\n", u, devfile);
-	  if ((dc[device].unit[u].devfd = open(devfile, O_RDWR, 0)) == -1)
+	  if (T_INST || T_DIO) fprintf(stderr," filename for dev '%o unit %d is %s\n", device, u, devfile);
+	  /* NOTE: add O_CREAT to allow creating new drives on the fly */
+	  if ((dc[device].unit[u].devfd = open(devfile, O_RDWR, 0770)) == -1) {
+	    perror ("Unable to open device file");
 	    dc[device].status = 0100001;    /* not ready */
+	  } else {
+	    /* NOTE: this is a hack, because Primos 20.2.8 doesn't do
+	       a reset if a disk device (file) doesn't exist and is created
+	       under a running simulation */
+	    dc[device].status = 0100000;    /* clear status */
+#ifndef DISKMOD
+	    dc[device].unit[u].modrecs = calloc(HASHMAX, sizeof(void *));
+	    //fprintf(stderr," Device '%o, unit %d, modrecs=%p\n", device, u, dc[device].unit[u].modrecs);
+#endif
+	  }
 	}
-	if (T_INST || T_DIO) fprintf(stderr," select unit %d\n", u);
 	break;
 
       case 7: /* DSTALL = Stall */
@@ -974,6 +1102,9 @@ int devdisk (short class, short func, short device) {
 	break;
 
       default:
+	/* NOTE: orders 1 & 8 are supposed to halt the channel program
+	   but leave the controller busy (model 4004).
+           Orders 10 & 12 (Store/Load) are not implemented */
 	printf("Unrecognized channel order = %d\n", order);
 	fatal(NULL);
       }
@@ -1352,10 +1483,17 @@ conloop:
       goto conloop;
     }
 
-    /* do a receive/transmit scan loop for every line
-       NOTE: should probably do a read & write select to find lines to process */
+    /* do a receive/transmit scan loop for every line 
+       NOTE: should probably do a read & write select to find lines to
+       process */
 
     for (lx = 0; lx < 16; lx++) {
+
+      /* Transmit is first.  Lots of opportunity to optimize this
+	 by doing one or two mapva calls,  directly examining the queue,
+	 doing the write (which may be partial), then updating the queue
+	 for however many characters were actually sent. */
+
       if (dc[device].xmitenabled & bitmask16[lx+1]) {
 	n = 0;
 	if (dc[device].dmqmode) {
@@ -1380,7 +1518,8 @@ conloop:
 	    }
 	    put16r(0, dc[device].baseaddr + lx, 0);
 	  }
-	  /* need to setup DMT xmit poll here, and/or look for char time interrupt */
+	  /* need to setup DMT xmit poll here, and/or look for char
+	     time interrupt */
 	}
 	
 	/* NOTE: probably need to check for partial writes here, or put the
@@ -1412,6 +1551,9 @@ conloop:
 	while ((n = read(dc[device].sockfd[lx], buf, dmcnw)) == -1 && errno == EINTR)
 	  ;
 	//printf("processing recv on device %o, line %d, b#=%d, dmcnw=%d, n=%d\n", device, lx, dc[device].bufnum, dmcnw, n);
+	
+	/* zero length read means the socket has been closed */
+
 	if (n == 0) {
 	  n = -1;
 	  errno = EPIPE;
@@ -1456,3 +1598,283 @@ conloop:
     break;
   }
 }
+
+
+
+/* PNC (ring net) device handler
+
+  PNC ring buffers are 256 words (later version appear to support 256,
+  512, and 1024 word packets).  "nbkini" (rev 18) allocates 12 ring
+  buffers + 1 for every 2 nodes in the ring.  Both the 1-to-2 queue
+  for received packets, and 2-to-1 queue for xmit packets have 63
+  entries.  PNC ring buffers are wired and do not cross page
+  boundaries.
+
+  The actual xmit/recv buffers for PNC are 256 words, and each buffer
+  has an associated "block header", stored in a different location in
+  system memory, that is 8 words.  
+
+  The BH fields are (16-bit words):
+       0: type field (1)
+       1: free pool id (3 for ring buffers)
+       2-3: pointer to data block
+
+       4-7 are available for use by the drivers.  For PNC:
+       4: number of words received (calculated by pncdim based on DMA regs)
+          or number of 
+       5: receive status word
+       6: data 1
+       7: data 2
+
+  The PNC data buffer has a 2-word header:
+       0: To (left) and From (right) bytes containing node-id
+       1: "Type" word. 
+          Bit 1 set = odd number of bytes
+          Bit 8 set = normal data messages (otherwise, a timer message)
+
+
+  Primos PNC usage:
+
+  OCP '0007
+  - disconnect from ring
+
+  OCP '0207
+  - inject a token into the ring
+
+  OCP '0507
+  - set PNC into "delay" mode (token recovery BS)
+
+  OCP '1007
+  - stop any xmit in progress
+
+
+  INA '1707
+  - read PNC status word
+  - does this in a loop until "connected" bit is clear after disconnect above
+  - PNC status word:
+      bit 1 set if receive interrupt (rcv complete)
+      bit 2 set if xmit interrupt (xmit complete)
+      bit 3 set if "PNC booster" (repeater?)
+      bit 4-5 not used
+      bit 6 set if connected to ring
+      bit 7 set if multiple tokens detected (only after xmit EOR)
+      bit 8 set if token detected (only after xmit EOR)
+      bits 9-16 controller node ID
+
+  INA '1207
+  - read receive status word (byte?)
+      bit 1 set for previous ACK
+      bit 2 set for multiple previous ACK
+      bit 3 set for previous WACK
+      bit 4 set for previous NACK
+      bits 5-6 unused
+      bit 7 ACK byte parity error
+      bit 8 ACK byte check error (parity on bits 1-6)
+      bit 9 recv buffer parity error
+      bit 10 recv busy
+      bit 11 end of range before end of message
+      
+  INA '1407
+  - read xmit status word
+      bit 1 set for ACK
+      bit 2 set for multiple ACK (more than 1 node accepted packet)
+      bit 3 set for WACK
+      bit 4 set for NACK (bad CRC)
+      bit 5 unused
+      bit 6 parity bit of ACK (PNC only)
+      bit 7 ACK byte parity error
+      bit 8 ACK byte check error (parity on bits 1-6)
+      bit 9 xmit buffer parity error
+      bit 10 xmit busy
+      bit 11 packet did not return
+      bit 12 packet returned with bits 6-8 nonzero
+      bits 13-16 retry count (booster only, zero on PNC)
+
+  OCP '1707
+  - initialize
+
+  OTA '1707
+  - set my node ID (in A register)
+  - if this fails, no PNC present
+
+  OTA '1607
+  - set interrupt vector (in A reg)
+
+  OTA '1407
+  - initiate receive, dma channel in A
+
+  OTA '1507
+  - initiate xmit, dma channel in A
+
+  OCP '0107
+  - connect to the ring
+  - (Primos follows this with INA '1707 until "connected" bit is set)
+
+  OCP '1407
+  - ack receive (clears recv interrupt request)
+
+  OCP '0407
+  - ack xmit (clears xmit interrupt request)
+
+  OCP '1507
+  - set interrupt mask (enable interrupts)
+
+  OCP '1107
+  - rev 20 does this, not sure what it does
+
+*/
+
+int devpnc (short class, short func, short device) {
+
+  /* PNC controller status bits */
+#define PNCRCVINT  0x8000    /* bit 1 rcv interrupt (rcv complete) */
+#define PNCXMITINT 0x4000    /* bit 2 xmit interrupt (xmit complete) */
+#define PNCBOOSTER 0x2000    /* bit 3 */
+#define PNCINTENAB 0x1000    /* bit 4 (JW usage) */
+
+#define PNCCONNECTED 0x400   /* bit 6 */
+#define PNCTWOTOKENS 0x200   /* bit 7, only set after xmit EOR */
+#define PNCTOKDETECT 0x100   /* bit 8, only set after xmit EOR */
+
+  static short pncstat;    /* controller status word */
+  static short recvstat;   /* receive status word */
+  static short xmitstat;   /* xmit status word */
+  static short intvec;     /* PNC interrupt vector */
+
+  unsigned short dmachan, dmareg, dmaaddr, dmaword;
+  short i, dmanw;
+
+  //traceflags = ~TB_MAP;
+
+  switch (class) {
+
+  case -1:
+    return 0;
+
+  case 0:
+    if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
+    if (func == 00) {           /* disconnect from ring */
+      pncstat &= ~PNCCONNECTED;
+
+    } else if (func == 01) {    /* connect to the ring */
+      pncstat |= PNCCONNECTED;
+
+    } else if (func == 02) {    /* inject a token */
+      ;
+
+    } else if (func == 04) {    /* ack xmit (clear xmit int) */
+      pncstat &= ~PNCXMITINT;
+      xmitstat = 0;             /* right? */
+
+    } else if (func == 05) {    /* set PNC into "delay" mode */
+      printf("Set PNC to delay mode\n");
+
+    } else if (func == 010) {   /* stop xmit in progress */
+      xmitstat = 0;
+
+    } else if (func == 011) {   /* dunno what this is - rev 20 startup */
+      ;
+
+    } else if (func == 012) {   /* set normal mode */
+      ;
+
+    } else if (func == 013) {   /* set diagnostic mode */
+      ;
+
+    } else if (func == 014) {   /* ack receive (clear rcv int) */
+      pncstat &= ~PNCRCVINT;
+      recvstat = 0;             /* right? */
+
+    } else if (func == 015) {   /* set interrupt mask (enable int) */
+      pncstat |= PNCINTENAB;
+
+    } else if (func == 016) {   /* clear interrupt mask (disenable int) */
+      pncstat &= ~PNCINTENAB;
+
+    } else if (func == 017) {   /* initialize */
+      pncstat = 0;
+      recvstat = 0;
+      xmitstat = 0;
+      intvec = 0;
+
+    } else {
+      printf("Unimplemented OCP device '%02o function '%02o\n", device, func);
+      fatal(NULL);
+    }
+    break;
+
+  case 1:
+    if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
+    if (func == 99)
+      IOSKIP;                     /* assume it's always ready */
+    else {
+      printf("Unimplemented SKS device '%02o function '%02o\n", device, func);
+      fatal(NULL);
+    }
+    break;
+
+  case 2:
+    if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
+    if (func == 011) {          /* input ID */
+      crs[A] = 07;
+      IOSKIP;
+
+    } else if (func == 012) {   /* read receive status word */   
+      crs[A] = recvstat;
+      IOSKIP;
+
+    } else if (func == 014) {   /* read xmit status word */   
+      crs[A] = xmitstat;
+      IOSKIP;
+
+    } else if (func == 017) {   /* read controller status word */   
+      crs[A] = pncstat;
+      IOSKIP;
+
+    } else {
+      printf("Unimplemented INA device '%02o function '%02o\n", device, func);
+      fatal(NULL);
+    }
+    break;
+
+  case 3:
+    if (T_INST) fprintf(stderr," OTA '%02o%02o\n", func, device);
+    if (func == 014) {          /* initiate recv, dma chan in A */
+      dmachan = crs[A];
+      dmareg = dmachan << 1;
+      dmanw = regs.sym.regdmx[dmareg];
+      dmanw = -(dmanw>>4);
+      dmaaddr = regs.sym.regdmx[dmareg+1];
+      printf("PNC recv: dmachan=%o, dmareg=%o, dmaaddr=%o, dmanw=%d\n", dmachan, dmareg, dmaaddr, dmanw);
+      IOSKIP;
+
+    } else if (func == 015) {   /* initiate xmit, dma chan in A */
+      dmachan = crs[A];
+      dmareg = dmachan<<1;
+      dmanw = regs.sym.regdmx[dmareg];
+      dmanw = -(dmanw>>4);
+      dmaaddr = regs.sym.regdmx[dmareg+1];
+      printf("PNC xmit: dmachan=%o, dmareg=%o, dmaaddr=%o, dmanw=%d\n", dmachan, dmareg, dmaaddr, dmanw);
+      for (i=0; i<dmanw; i++) {
+	dmaword = get16(dmaaddr+i);
+	printf("PNC xmit: word %d = '%o/%d [%o %o]\n", i, dmaword, *(short *)&dmaword, dmaword>>8, dmaword&0xff);
+      }
+      IOSKIP;
+
+    } else if (func == 016) {   /* set interrupt vector */
+      intvec = crs[A];
+      IOSKIP;
+
+    } else if (func == 017) {   /* set my node ID */
+      pncstat = (pncstat & 0xFF00) | (crs[A] & 0xFF);
+      IOSKIP;
+
+    } else {
+      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
+      fatal(NULL);
+    }
+    break;
+  }
+}
+
+
