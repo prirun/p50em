@@ -539,7 +539,11 @@ int devcp (short class, short func, short device) {
   static short enabled = 0;
   static unsigned short clkvec;
   static short clkpic;
+  static unsigned long ticks=0;
+  static struct timeval start_tv;
 
+  struct timeval tv;
+  unsigned long elapsedms,targetticks;
   int datnow, i;
   time_t unixtime;
   ea_t datnowea;
@@ -572,6 +576,9 @@ int devcp (short class, short func, short device) {
       //traceflags = ~TB_MAP;
       //fprintf(stderr,"Clock interrupt enabled!\n");
       enabled = 1;
+      if (gettimeofday(&start_tv, NULL) != 0)
+	fatal("em: gettimeofday 2 failed");
+      ticks = 0;
       SETCLKPOLL;
 
       /* if --map is used, lookup DATNOW symbol and set the 32-bit 
@@ -627,7 +634,7 @@ int devcp (short class, short func, short device) {
     if (func == 02) {            /* set PIC interval */
       clkpic = *(short *)(crs+A);
       SETCLKPOLL;
-      //printf("Clock PIC interval set to %d\n", clkpic);
+      printf("Clock PIC interval set to %d\n", clkpic);
     } else if (func == 07) {
       //printf("Clock control register set to '%o\n", crs[A]);
     } else if (func == 013) {
@@ -642,9 +649,31 @@ int devcp (short class, short func, short device) {
 
   case 4:
     if (enabled) {
-      if (intvec == -1)
+      if (intvec == -1) {
 	intvec = clkvec;
-      SETCLKPOLL;
+	ticks++;
+	if (gettimeofday(&tv, NULL) != 0)
+	  fatal("em: gettimeofday 3 failed");
+	if (tv.tv_usec > start_tv.tv_usec)
+	  elapsedms = (tv.tv_sec-start_tv.tv_sec)*1000 + (tv.tv_usec-start_tv.tv_usec)/1000;
+	else
+	  elapsedms = (tv.tv_sec-start_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-start_tv.tv_usec)/1000;
+	targetticks = elapsedms/(-clkpic*3.2/1000);
+	if (ticks < targetticks) {
+	  //printf("Clock catchup, elapsed=%d, target=%d, ticks=%d\n", elapsedms, targetticks, ticks);
+	  devpoll[device] = 100;       /* behind, so catch-up */
+        } else {
+#if 0
+	  if (ticks%1000 == 0)
+	    printf("Clock check: target=%d, ticks=%d\n", targetticks, ticks);
+#endif
+	  SETCLKPOLL;
+	  if (ticks > targetticks)
+	    devpoll[device] = devpoll[device]*2;
+	}
+      } else {
+	devpoll[device] = 100;         /* couldn't interrupt, try again soon */
+      }
     }
     break;
   }

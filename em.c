@@ -17,6 +17,22 @@
 
 
    NOTE: this only runs on a big-endian machine, like the Prime.
+
+   To boot (from 2466, dev '26, unit 3):
+
+   time ./em --tport 8000 --cpuid 5 --ss 14714 --boot --map MFD.2462/PRIRUN/RING0.MAP MFD.2462/PRIRUN/RING3.MAP <dev26u3 2>err
+
+   or:
+
+   14114 for dev26u0
+   14134 for dev26u1
+   14154 for dev26u2
+
+   14314 for dev27u0
+   14334 for dev27u1
+   14354 for dev27u2
+   14374 for dev27u3
+
 */
 
 #include <stdio.h>
@@ -208,10 +224,11 @@ unsigned short sswitch = 0;          /* sense switches, set with --ss */
 unsigned short cpuid = 27;           /* STPM CPU model, set with --cpuid */
 
 unsigned long instcount=0;           /* global instruction count */
+unsigned long previnstcount=0;       /* value of above at last gettimeofday */
 
 unsigned short inhcount = 0;         /* number of instructions to stay inhibited */
 
-unsigned int instpermsec = 2600;     /* initial assumption for inst/msec */
+unsigned int instpermsec = 2000;     /* initial assumption for inst/msec */
 
 jmp_buf jmpbuf;                      /* for longjumps to the fetch loop */
 
@@ -2382,20 +2399,20 @@ nfy(unsigned short inst) {
   if (T_PX) fprintf(stderr,"%o/%o: opcode %o %s, ea=%o/%o, count=%d, bol=%o, I am %o\n", RPH, RPL, inst, nfyname[inst-01200], ea>>16, ea&0xFFFF, scount, bol, crs[OWNERL]);
   if (scount > 0) {
     if (bol == 0) {
-      printf("NFYB: bol is zero, count is %d for semaphore at %o/%o\n", scount, ea>>16, ea&0xFFFF);
+      printf("NFY: bol is zero, count is %d for semaphore at %o/%o\n", scount, ea>>16, ea&0xFFFF);
       fatal(NULL);
     }
     pcbp = MAKEVA(crs[OWNERH], bol);
     utempl = get32r(pcbp+PCBWAIT, 0);
     if (utempl != ea) {
-      printf("NFYB: bol=%o, pcb waiting on %o/%o != ea %o/%o\n", utempl>>16, utempl&0xFFFF, ea>>16, ea&0xFFFF);
+      printf("NFY: bol=%o, pcb waiting on %o/%o != ea %o/%o\n", utempl>>16, utempl&0xFFFF, ea>>16, ea&0xFFFF);
       fatal(NULL);
     }
     bol = get16r(pcbp+PCBLINK, 0);     /* get new beginning of wait list */
     resched = ready(pcbp, begend);     /* put this pcb on the ready list */
   }
   scount = scount-1;
-#if 1
+#if 0
   /* NOTE: shouldn't have to do this if everything is working right, but with
      PRIMOS we get:
 CFatal error: instruction #81929908 at 6/54311: 315 4400
@@ -2659,12 +2676,8 @@ main (int argc, char **argv) {
   ea_t zea1, zea2;
   unsigned char zch1, zch2, *zcp1, *zcp2, zspace;
 
-  unsigned int instpermsecmask = 03777;   /* nearest mask of above */
-  unsigned long long bootmsec;            /* time we booted */
-  unsigned long long curmsec;             /* current time in milliseconds */
-
   struct timeval boot_tv;
-  struct timeval tv;
+  struct timeval tv, prev_tv;
   struct timezone tz;
   float mips;
 
@@ -2840,6 +2853,7 @@ main (int argc, char **argv) {
     perror("gettimeofday failed");
     fatal(NULL);
   }
+  prev_tv = boot_tv;
 
   /* main instruction decode loop */
 
@@ -2892,7 +2906,7 @@ main (int argc, char **argv) {
     /* poll any devices that requested a poll */
 
     for (i=0; i<64; i++)
-      if (devpoll[i] && (--devpoll[i] == 0)) {
+      if (devpoll[i] && (--devpoll[i] <= 0)) {
 	if (!devmap[i])
 	  fatal("devpoll set but devmap is null");
 #if 0
@@ -2966,6 +2980,19 @@ main (int argc, char **argv) {
     RPL++;
     instcount++;
 
+    /* update instpermsec every 5 seconds */
+
+    if (instcount-previnstcount > instpermsec*1000*5) {
+      if (gettimeofday(&tv, NULL) != 0)
+	fatal("em: gettimeofday failed");
+      instpermsec = (instcount-previnstcount) /
+	((tv.tv_sec*1000+(tv.tv_usec/1000)) - (prev_tv.tv_sec*1000+(prev_tv.tv_usec/1000)));
+      //printf("instcount = %d, previnstcount = %d, diff=%d, instpermsec=%d\n", instcount, previnstcount, instcount-previnstcount, instpermsec);
+      //printf("instpermsec=%d\n", instpermsec);
+      previnstcount = instcount;
+      prev_tv = tv;
+    }
+
     /* while a process is running, RP is the real program counter, PBH
        is the active procedure segment, and PBL is zero.  When a
        process stops running, RP is copied to PB.  When a process
@@ -2978,16 +3005,6 @@ main (int argc, char **argv) {
     if (crs[MODALS] & 010) {     /* px enabled, bump 1ms process timer */
       if (crs[TIMERL]++ > instpermsec) {
 	crs[TIMERL] = 0;
-#if 0
-	if (crs[OWNERL] == 0100100)
-	  printf("SUP timer=%d\n", *(short *)(crs+TIMER));
-
-	/* bump all timers, applying corrections based on actual time
-	   if necessary */
-
-	if (!gettimeofday(&tv, &tz))
-	  fatal("em: gettimeofday failed");
-#endif
 
 	/* if 1ms resolution process timer overflows, set pcb abort flag */
 
@@ -4081,25 +4098,64 @@ bidy:
 #if 1
 	  m = get16(RP);
 	  if (crs[X] > 100 && m == RPL-1) {
-	    //fprintf(stderr," BDX loop detected at %o/%o, remainder=%d\n", prevpc>>16, prevpc&0xffff, crs[X]);
-	    utempl = instpermsec*10;
-	    for (i=0; i<64; i++)
-	      if (devpoll[i] && devpoll[i] < utempl)
+	    struct timeval tv0,tv1;
+	    long delayusec, actualmsec;
+
+	    /* for BDX *-1 loop (backstop process mainly), we want to change
+	       this to a 10ms sleep so that the emulation host doesn't peg the
+	       CPU.
+
+	       So first, check to see if any device times expire sooner than
+	       this, and if so, limit the sleep time to the lowest expiration
+	       value (this is stored as number of instructions left until the
+	       timer expires).
+
+	       NOTE: In practice, the clock device ticks at 330 times a sec,
+	       so we only get to delay about 3ms here.
+	    */
+
+	    utempl = instpermsec*10;          /* limit delay to 10 millisecs */
+	    for (i=0; i<64; i++)              /* check device timers */
+	      if (devpoll[i])                 /* poll set? */
+		if (devpoll[i] < 0 || devpoll[i] <= 100) {  /* too fast! */
+		utempl = 1;
+		break;
+	      } else if (devpoll[i] < utempl)
 		utempl = devpoll[i];
-	    utempl--;
-	    for (i=0; i<64; i++)
-	      if (devpoll[i])
-		devpoll[i] -= utempl;
-	    usleep(utempl*1000/instpermsec);
-	    crs[X] = 0;
-	    utempa = crs[TIMER];
-	    crs[TIMER] += utempl/instpermsec;
-	    if (crs[TIMER] < utempa) {
-	      tempea = *(ea_t *)(crs+OWNER);
-	      utempa = get16r(tempea+4, 0) | 1;    /* set process abort flag */
-	      put16r(utempa, tempea+4, 0);
+	    utempl--;                         /* utempl = # instructions */
+	    delayusec = utempl*1000/instpermsec;
+	    if (delayusec > 1000) {
+	      if (gettimeofday(&tv0, NULL) != 0)
+		fatal("em: gettimeofday 0 failed");
+	      usleep(delayusec);
+	      if (gettimeofday(&tv1, NULL) != 0)
+		fatal("em: gettimeofday 1 failed");
+	      if (tv1.tv_usec > tv0.tv_usec)
+		actualmsec = (tv1.tv_sec-tv0.tv_sec)*1000 + (tv1.tv_usec-tv0.tv_usec)/1000;
+	      else
+		actualmsec = (tv1.tv_sec-tv0.tv_sec-1)*1000 + (tv1.tv_usec+1000000-tv0.tv_usec)/1000;
+	      // fprintf(stderr," BDX loop at %o/%o, remainder=%d, owner=%o, utempl=%d, wanted %d us, got %d ms\n", prevpc>>16, prevpc&0xffff, crs[X], crs[OWNERL], utempl, delayusec, actualusec);
+
+	      /* do timer bookkeeping that would have occurred if we had 
+		 actually looped on BDX utempl times */
+
+	      for (i=0; i<64; i++)
+		if (devpoll[i] > 0)
+		  devpoll[i] -= utempl;
+	      crs[X] = 0;
+	      utempa = crs[TIMER];
+	      if (actualmsec > 0) {
+		crs[TIMER] += actualmsec;
+		if (crs[TIMER] < utempa) {
+		  tempea = *(ea_t *)(crs+OWNER);
+		  utempa = get16r(tempea+4, 0) | 1;    /* set process abort flag */
+		  put16r(utempa, tempea+4, 0);
+		}
+	      } else {
+		crs[TIMERL] += utempl;
+	      }
+	      instcount += actualmsec*instpermsec;
 	    }
-	    instcount += utempl;
 	  }
 	  if (crs[X] != 0)
 	    RPL = m;
