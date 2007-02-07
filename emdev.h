@@ -47,8 +47,8 @@
    '45 = disk (was D/A converter type 6060 (analog output) - obsolete)
    '46 = disk
    '47 = #2 PNC
-   '50 = #1 HSSMLC (cs/slcdim.pma)
-   '51 = #2 HSSMLC
+   '50 = #1 HSSMLC/MDLC (cs/slcdim.pma)
+   '51 = #2 HSSMLC/MDLC
    '52 = #3 AMLC or ICS1
    '53 = #2 AMLC 
    '54 = #1 AMLC
@@ -56,6 +56,7 @@
    '56 = old SMLC (RTOS User Guide, A-1 & Hacker's Guide)
    '60-67 = reserved for user devices (GPIB)
    '70-'73 = Megatek graphics terminals
+   '75-'76 = T$GPPI
 
    Devices emulated by Primos in ks/ptrap.ftn for I/O instructions in Ring 3:
      '01 = paper tape reader
@@ -464,41 +465,466 @@ readasr:
 
 
 /* Device '14 - magtape controller #1
- */
+
+   NOTES: 
+
+   This code only supports 1 tape controller (4 units), but could be
+   extended to support 2 controllers (eg, see disk controller code)
+
+   All tape files are assumed to be in SimH .TAP format:
+   - 4-bytes (little endian integer) indicating data record length (in bytes)
+   - n bytes of data
+   - repeat of the 4-byte data record length
+   - odd length records have a pad byte inserted
+   - if MSB of record length is set, there is an error in the record
+   - record length of zero indicates a file mark (doesn't repeat)
+   - record length of all 1's indicates end-of-tape mark (doesn't repeat)
+
+   Tape files are named according to the device and unit, like disk drives:
+   - dev14u0, dev14u1, dev14u2, dev14u3
+   These names are usually just links to the actual tape file.
+
+   Tape status word bits (MSB to LSB):
+    1 = Vertical Parity Error
+    2 = Runaway
+    3 = CRC Error
+    4 = LRCC Error
+    5 = False Gap or Insufficient DMX Range
+    6 = Uncorrectable Read Error
+    7 = Raw Erorr
+    8 = Illegal Command
+    9 = Selected Tape Ready (online and not rewinding)
+   10 = Selected Tape Online
+   11 = Selected Tape is at End Of Tape (EOT)
+   12 = Selected Tape is Rewinding
+   13 = Selected Tape is at Beginning Of Tape (BOT)
+   14 = Selected Tape is Write Protected
+   15 = DMX Overrun
+   16 = Rewind Interrupt
+
+   OTA '01 Motion control A-register bits:
+    1 = Select Tape Only
+    2 = 0 for File operation, 1 for Record operation
+    3 = 1 for Space operation
+    4 = 1 for Read & Correct
+    5 = 1 for 7-track
+    6 = 1 for 9-track
+    7 = unused
+    8 = 1 for 2 chars/word, 0 for 1 char/word (not supported here)
+    9-11 = motion:  100 = Forward,  010 = Reverse,  001 = Rewind
+    12 = 1 for Write
+    13 = 1 for Unit 0
+    14 = 1 for Unit 1
+    15 = 1 for Unit 2
+    16 = 1 for Unit 3
+
+*/
+
+int mtread (int fd, unsigned short *iobuf, int nw, int fw, int *mtstat) {
+  unsigned char buf[4];
+  int n,reclen,reclen2;
+
+  if (T_TIO) fprintf(stderr," mtread initial tape status is 0x%04x\n", *mtstat);
+  if (fw) {
+    if (*mtstat & 0x20)             /* already at EOT, can't read */
+      return 0;
+    n = read(fd, buf, 4);
+    if (T_TIO) fprintf(stderr," mtread read %d byte for reclen\n", n);
+    if (n == 0) {                   /* now we're at EOT */
+      *mtstat |= 0x20;
+      return 0;
+    }
+    *mtstat &= ~8;                   /* not at BOT now */
+readerr:
+    if (n == -1) {
+      perror("Error reading from tape file");
+      *mtstat = 0;
+      return 0;
+    }
+    if (n < 4) {
+fmterr:
+      warn("Premature EOF: tape file isn't in .TAP format");
+      *mtstat = 0;
+      return 0;
+    }
+    reclen = buf[0] | (buf[1]<<8) | (buf[2]<<16) | (buf[3]<<24);
+    if (T_TIO) fprintf(stderr, " mtread reclen = %d bytes\n", reclen);
+    if (reclen == 0) {             /* hit a file mark */
+      *mtstat |= 0x100;
+      return 0;
+    }
+    if (reclen > 16*1024) {
+      fprintf(stderr,"em: reclen = %d in tape file - too big!\n");
+      *mtstat = 0;
+      return 0;
+    }
+    if (reclen & 1)
+      warn("odd-length record in tape file!");
+    n = read(fd, iobuf, reclen);
+    if (T_TIO) fprintf(stderr," mtread read %d bytes of data \n", n);
+    if (n == -1) goto readerr;
+    if (n != reclen) goto fmterr;
+    
+    /* now get the trailing record length */
+
+    n = read(fd, buf, 4);
+    if (T_TIO) fprintf(stderr," mtread read %d bytes for trailer reclen\n", n);
+    if (n == -1) goto readerr;
+    if (n != 4) goto fmterr;
+    reclen2 = buf[0] | (buf[1]<<8) | (buf[2]<<16) | (buf[3]<<24);
+    if (reclen2 != reclen) goto fmterr;
+    return (reclen+1)/2;
+
+  } else {
+    warn("Backspace not implemented");
+    fatal(NULL);
+
+    /* if spacing backward, see if we're at BOT */
+
+    if (!fw && lseek(fd, 0, SEEK_CUR) == 0)
+      *mtstat |= 8;                    /* yep, at BOT */
+  }
+}
+
+int mtwrite (int fd, unsigned short *iobuf, int nw, int *mtstat) {
+  int n;
+
+  n = write(fd, iobuf, nw*2);
+  if (nw*2 != n) {
+    perror("Error writing to tape file");
+    fatal(NULL);
+  }
+  *mtstat &= ~8;                     /* not at BOT now */
+}
 
 int devmt (short class, short func, short device) {
 
+  static unsigned short mtvec = 0114;          /* interrupt vector */
+  static unsigned short dmxchan = 0;           /* dmx channel number */
+  static unsigned short datareg = 0xFFFF;      /* data holding register */
+  static unsigned short enabled = 0;           /* interrupts enabled */
+  static unsigned short interrupting = 0;      /* true if interrupt pending */
+  static unsigned short usel = 0;              /* last unit selected */
+  static struct {
+    int fd;                           /* tape file descriptor */
+    int mtstat;                       /* last tape status */
+    int firstwrite;                   /* true if next write is the first */
+  } unit[4];
+
+  int u;
+  char devfile[8];
+
+  /* the largest rec size Primos ever supported is 16K bytes, plus 8
+   bytes for the 4-byte .TAP format record length at the beginning &
+   end of each record */
+
+  unsigned short iobuf[8*1024+4];       /* 16-bit WORDS! */
+  unsigned short dmxreg;                /* DMA/C register address */
+  unsigned short dmxaddr;
+  unsigned long dmcpair;
+  short dmxnw;
+  int i,n;
+  char reclen[4];
+
   switch (class) {
 
-  case -1:
+  case -1:                    /* initialize emulator device */
+    for (u=0; u<4; u++) {
+      unit[u].fd = -1;
+      unit[u].mtstat = 0;
+      unit[u].firstwrite = 1;
+    }
     return 0;
 
   case 0:
-    if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
+    if (T_INST || T_TIO) fprintf(stderr," OCP '%02o%02o\n", func, device);
+
+    if (func == 012 || func == 013) {     /* set normal/diag mode - ignored */
+      ;
+
+    } else if (func == 014) {             /* ack interrupt */
+      /* this is a hack because Primos acks interrupts immediately after
+	 OTA 01 (due to a tape controller bug) */
+      if (interrupting)
+	interrupting--;
+
+    } else if (func == 015) {             /* set interrupt mask */
+      enabled = 1;
+
+    } else if (func == 016) {             /* reset interrupt mask */
+      enabled = 0;
+
+    } else if (func == 017) {             /* initialize */
+      mtvec = 014;
+      dmxchan = 0;
+      datareg = 0xFFFF;
+      interrupting = 0;
+      usel = 0;
+
+    } else {
+      printf("Unimplemented OCP device '%02o function '%02o\n", device, func);
+      fatal(NULL);
+    }
     break;
 
   case 1:
-    if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
+    if (T_INST || T_TIO) fprintf(stderr," SKS '%02o%02o\n", func, device);
+    printf("Unimplemented SKS device '%02o function '%02o\n", device, func);
+    fatal(NULL);
     break;
 
   case 2:
-    if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
-    if (BLOCKIO) {
-      printf("Device '%o not supported, so I/O hangs\n", device);
+    if (T_INST || T_TIO) fprintf(stderr," INA '%02o%02o\n", func, device);
+    if (func == 0) {
+      if (datareg == 0xFFFF)
+	warn("INA 00 on tape device w/o matching OTA!");
+      crs[A] = datareg;
+      datareg = 0xFFFF;
+      IOSKIP;
+
+    } else {
+      printf("Unimplemented INA device '%02o function '%02o\n", device, func);
       fatal(NULL);
     }
     break;
 
   case 3:
-    if (T_INST) fprintf(stderr," OTA '%02o%02o\n", func, device);
-    if (BLOCKIO) {
-      printf("Device '%o not supported, so I/O hangs\n", device);
+    if (T_INST || T_TIO) fprintf(stderr," OTA '%02o%02o, A='%06o %04x\n", func, device, crs[A], crs[A]);
+
+#if 0
+    /* don't accept any OTA's if we're interrupting */
+
+    if (interrupting)
+      break;
+#endif
+
+    if (func == 01) {
+
+      /* here's the hard part where everything happens... decode unit first */
+
+      u = crs[A] & 0xF;
+      if (u == 1) u = 3;
+      else if (u == 2) u = 2;
+      else if (u == 4) u = 1;
+      else if (u == 8) u = 0;
+      else
+	fatal("em: no unit selected on tape OTA '01");
+      usel = u;
+
+      /* if the tape file has never been opened, do it now.
+	 if the tape file inode changes, re-open the file (new tape reel) */
+
+      if (unit[u].fd == -1) {
+	unit[u].mtstat = 0;
+	unit[u].firstwrite = 1;
+	snprintf(devfile,sizeof(devfile),"dev%ou%d", device, u);
+	if (T_TIO) fprintf(stderr," filename for tape dev '%o unit %d is %s\n", device, u, devfile);
+	if ((unit[u].fd = open(devfile, O_RDWR, 0770)) == -1) {
+	  fprintf(stderr,"em: unable to open tape device file %s for device '%o unit %d for read/write\n", devfile, device, u);
+	  IOSKIP;
+	  break;
+	}
+	unit[u].mtstat = 0x00C8;   /* Ready, Online, BOT */
+      }
+      
+      /* "select only" is ignored.  On a real tape controller, this
+       blocks if the previous tape operation is in progress */
+
+      if (crs[A] & 0x8000) {
+	if (T_TIO) fprintf(stderr," select only\n");
+	IOSKIP;
+	break;
+      }
+
+      /* clear "last operation" error bits in mtstat, but preserve status
+	 things like "at BOT", "at EOT", "write protected" */
+
+      unit[u].mtstat &= 0x00EC;
+
+      /* for rewind, read, write, & space, setup a completion
+	 interrupt if controller interrupts are enabled.  NOTE: there
+	 is a race condition here.  Immediately following OTA 01,
+	 Primos clears pending interrupts.  To get around this,
+	 "interrupting" is a counter and we set it to 2 so that when
+	 Primos clears interrupts, the counter is decremented in this
+	 driver, but the interrupt will still occur later */
+
+      interrupting = 2;
+      devpoll[device] = 10;
+
+      if ((crs[A] & 0x00E0) == 0x0020) {       /* rewind */
+	if (T_TIO) fprintf(stderr," rewind\n");
+	if (lseek(unit[u].fd, 0, SEEK_SET) == -1) {
+	  perror("Unable to rewind tape drive file");
+	  fatal(NULL);
+	}
+	unit[u].mtstat = 0x00C8;    /* Ready, Online, BOT */
+	IOSKIP;
+	break;
+      }
+
+      /* Now we're reading, writing, or spacing either a record or file:
+	 - space file/record (forward or backward) = okay
+	 - read record = okay, read file doesn't make sense
+	 - write record = okay, write file = write file mark */
+
+
+      /* write file mark
+	 NOTE: the tape file should probably be truncated on the first
+	 write, not on each file mark */
+
+      if ((crs[A] & 0x4010) == 0x0010) {
+	if (T_TIO) fprintf(stderr," write file mark\n");
+	*(int *)iobuf = 0;
+	n = mtwrite(unit[u].fd, iobuf, 2, &unit[u].mtstat);
+	ftruncate(unit[u].fd, lseek(unit[u].fd, 0, SEEK_CUR));
+	IOSKIP;
+	break;
+      }
+
+      /* space forward or backward a record or file at a time */
+
+      if (crs[A] & 0x2000) {           /* space operation */
+	if ((crs[A] & 0xC0) == 0)
+	  warn("Motion = 0 for tape spacing operation");
+	else if (crs[A] & 0x4000) {    /* record operation */
+	  if (T_TIO) fprintf(stderr," space record, dir=%x\n", crs[A] & 0x80);
+	  n = mtread(unit[u].fd, iobuf, 0, crs[A] & 0x80, &unit[u].mtstat);
+	} else {
+	  if (T_TIO) fprintf(stderr," space file, dir=%x\n", crs[A] & 0x80);
+	  n = 1;
+	  while (n != 0) {
+	    n = mtread(unit[u].fd, iobuf, 0, crs[A] & 0x80, &unit[u].mtstat);
+	  }
+	}
+	IOSKIP;
+	break;
+      }
+
+      /* read/write backward aren't supported */
+
+      if (((crs[A] & 0x00E0) == 0x0040) && ((crs[A] & 0x2000) == 0)) {
+	warn("em: read/write reverse not supported for tapes");
+	unit[u].mtstat = 0;
+	IOSKIP;
+	break;
+      }
+
+      /* read/write record */
+
+      if (T_TIO) fprintf(stderr," read/write record\n");
+      dmxreg = dmxchan & 0x7FF;
+      if (dmxchan & 0x0800) {         /* DMC */
+	dmcpair = get32r(dmxreg, 0); /* fetch begin/end pair */
+	dmxaddr = dmcpair>>16;
+	dmxnw = (dmcpair & 0xffff) - dmxaddr + 1;
+	if (T_INST || T_TIO) fprintf(stderr, " DMC channels: ['%o]='%o, ['%o]='%o, nwords=%d\n", dmxreg, dmxaddr, dmxreg+1, (dmcpair & 0xffff), dmxnw);
+
+      } else {                        /* DMA */
+	dmxreg = dmxreg << 1;
+	dmxnw = regs.sym.regdmx[dmxreg];
+	if (dmxnw <= 0)
+	  dmxnw = -(dmxnw>>4);
+	else
+	  dmxnw = -((dmxnw>>4) ^ 0xF000);
+	dmxaddr = regs.sym.regdmx[dmxreg+1];
+	if (T_INST || T_TIO) fprintf(stderr, " DMA channels: ['%o]='%o, ['%o]='%o, nwords=%d\n", dmxreg, regs.sym.regdmx[dmxreg], dmxreg+1, dmxaddr, dmxnw);
+      }
+      if (dmxnw < 0 || dmxnw > sizeof(iobuf)/2) {
+	fprintf(stderr,"devmt: requested DMX of size %d, emulator buffer is %d words\n", dmxnw, sizeof(iobuf)/2);
+	fatal(NULL);
+      }
+
+      /* IMPORTANT: for mtwrite, the record length words are stored in
+	 iobuf and the length returned by mtwrite reflects that.  But
+	 for mtread, lengths are not stored in iobuf and the actual
+	 data record length is the return value */
+
+      if (crs[A] & 0x10) {             /* write record */
+	//traceflags = ~0;
+	if (T_TIO) fprintf(stderr," write record\n");
+	for (i=0; i<dmxnw; i++)
+	  iobuf[i+2] = get16r(dmxaddr+i, 0);
+	n = dmxnw*2;
+	reclen[0] = n & 0xFF;
+	reclen[1] = n>>8 & 0xFF;
+	reclen[2] = n>>16 & 0xFF;
+	reclen[3] = n>>24 & 0xFF;
+	*(int *)iobuf = *(int *)reclen;
+	*(int *)(iobuf+2+dmxnw) = *(int *)reclen;
+	mtwrite(unit[u].fd, iobuf, dmxnw+4, &unit[u].mtstat);
+	n = dmxnw;
+      } else {                         /* read record */
+	if (T_TIO) fprintf(stderr," read record\n");
+	n = mtread(unit[u].fd, iobuf, sizeof(iobuf), 1, &unit[u].mtstat);
+	if (n > dmxnw) {
+	  if (T_TIO) fprintf(stderr, " DMA Overrun, reclen = %d words, DMA = %d words\n", n, dmxnw);
+	  unit[u].mtstat |= 0x800;           /* DMA overrun status bit */
+	  n = dmxnw;
+	}
+	for (i=0; i<n; i++)
+	  put16r(iobuf[i], dmxaddr+i, 0);
+      }
+      if (T_TIO) fprintf(stderr," read/wrote %d words\n", n);
+      if (dmxchan & 0x0800) {         /* DMC */
+	put16r(dmxaddr+n, dmxreg, 0);        /* update starting address */
+      } else {
+	regs.sym.regdmx[dmxreg] += n<<4;     /* increment # words */
+	regs.sym.regdmx[dmxreg+1] += n;      /* increment address */
+      }
+      IOSKIP;
+      break;
+	
+    } else if (func == 02) {
+      if (T_TIO) fprintf(stderr, "  setup INA, A='%06o, 0x%04x\n", crs[A], crs[A]);
+      if (crs[A] & 0x8000)
+	datareg = unit[usel].mtstat;
+      else if (crs[A] & 0x4000)
+	datareg = 014;            /* device ID number */
+      else if (crs[A] & 0x2000)
+	datareg = dmxchan;
+      else if (crs[A] & 0x1000)
+	datareg = mtvec;
+      else {
+	fprintf(stderr,"em: Bad OTA '02 to tape drive\n");
+	fatal(NULL);
+      }
+      if (T_TIO) fprintf(stderr, "  datareg='%06o, 0x%04x\n", datareg, datareg);
+      IOSKIP;
+
+    } else if (func == 03) {                /* power on */
+      if (T_TIO) fprintf(stderr, " power on\n");
+      IOSKIP;
+
+    } else if (func == 014) {               /* set DMX channel */
+      dmxchan = crs[A] & 0x0FFF;
+      if (T_TIO) fprintf(stderr, " dmx channel '%o, 0x%04x\n", dmxchan, dmxchan);
+      //traceflags = ~TB_MAP;
+      IOSKIP;
+
+    } else if (func == 016) {               /* set interrupt vector */
+      mtvec = crs[A];
+      if (T_TIO) fprintf(stderr, " interrupt vector '%o\n", mtvec);
+      IOSKIP;
+
+    } else {
+      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
       fatal(NULL);
     }
     break;
+
+  case 4:
+    if (T_TIO) fprintf(stderr, " POLL device '%02o, enabled=%d, interrupting=%d\n", device, enabled, interrupting);
+    if (enabled && interrupting) {
+      if (intvec == -1) {
+	if (T_TIO) fprintf(stderr, " CPU interrupt to vector '%o\n", mtvec);
+	intvec = mtvec;
+      }
+      /* HACK: keep interrupting because of Primos race bug */
+      devpoll[device] = 100;
+    }
   }
 }
-
 
 /* Device '20: control panel switches and lights, and realtime clock
 
@@ -532,7 +958,16 @@ int devmt (short class, short func, short device) {
    INA '1620 = read control panel up switches
    INA '1720 = read control panel down switches
 
-   IMPORTANT NOTE: this device ('20) never skips!
+   IMPORTANT NOTE 1: this device ('20) never skips!
+
+   IMPORTANT NOTE 2: if the host system suspends, then when it awakes,
+   devcp will make the clock tick faster until it catches up to where
+   it should be.  Fake clock interrupts are injected every 100 Prime
+   instructions to catch up.  These fast interrupts can't occur too 
+   quickly (like every 10 Prime instructions), because CLKDIM can't
+   execute completely in 10 instructions and the repeated interrupts
+   will eventually cause the clock semaphore to overflow.
+
 */
 
 int devcp (short class, short func, short device) {
@@ -634,7 +1069,7 @@ int devcp (short class, short func, short device) {
     if (func == 02) {            /* set PIC interval */
       clkpic = *(short *)(crs+A);
       SETCLKPOLL;
-      printf("Clock PIC interval set to %d\n", clkpic);
+      //printf("Clock PIC interval set to %d\n", clkpic);
     } else if (func == 07) {
       //printf("Clock control register set to '%o\n", crs[A]);
     } else if (func == 013) {
@@ -781,6 +1216,9 @@ int devdisk (short class, short func, short device) {
   switch (class) {
 
   case -1:
+#ifdef DISKSAFE
+    printf("em: Running in DISKSAFE mode; no changes will be permanent\n");
+#endif
     for (i=0; i<64; i++) {
       dc[i].state = S_HALT;
       dc[i].status = 0100000;
@@ -890,6 +1328,7 @@ int devdisk (short class, short func, short device) {
       case 2: /* SFORM = Format */
       case 5: /* SREAD = Read */
       case 6: /* SWRITE = Write */
+	dc[device].status &= ~076000;             /* clear bits 2-6 */
 	m2 = get16r(dc[device].oar++, 0);
 	recsize = m & 017;
 	track = m1 & 01777;
@@ -937,7 +1376,7 @@ int devdisk (short class, short func, short device) {
 
 	  hashp = NULL;
 
-#ifndef DISKMOD
+#ifdef DISKSAFE
 	  //fprintf(stderr," R/W, modrecs=%p\n", dc[device].unit[u].modrecs);
 	  for (hashp = dc[device].unit[u].modrecs[phyra%HASHMAX]; hashp != NULL; hashp = *((unsigned char **)hashp)) {
 	    //fprintf(stderr," lookup, hashp=%p\n", hashp);
@@ -953,7 +1392,7 @@ int devdisk (short class, short func, short device) {
 		perror("Unable to seek drive file");
 		fatal(NULL);
 	      }
-#ifndef DISKMOD
+#ifdef DISKSAFE
 	    } else {                 /* write */
 	      hashp = malloc(1040*2 + sizeof(void*) + sizeof(int));
 	      *(unsigned char **)hashp = dc[device].unit[u].modrecs[phyra%HASHMAX];
@@ -1036,10 +1475,12 @@ int devdisk (short class, short func, short device) {
 	  dc[device].status |= 2;      /* select error (right?)... */
 	  break;
 	}
-	if (m1 & 0100000)
+	if (m1 & 0100000) {
 	  track = 0;
-	else
+	  dc[device].status &= ~4;   /* clear bit 14: seek error */
+	} else {
 	  track = m1 & 01777;
+	}
 	if (T_INST || T_DIO) fprintf(stderr," seek track %d, restore=%d, clear=%d\n", track, (m1 & 0100000) != 0, (m1 & 040000) != 0);
 	dc[device].unit[u].curtrack = track;
 	break;
@@ -1051,10 +1492,11 @@ int devdisk (short class, short func, short device) {
 	  if (T_INST || T_DIO) fprintf(stderr," de-select\n");
 	  break;
 	}
+	dc[device].status &= ~3;  /* clear 15-16: select err + unavailable */
 	if (u != 1 && u != 2 && u != 4 && u != 8) {
 	  fprintf(stderr," Device '%o, bad select '%o\n", device, u);
 	  dc[device].usel = -1;    /* de-select */
-	  dc[device].status != 2;  /* select error */
+	  dc[device].status != 2;  /* set bit 15: select error */
 	  break;
 	}
 	u = u >> 1;                /* unit => 0/1/2/4 */
@@ -1066,14 +1508,10 @@ int devdisk (short class, short func, short device) {
 	  if (T_INST || T_DIO) fprintf(stderr," filename for dev '%o unit %d is %s\n", device, u, devfile);
 	  /* NOTE: add O_CREAT to allow creating new drives on the fly */
 	  if ((dc[device].unit[u].devfd = open(devfile, O_RDWR, 0770)) == -1) {
-	    perror ("Unable to open device file");
+	    fprintf(stderr,"em: unable to open disk device file %s for device '%o unit %d; flagging \n", devfile, device, u);
 	    dc[device].status = 0100001;    /* not ready */
 	  } else {
-	    /* NOTE: this is a hack, because Primos 20.2.8 doesn't do
-	       a reset if a disk device (file) doesn't exist and is created
-	       under a running simulation */
-	    dc[device].status = 0100000;    /* clear status */
-#ifndef DISKMOD
+#ifdef DISKSAFE
 	    dc[device].unit[u].modrecs = calloc(HASHMAX, sizeof(void *));
 	    //fprintf(stderr," Device '%o, unit %d, modrecs=%p\n", device, u, dc[device].unit[u].modrecs);
 #endif
@@ -1424,10 +1862,10 @@ int devamlc (short class, short func, short device) {
       /* if DTR drops on a connected line, disconnect */
       if (!(crs[A] & 0x400) && (dc[device].dss & bitmask16[lx+1])) {
 	/* see similar code below */
-	write(dc[device].sockfd[lx], "\r\nDisconnecting on logout\r\n", 27);
+	write(dc[device].sockfd[lx], "\r\nDisconnecting logged out session\r\n", 36);
 	close(dc[device].sockfd[lx]);
 	dc[device].dss &= ~bitmask16[lx+1];
-	printf("Closing AMLC line %d on device '%o\n", lx, device);
+	printf("em: closing AMLC line %d on device '%o\n", lx, device);
       }
       IOSKIP;
 
@@ -1501,7 +1939,7 @@ conloop:
 	      socktoline[fd].line = lx;
 	      dc[newdevice].dss |= bitmask16[lx+1];
 	      dc[newdevice].sockfd[lx] = fd;
-	      printf("AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
+	      printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
 	      break;
 	    }
       if (!newdevice) {

@@ -175,6 +175,7 @@ char gen0nam[][5] = {
    T_MODE       trace CPU mode changes
    T_EAAP       AP effective address calculation
    T_DIO        disk I/O
+   T_TIO        tape I/O
    T_MAP        segmentation
    T_PCL        PCL instructions
    T_FAULT      Faults
@@ -193,6 +194,7 @@ char gen0nam[][5] = {
 #define TB_PCL 0x00000200
 #define TB_FAULT 0x00000400
 #define TB_PX 0x00000800
+#define TB_TIO 0x00001000
 
 #define T_EAR  (traceflags & TB_EAR)
 #define T_EAV  (traceflags & TB_EAV)
@@ -206,6 +208,7 @@ char gen0nam[][5] = {
 #define T_PCL (traceflags & TB_PCL)
 #define T_FAULT (traceflags & TB_FAULT)
 #define T_PX (traceflags & TB_PX)
+#define T_TIO (traceflags & TB_TIO)
 
 #define T_TRACE1 TB_FLOW | TB_INST | T_DIO | T_PCL | T_FAULT
 
@@ -667,6 +670,31 @@ double get64r(ea_t ea, ea_t rpring) {
   }
 }
 
+/* Instruction version of get16 (can be replaced by get16 too...)
+   This needs to be checked more... not sure it actually improves performance
+   all that much, and it doesn't work for self-modifying code in R-mode or
+   Ring 0 */
+
+#if 1
+unsigned short iget16(ea_t ea) {
+  static ea_t eanext = -1;              /* ea of lower 16 bits in instl */
+  static unsigned long instl;
+
+  if (ea & 0x80000000) {                /* check for R-mode inst in register */
+    eanext = -1;
+    return get16(ea);
+  }
+  if (ea == eanext) {
+    eanext = -1;
+    return instl & 0xFFFF;
+  }
+  instl = get32(ea);
+  eanext = INCVA(ea,1);
+  return instl >> 16;
+}
+#else
+#define iget16(ea) get16((ea))
+#endif
 
 put16r(unsigned short value, ea_t ea, ea_t rpring) {
   pa_t pa;
@@ -950,20 +978,31 @@ long devpoll[64] = {0};
 #include "emdev.h"
 
 #if 0
+
+/* this is the "full system" controller configuration */
+
 int (*devmap[64])(short, short, short) = {
   /* '0x */ 0,0,0,0,devasr,0,0,devpnc,
-  /* '1x */ devnone,devnone,0,devmt,devmt,devamlc, devamlc, devamlc,
+  /* '1x */ devnone,devnone,0,devnone,devmt,devamlc, devamlc, devamlc,
   /* '2x */ devcp,0,devdisk,devdisk,devdisk,devdisk,devdisk,devdisk,
   /* '3x */ 0,0,devamlc,0,0,devamlc,devnone,devnone,
   /* '4x */ 0,0,0,0,0,0,0,0,
   /* '5x */ devnone,devnone,devamlc,devamlc,devamlc,0,devnone,0,
   /* '6x */ 0,0,0,0,0,0,0,0,
   /* '7x */ 0,0,0,0,0,devnone,devnone,0};
+
 #else
+
+/* this is the "minimum system" controller configuration */
+
 int (*devmap[64])(short, short, short) = {
   /* '0x */ 0,0,0,0,devasr,0,0,devpnc,
-  /* '1x */ devnone,devnone,0,devmt,devmt,devnone, devnone, devnone,
-  /* '2x */ devcp,0,devdisk,devdisk,devdisk,devdisk,devdisk,devdisk,
+#if 1
+  /* '1x */ devnone,devnone,0,devnone,devmt,devnone, devnone, devnone,
+#else
+  /* '1x */ devnone,devnone,0,devnone,devnone,devnone, devnone, devnone,
+#endif
+  /* '2x */ devcp,0,devnone,devnone,devnone,devnone,devdisk,devnone,
   /* '3x */ 0,0,devnone,0,0,devnone,devnone,devnone,
   /* '4x */ 0,0,0,0,0,0,0,devnone,
   /* '5x */ devnone,devnone,devnone,devnone,devamlc,0,devnone,0,
@@ -2397,6 +2436,14 @@ nfy(unsigned short inst) {
   scount = utempl>>16;        /* count (signed) */
   bol = utempl & 0xFFFF;      /* beginning of wait list */
   if (T_PX) fprintf(stderr,"%o/%o: opcode %o %s, ea=%o/%o, count=%d, bol=%o, I am %o\n", RPH, RPL, inst, nfyname[inst-01200], ea>>16, ea&0xFFFF, scount, bol, crs[OWNERL]);
+
+  /* on later models, semaphore overflow should cause a fault */
+
+  if (scount == -32768) {
+    printf("NFY: semaphore overflow at ea %o/%o %s\n", ea>>16, ea&0xFFFF, searchloadmap(ea, 'x'));
+    fatal(NULL);
+  }
+
   if (scount > 0) {
     if (bol == 0) {
       printf("NFY: bol is zero, count is %d for semaphore at %o/%o\n", scount, ea>>16, ea&0xFFFF);
@@ -2411,6 +2458,7 @@ nfy(unsigned short inst) {
     bol = get16r(pcbp+PCBLINK, 0);     /* get new beginning of wait list */
     resched = ready(pcbp, begend);     /* put this pcb on the ready list */
   }
+
   scount = scount-1;
 #if 0
   /* NOTE: shouldn't have to do this if everything is working right, but with
@@ -2653,6 +2701,8 @@ main (int argc, char **argv) {
   ea_t tempea;
   unsigned int ea32;                   /* full V/I mode eff address */
   ea_t ea;                             /* final MR effective address */
+  ea_t eanext;                         /* ea of lower 16 bits in instl */
+  unsigned long instl;
   ea_t earp;                           /* RP to use for eff address calcs */
   unsigned short eabit;
   unsigned short opcode;
@@ -2772,8 +2822,10 @@ main (int argc, char **argv) {
 	  traceflags |= TB_FAULT;
 	else if (strcmp(argv[i+1],"px") == 0)
 	  traceflags |= TB_PX;
+	else if (strcmp(argv[i+1],"tio") == 0)
+	  traceflags |= TB_TIO;
 	else if (strcmp(argv[i+1],"all") == 0)
-	  traceflags = -1;
+	  traceflags = ~0;
 	else
 	  fprintf(stderr,"Unrecognized trace flag: %s\n", argv[i+1]);
 	i++;
@@ -2976,7 +3028,8 @@ main (int argc, char **argv) {
     if ((ea & 0xFFFF) < 040)
       ea = 0x80000000 | (ea & 0xFFFF);
 #endif
-    inst = get16(ea);
+
+    inst = iget16(ea);
     RPL++;
     instcount++;
 
@@ -3054,9 +3107,9 @@ xec:
 
 	case 001314:
 	  if (T_FLOW) fprintf(stderr," CGT\n");
-	  tempa = get16(RP);              /* get number of words */
+	  tempa = iget16(RP);              /* get number of words */
 	  if (1 <= crs[A] && crs[A] < tempa)
-	    RPL = get16(INCVA(RP,crs[A]));
+	    RPL = iget16(INCVA(RP,crs[A]));
 	  else
 	    RPL += tempa;
 	  continue;
@@ -3169,7 +3222,7 @@ xec:
 	    }
 	  }
 #endif
-	  utempa = get16(RP);
+	  utempa = iget16(RP);
 	  RPL++;
 	  PUTFLR(0,utempa);
 	  utempl = GETFLR(0);
@@ -3190,7 +3243,7 @@ xec:
 	    }
 	  }
 #endif
-	  utempa = get16(RP);
+	  utempa = iget16(RP);
 	  RPL++;
 	  PUTFLR(1,utempa);
 	  utempl = GETFLR(1);
@@ -3903,7 +3956,7 @@ irtn:
 	  if (T_FLOW) fprintf(stderr," BCLT\n");
 bclt:
 	  if (crs[KEYS] & 0200)
-	    RPL = get16(RP);
+	    RPL = iget16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -3912,7 +3965,7 @@ bclt:
 	  if (T_FLOW) fprintf(stderr," BCLE\n");
 bcle:
 	  if (crs[KEYS] & 0300)
-	    RPL = get16(RP);
+	    RPL = iget16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -3921,7 +3974,7 @@ bcle:
 	  if (T_FLOW) fprintf(stderr," BCEQ\n");
 bceq:
 	  if (crs[KEYS] & 0100)
-	    RPL = get16(RP);
+	    RPL = iget16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -3930,7 +3983,7 @@ bceq:
 	  if (T_FLOW) fprintf(stderr," BCNE\n");
 bcne:
 	  if (!(crs[KEYS] & 0100))
-	    RPL = get16(RP);
+	    RPL = iget16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -3939,7 +3992,7 @@ bcne:
 	  if (T_FLOW) fprintf(stderr," BCGE\n");
 bcge:
 	  if (!(crs[KEYS] & 0200))
-	    RPL = get16(RP);
+	    RPL = iget16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -3948,7 +4001,7 @@ bcge:
 	  if (T_FLOW) fprintf(stderr," BCGT\n");
 bcgt:
 	  if (!(crs[KEYS] & 0300))
-	    RPL = get16(RP);
+	    RPL = iget16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -3956,7 +4009,7 @@ bcgt:
 	case 0141705:
 	  if (T_FLOW) fprintf(stderr," BCR\n");
 	  if (!(crs[KEYS] & 0100000))
-	    RPL = get16(RP);
+	    RPL = iget16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -3964,7 +4017,7 @@ bcgt:
 	case 0141704:
 	  if (T_FLOW) fprintf(stderr," BCS\n");
 	  if (crs[KEYS] & 0100000)
-	    RPL = get16(RP);
+	    RPL = iget16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -3972,7 +4025,7 @@ bcgt:
 	case 0141707:
 	  if (T_FLOW) fprintf(stderr," BMLT/BLR\n");
 	  if (!(crs[KEYS] & 020000))
-	    RPL = get16(RP);
+	    RPL = iget16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -3981,7 +4034,7 @@ bcgt:
 	  if (T_FLOW) fprintf(stderr," BLS\n");
 bls:
 	  if (crs[KEYS] & 020000)
-	    RPL = get16(RP);
+	    RPL = iget16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -4072,7 +4125,7 @@ bls:
 	  crs[X]++;
 bidx:
 	  if (crs[X] != 0)
-	    RPL = get16(RP);
+	    RPL = iget16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -4082,7 +4135,7 @@ bidx:
 	  crs[Y]++;
 bidy:
 	  if (crs[Y] != 0)
-	    RPL = get16(RP);
+	    RPL = iget16(RP);
 	  else
 	    RPL++;
 	  continue;
@@ -4096,7 +4149,7 @@ bidy:
 	  if (T_FLOW) fprintf(stderr," BDX\n");
 	  crs[X]--;
 #if 1
-	  m = get16(RP);
+	  m = iget16(RP);
 	  if (crs[X] > 100 && m == RPL-1) {
 	    struct timeval tv0,tv1;
 	    long delayusec, actualmsec;
@@ -4753,7 +4806,7 @@ lcgt:
 	case 0141711:
 	  if (T_FLOW) fprintf(stderr," BMLE\n");
 	  if (!(crs[KEYS] & 020000))
-	    RPL = get16(RP);
+	    RPL = iget16(RP);
 	  else
 	    goto bceq;
 	  continue;
@@ -6406,7 +6459,7 @@ svc() {
 
     /* get svc code word, break into class and function */
 
-    code = get16(RP);
+    code = iget16(RP);
     class = (code >> 6) & 077;
     if (class == 0)
       class = 1;

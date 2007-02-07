@@ -101,7 +101,7 @@ labA:
   /* here for long, 2-word, V-mode memory reference */
 
 labB:
-  a = get16(RP);
+  a = iget16(RP);
   RPL++;
   if (T_EAV) fprintf(stderr," 2-word format, a=%o\n", a);
   y = (inst & 020);
