@@ -9,30 +9,38 @@
    interested in a Prime emulation project are welcome and
    appreciated.
 
-   Usage:
+   -------------
+   Usage:  (to boot from pdev 2466, dev '26, unit 3):
 
-   $ ./em <smad.save 2>/dev/null
+   $ time ./em -tport 8000 -cpuid 5 -boot 14714 -map MFD.2462/PRIRUN/RING0.MAP MFD.2462/PRIRUN/RING3.MAP 2>err
 
-   Lots of instruction details are spewed to stderr.
+   Disk boot device is 14uc4, tape is 10005, 
+   where u=1/3/5/7 for units 0/1/2/3
+   and c=1/3/5/7 for controller 26/27/...
+      (See complete boot table below)
+
+   -------------
+   Usage:  (to load and start an R-mode runfile directly from the Unix FS)
+
+   $ ./em -ss 114 -boot *DOS64 2>/dev/null   (-ss optional)
 
 
-   NOTE: this only runs on a big-endian machine, like the Prime.
+   -------------
+   Usage:  to load SAM.SAVE from Unix FS and run diagnostics from pdev 2466
 
-   To boot (from 2466, dev '26, unit 3):
+   $ time ./em  -cpuid 5 -ss 14114 -boot SAM.SAVE 2>err
 
-   time ./em --tport 8000 --cpuid 5 --ss 14714 --boot --map MFD.2462/PRIRUN/RING0.MAP MFD.2462/PRIRUN/RING3.MAP <dev26u3 2>err
+[SAM Rev. 16.2, DTS Release: 0004.A, Copyright (c) 1990, Prime Computer, Inc.]
+Enter physical device = 2466
+QUICK VERIFY MODE Enabled; Enter 'RESET QVFY' for normal operation. 
+Enter 'SET DCM' to display CASE messages. 
+Enter 'LOAD;RUN' for Default Execution
 
-   or:
+SAM> 
 
-   14114 for dev26u0
-   14134 for dev26u1
-   14154 for dev26u2
+   Instruction details are spewed to stderr depending on the trace flags.
 
-   14314 for dev27u0
-   14334 for dev27u1
-   14354 for dev27u2
-   14374 for dev27u3
-
+   IMPORTANT NOTE: this only runs on a big-endian machine, like the Prime.
 */
 
 #include <stdio.h>
@@ -45,9 +53,10 @@
 #include "syscom/keys.ins.cc"
 #include "syscom/errd.ins.cc"
 
-/* In SR modes, Prime CPU registers are mapped to memory locations 0-'37, but 
-   only 0-7 are user accessible.  In the post-P300 architecture, these addresses
-   map to the live register file.
+/* In SR modes, Prime CPU registers are mapped to memory locations
+   0-'37, but only 0-7 are user accessible.  In the post-P300
+   architecture, these addresses map to the live register file.
+
    Locations '40-'57 are reserved for 8 DMC channels, 2 words each.
    Locations '60-'77 are interrupt vectors
    Locations '100-'177 are for external device interrupts 
@@ -220,13 +229,13 @@ int intvec=-1;                       /* currently raised interrupt (if >= zero) 
 /* NOTE: Primos II gives "NOT FOUND" on startup 2460 if sense switches
    are set to 014114.  But DIAGS like this sense switch setting. :( */
 
-unsigned short sswitch = 0;          /* sense switches, set with --ss */
+unsigned short sswitch = 0;          /* sense switches, set with -ss & -boot*/
 
 /* NOTE: the default cpuid is a 4150: 2 MIPS, 32MB of memory */
 
-unsigned short cpuid = 27;           /* STPM CPU model, set with --cpuid */
+unsigned short cpuid = 27;           /* STPM CPU model, set with -cpuid */
 
-unsigned long instcount=0;           /* global instruction count */
+unsigned long instcount=0;      /* global instruction count */
 unsigned long previnstcount=0;       /* value of above at last gettimeofday */
 
 unsigned short inhcount = 0;         /* number of instructions to stay inhibited */
@@ -326,15 +335,14 @@ unsigned short amask;                /* address mask */
 #define POINTERFAULT  077
 
 ea_t tnoua_ea=0, tnou_ea=0;
-int verbose;                         /* --v (not used anymore) */
-int domemdump;                       /* --memdump arg */
-int boot;                            /* true if reading a boot record */
+int verbose;                         /* -v (not used anymore) */
+int domemdump;                       /* -memdump arg */
 int pmap32bits;                      /* true if 32-bit page maps */
 int csoffset;                        /* concealed stack segment offset */
-int tport;                           /* --tport option (incoming terminals) */
-int nport;                           /* --nport option (PNC/Ringnet) */
+int tport;                           /* -tport option (incoming terminals) */
+int nport;                           /* -nport option (PNC/Ringnet) */
 
-/* load map related data, specified with --map */
+/* load map related data, specified with -map */
 
 #define MAXSYMBOLS 15000
 #define MAXSYMLEN 9
@@ -1009,14 +1017,6 @@ int (*devmap[64])(short, short, short) = {
   /* '6x */ 0,0,0,0,0,0,0,0,
   /* '7x */ 0,0,0,0,0,devnone,devnone,0};
 #endif
-
-/* read a short (16-bit) integer in big-endian from stdin */
-
-unsigned short readshort () {
-
-  return getchar()<<8 | getchar();
-}
-
 
 
 
@@ -2689,6 +2689,15 @@ int abq(ea_t qcbea, unsigned short qent, ea_t rp) {
 
 main (int argc, char **argv) {
 
+  static short bootdiskctrl[4] = {026, 027, 022, 023};
+
+  int boot;                            /* true if reading a boot record */
+  char *bootarg;                       /* argument to -boot, if any */
+  char bootfile[8];                    /* boot file to load (optional) */
+  int bootfd;                          /* initial boot file fd */
+  int bootctrl, bootunit;              /* boot device controller and unit */
+  int bootskip=0;                      /* skip this many bytes on boot dev */
+
   short tempa,tempa1,tempa2;
   unsigned short utempa;
   int templ,templ1,templ2;
@@ -2755,6 +2764,8 @@ main (int argc, char **argv) {
   verbose = 0;
   domemdump = 0;
   boot = 0;
+  bootarg = NULL;
+  bootfile[0] = 0;
   pmap32bits = 0;
   csoffset = 0;
   tport = -1;
@@ -2763,40 +2774,40 @@ main (int argc, char **argv) {
   /* check args */
 
   for (i=1; i<argc; i++) {
-    if (strcmp(argv[i],"--vv") == 0)
+    if (strcmp(argv[i],"-vv") == 0)
       verbose = 2;
-    else if (strcmp(argv[i],"--v") == 0)
+    else if (strcmp(argv[i],"-v") == 0)
       verbose = 1;
-    else if (strcmp(argv[i],"--map") == 0) {
+    else if (strcmp(argv[i],"-map") == 0) {
       while (i+1 < argc && argv[i+1][0] != '-')
 	readloadmap(argv[++i]);
-    } else if (strcmp(argv[i],"--memdump") == 0)
+    } else if (strcmp(argv[i],"-memdump") == 0)
       domemdump = 1;
-    else if (strcmp(argv[i],"--ss") == 0) {
+    else if (strcmp(argv[i],"-ss") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[i+1],"%o", &templ);
 	sswitch = templ;
       } else
 	sswitch = 0;
-    } else if (strcmp(argv[i],"--cpuid") == 0) {
+    } else if (strcmp(argv[i],"-cpuid") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[i+1],"%d", &templ);
 	cpuid = templ;
       } else
-	fprintf(stderr,"--cpuid needs an argument\n");
-    } else if (strcmp(argv[i],"--tport") == 0) {
+	fprintf(stderr,"-cpuid needs an argument\n");
+    } else if (strcmp(argv[i],"-tport") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[i+1],"%d", &templ);
 	tport = templ;
       } else
-	fprintf(stderr,"--tport needs an argument\n");
-    } else if (strcmp(argv[i],"--nport") == 0) {
+	fprintf(stderr,"-tport needs an argument\n");
+    } else if (strcmp(argv[i],"-nport") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[i+1],"%d", &templ);
 	nport = templ;
       } else
-	fprintf(stderr,"--nport needs an argument\n");
-    } else if (strcmp(argv[i],"--trace") == 0)
+	fprintf(stderr,"-nport needs an argument\n");
+    } else if (strcmp(argv[i],"-trace") == 0)
       while (i+1 < argc && argv[i+1][0] != '-') {
 	if (strcmp(argv[i+1],"ear") == 0)
 	  traceflags |= TB_EAR;
@@ -2830,9 +2841,17 @@ main (int argc, char **argv) {
 	  fprintf(stderr,"Unrecognized trace flag: %s\n", argv[i+1]);
 	i++;
       }
-    else if (strcmp(argv[i],"--boot") == 0)
+    else if (strcmp(argv[i],"-boot") == 0) {
       boot = 1;
-    else if (argv[i][0] == '-' && argv[i][1] == '-')
+      if (i+1 < argc && argv[i+1][0] != '-') {
+	if (strlen(argv[i+1]) <= 6 && sscanf(argv[i+1],"%o", &templ) == 1)
+	  sswitch = templ;
+	else
+	  bootarg = argv[i+1];
+	i++;
+      }
+
+    } else if (argv[i][0] == '-' && argv[i][1] == '-')
       fprintf(stderr,"Unrecognized argument: %s\n", argv[i]);
   }
 
@@ -2846,8 +2865,6 @@ main (int argc, char **argv) {
   if (nport == -1)
     nport = 8001;
 
-  fprintf(stderr,"Sense switches set to %o\n", sswitch);
-
   /* initialize all devices */
 
   for (i=0; i<64; i++)
@@ -2860,30 +2877,99 @@ main (int argc, char **argv) {
 
   os_init();
 
-  if (boot) {
-    rvec[0] = 0760;
-    rvec[1] = 0760+1040-1;
-    rvec[2] = 01000;
-    rvec[3] = rvec[4] = rvec[5] = 0;
-    rvec[6] = 0;
-    /* setup DMA register '20 (address only) for the next boot record */
-    regs.sym.regdmx[041] = 03000;
+  /* if a filename follows -boot, load and execute this R-mode runfile
+     image.  For example, -boot *DOS64 would load *DOS64 from the Unix
+     file system and begin executing Primos II.
+
+     SECURITY: check that boot filename isn't a pathname?
+  */
+
+  if (bootarg) {
+    if ((bootfd=open(bootarg, O_RDONLY)) == -1) {
+      perror("Error opening boot file");
+      fatal(NULL);
+    }
+    if (read(bootfd, rvec, 18) != 18) {
+      perror("Error reading boot file's rvec header");
+      fatal(NULL);
+    }
 
   } else {
 
-    /* read 9-word rvec header */
+    /* If no filename follows -boot, then the sense switches are used to
+       determine whether the boot record should be read from tape or disk
+       and select the controller and drive unit.
 
-    for (i=0; i<9; i++)
-      rvec[i] = readshort();
-    if (T_FLOW) fprintf(stderr,"SA=%o, EA=%o, P=%o, A=%o, B=%o, X=%o, K=%o\n\n", rvec[0], rvec[1], rvec[2], rvec[3], rvec[4], rvec[5], rvec[6]);
-    if (rvec[2] > rvec[1])
-      fatal("Program start > ending: runfile is trashed");
+       Bits 14-16 are 4 for disk boot, 5 for tape boot
+       Bit 13 is 1 for disk boot, don't care for tape boot
+       Bits 11-12 are the unit number, 0-4
+    */
+
+    if (sswitch == 0)
+      sswitch = 014114;
+    bootunit = (sswitch>>7) & 3;
+    rvec[2] = 01000;                  /* starting address */
+    rvec[3] = rvec[4] = rvec[5] = rvec[6] = 0;
+
+    if ((sswitch & 0x7) == 4) {         /* disk boot */
+      bootctrl = bootdiskctrl[(sswitch>>4) & 3];
+      rvec[0] = 0760;                   /* disk load starts at '760 */
+      rvec[1] = 0760+1040-1;            /* read 1 disk block */
+      /* setup DMA register '20 (address only) for the next boot record */
+      regs.sym.regdmx[041] = 03000;
+
+    } else if ((sswitch & 0x7) == 5) {  /* tape boot */
+      bootctrl = 014;
+      rvec[0] = 0200;                   /* tape load starts at '200 */
+      rvec[1] = 4096-rvec[0];           /* read in at most 4 pages (8K) */
+      bootskip = 4;                     /* to skip .TAP header */
+
+    } else {
+      printf("\
+\n\
+The -boot option is used to boot from disk, tape, or to load a Prime\n\
+runfile directly from the Unix file system.  For example:\n\
+\n\
+  -boot 14xx4 to boot from disk (see below)\n\
+  -boot 10005 to boot from tape.\n\
+  -boot *DOS64 to load *DOS64 from the Unix file and execute it\n\
+\n\
+For disk boots, the last 3 digits can be:\n\
+\n\
+  114 = dev26u0 ctrl '26 unit 0       154 = dev22u0 ctrl '22 unit 0\n\
+  314 = dev26u1 ctrl '26 unit 1       354 = dev22u1 ctrl '22 unit 1\n\
+  514 = dev26u2 ctrl '26 unit 2       554 = dev22u2 ctrl '22 unit 2\n\
+  714 = dev26u3 ctrl '26 unit 3       754 = dev22u3 ctrl '22 unit 3\n\
+\n\
+  134 = dev27u0 ctrl '27 unit 0       174 = dev23u0 ctrl '23 unit 0\n\
+  334 = dev27u1 ctrl '27 unit 1       374 = dev23u1 ctrl '23 unit 1\n\
+  534 = dev27u2 ctrl '27 unit 2       574 = dev23u2 ctrl '23 unit 2\n\
+  734 = dev27u3 ctrl '27 unit 3       774 = dev23u3 ctrl '23 unit 3\n\
+\n\
+  The default option is -boot 14114, to boot from disk dev26u0\n");
+      exit(1);
+    }
+
+    snprintf(bootfile, sizeof(bootfile), "dev%ou%d", bootctrl, bootunit);
+    printf("Boot file is %s\n", bootfile);
+    if ((bootfd=open(bootfile, O_RDONLY)) == -1) {
+      perror("Error opening boot device file");
+      fatal(NULL);
+    }
+    if (lseek(bootfd, bootskip, SEEK_CUR) == -1) {
+      perror("Error skipping on boot device");
+      fatal(NULL);
+    }
   }
+  fprintf(stderr,"Sense switches set to %o\n", sswitch);
+  if (T_FLOW) fprintf(stderr,"Boot SA=%o, EA=%o, P=%o, A=%o, B=%o, X=%o, K=%o\n\n", rvec[0], rvec[1], rvec[2], rvec[3], rvec[4], rvec[5], rvec[6]);
+  if (rvec[2] > rvec[1])
+    fatal("Program start > ending: boot image is corrupt");
 
   /* read memory image from SA to EA inclusive */
 
   nw = rvec[1]-rvec[0]+1;
-  if (fread(mem+rvec[0], sizeof(short), nw, stdin) != nw) {
+  if (read(bootfd, mem+rvec[0], nw*2) != nw*2) {
     perror("Error reading memory image");
     fatal(NULL);
   }
@@ -2992,7 +3078,7 @@ main (int argc, char **argv) {
 	  fatal(NULL);
 	}
 
-      } else {
+      } else {                              /* standard interrupt mode */
 	m = get16(063);
 	printf("Standard mode interrupt vector loc = %o\n", m);
 	//traceflags = ~TB_MAP;

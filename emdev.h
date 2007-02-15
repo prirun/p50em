@@ -85,9 +85,12 @@
   else \
     RPL++
 
-/* macro to detect if an I/O instruction is followed by JMP *-1 (SR modes)
-   or BCNE *-2 (VI modes).  If process exchange is enabled, I/O can never
-   block. */
+/* this macro is used to decide whether blocking should be enabled for
+   an I/O operation.  The rules are:
+   - if process exchange is enabled, I/O can never block (check modals)
+   - if the instruction (assumed to be I/O) is followed by JMP *-1 (SR
+     modes) or BCNE *-2 (VI modes), then it's okay to block
+*/
 
 #if 1
 #define BLOCKIO \
@@ -248,6 +251,7 @@ int devnone (short class, short func, short device) {
 
 int devasr (short class, short func, short device) {
 
+  static FILE *conslog;
   static int ttydev;
   static int ttyflags;
   static int needflush;     /* true if data has been written but not flushed */
@@ -287,6 +291,14 @@ int devasr (short class, short func, short device) {
       perror(" unable to set tty attributes");
       fatal(NULL);
     }
+
+    /* open console log file */
+
+    if ((conslog = fopen("console.log", "w")) == NULL) {
+      perror(" unable to open console log file");
+      fatal(NULL);
+    }
+    setvbuf(conslog, NULL, _IOLBF, 0);   /* set to line buffering */
     return 0;
 
   case 0:
@@ -347,6 +359,7 @@ int devasr (short class, short func, short device) {
       ttyflags = newflags;
       if (needflush && BLOCKIO) {
 	fflush(stdout);
+	fflush(conslog);
 	needflush = 0;
 	devpoll[device] = 0;
       }
@@ -372,6 +385,10 @@ readasr:
 	  crs[A] = 0;
 	crs[A] = crs[A] | ch;
 	if (T_INST) fprintf(stderr," character read=%o: %c\n", crs[A], crs[A] & 0x7f);
+	if (ch != 015) {         /* don't log carriage returns */
+	  fputc(ch, conslog);
+	  fflush(conslog);
+	}
 	IOSKIP;
       } else  if (n != 0) {
 	printf("Unexpected error reading from tty, n=%d\n", n);
@@ -421,6 +438,8 @@ readasr:
 	printf("%10d| ", instcount);
 #endif
       putchar(ch);
+      if (ch != 015)
+	putc(ch, conslog);
       if (ch == 015)
 	atbol = 1;
       else if (ch == 012)
@@ -438,7 +457,7 @@ readasr:
     } else if (04 <= func && func <= 07) {  /* write control register 1/2 */
       IOSKIP;
     } else if (func == 013) {
-      /* NOTE: does this in rev 20 on settime command (Option A maybe?) */
+      /* NOTE: does this in rev 20 on settime command (set clock on VCP?) */
       IOSKIP;
     } else if (func == 017) {
       /* NOTE: 9950 does this in rev 20, others don't */
@@ -452,11 +471,15 @@ readasr:
   case 4:
     /* since the tty device is in non-blocking mode under Primos, keep
        flushing output every .1 seconds for smoothest and fastest
-       output */
+       output.  Problem is, we can't tell if fflush was able to send
+       everything out (check fflush return?), so we just keep flushing */
+
     if (needflush) {
       fflush(stdout);
-      needflush = 1;
-      devpoll[device] = instpermsec*100;
+      if (BLOCKIO)
+	needflush = 0;
+      else
+	devpoll[device] = instpermsec*100;
     }
   }
 }
@@ -522,14 +545,14 @@ readasr:
 
 int mtread (int fd, unsigned short *iobuf, int nw, int fw, int *mtstat) {
   unsigned char buf[4];
-  int n,reclen,reclen2;
+  int n,reclen,reclen2,bytestoread;
 
-  if (T_TIO) fprintf(stderr," mtread initial tape status is 0x%04x\n", *mtstat);
+  if (T_TIO) fprintf(stderr," mtread, nw=%d, initial tape status is 0x%04x\n", nw, *mtstat);
   if (fw) {
     if (*mtstat & 0x20)             /* already at EOT, can't read */
       return 0;
     n = read(fd, buf, 4);
-    if (T_TIO) fprintf(stderr," mtread read %d byte for reclen\n", n);
+    if (T_TIO) fprintf(stderr," mtread read foward, %d bytes for reclen\n", n);
     if (n == 0) {                   /* now we're at EOT */
       *mtstat |= 0x20;
       return 0;
@@ -538,12 +561,13 @@ int mtread (int fd, unsigned short *iobuf, int nw, int fw, int *mtstat) {
 readerr:
     if (n == -1) {
       perror("Error reading from tape file");
-      *mtstat = 0;
+      *mtstat = 0;                   /* take drive offline */
       return 0;
     }
     if (n < 4) {
+      fprintf(stderr," only read %d bytes for reclen\n", n);
 fmterr:
-      warn("Premature EOF: tape file isn't in .TAP format");
+      warn("Tape file isn't in .TAP format");
       *mtstat = 0;
       return 0;
     }
@@ -553,18 +577,60 @@ fmterr:
       *mtstat |= 0x100;
       return 0;
     }
-    if (reclen > 16*1024) {
-      fprintf(stderr,"em: reclen = %d in tape file - too big!\n");
-      *mtstat = 0;
+    if (reclen == 0xFFFF) {        /* hit EOT mark */
+
+      /* NOTE: simh says to backup here, probably to wipe out EOT if
+       more data is written.  IMO, EOT should never be written to
+       simulated tape files. */
+
+      if (lseek(fd, -4, SEEK_CUR) == -1) {
+	perror("em: unable to backspace over EOT");
+	goto readerr;
+      }
+      *mtstat |= 0x20;
+      return 0;
+    }
+    if (reclen & 0x8000) {         /* record marked in error */
+      /* NOTE: simh may have non-zero record length here... */
+      *mtstat |= 0xB600;           /* set all error bits */;
       return 0;
     }
     if (reclen & 1)
       warn("odd-length record in tape file!");
-    n = read(fd, iobuf, reclen);
-    if (T_TIO) fprintf(stderr," mtread read %d bytes of data \n", n);
-    if (n == -1) goto readerr;
-    if (n != reclen) goto fmterr;
-    
+    if (reclen < 0) {
+      fprintf(stderr," negative record length %d\n", reclen);
+      goto fmterr;
+    }
+
+    /* now either position or read forward */
+
+    if (nw == 0) {                 /* spacing only */
+      if ((n=lseek(fd, reclen, SEEK_CUR)) == -1) {
+	perror("em: unable to forward space record");
+	goto fmterr;
+      } else {
+	if (T_TIO) fprintf(stderr," spaced forward %d bytes to position %d\n", reclen, n);
+      }
+    } else {
+      if ((reclen+1)/2 > nw) {
+	fprintf(stderr,"em: reclen = %d bytes in tape file - too big!\n", reclen);
+	*mtstat |= 2;              /* set DMX overrun status */
+	bytestoread = nw*2;
+      } else {
+	bytestoread = reclen;
+      }
+      n = read(fd, iobuf, bytestoread);
+      if (T_TIO) fprintf(stderr," mtread read %d/%d bytes of data \n", n, reclen);
+      if (n == -1) goto readerr;
+      if (n != bytestoread) goto fmterr;
+      if (bytestoread != reclen) {     /* skip the rest of the record */
+	if (lseek(fd, reclen-bytestoread, SEEK_CUR) == -1) {
+	  fprintf(stderr,"em: unable to handle large record\n");
+	  goto readerr;
+	}
+      }
+    }
+
     /* now get the trailing record length */
 
     n = read(fd, buf, 4);
@@ -573,16 +639,60 @@ fmterr:
     if (n != 4) goto fmterr;
     reclen2 = buf[0] | (buf[1]<<8) | (buf[2]<<16) | (buf[3]<<24);
     if (reclen2 != reclen) goto fmterr;
-    return (reclen+1)/2;
+    /* XXX: maybe should pad odd-length record with a zero... */
+    return (bytestoread+1)/2;
 
   } else {
-    warn("Backspace not implemented");
-    fatal(NULL);
 
-    /* if spacing backward, see if we're at BOT */
+    /* spacing backward, see if we're at BOT */
 
-    if (!fw && lseek(fd, 0, SEEK_CUR) == 0)
+    if ((*mtstat & 8) || (lseek(fd, 0, SEEK_CUR) == 0)) {
       *mtstat |= 8;                    /* yep, at BOT */
+      return 0;
+    }
+
+    /* backup 4 bytes, read reclen */
+
+    if (lseek(fd, -4, SEEK_CUR) == -1)
+      goto fmterr;
+    n = read(fd, buf, 4);
+    if (n == -1) goto readerr;
+    if (n != 4) goto fmterr;
+    reclen = buf[0] | (buf[1]<<8) | (buf[2]<<16) | (buf[3]<<24);
+
+    /* backup reclen+8 bytes unless this is a file mark, error,
+       or EOT */
+
+    if (reclen == 0) {
+      *mtstat |= 0x100;        /* set filemark status */
+      goto repo;
+    }
+    if (reclen & 0x8000)       /* error record (don't report) */
+      goto repo;
+    if (reclen == 0xFFFF) {
+      reclen = 0;
+      goto repo;
+    }
+    if (lseek(fd, -(reclen+8), SEEK_CUR) == -1)
+      goto fmterr;
+
+    /* read leading reclen again to make sure we're positioned correctly */
+      
+    n = read(fd, buf, 4);
+    if (n == -1) goto readerr;
+    if (n != 4) goto fmterr;
+    reclen2 = buf[0] | (buf[1]<<8) | (buf[2]<<16) | (buf[3]<<24);
+    if (reclen2 != reclen) goto fmterr;
+
+    /* finally, backup over the reclen to be positioned for read */
+
+repo:
+
+    if ((n = lseek(fd, -4, SEEK_CUR)) == -1)
+      goto readerr;
+    if (n == 0)
+      *mtstat |= 8;                    /* now at BOT */
+    return 0;
   }
 }
 
@@ -601,7 +711,8 @@ int devmt (short class, short func, short device) {
 
   static unsigned short mtvec = 0114;          /* interrupt vector */
   static unsigned short dmxchan = 0;           /* dmx channel number */
-  static unsigned short datareg = 0xFFFF;      /* data holding register */
+  static unsigned short datareg = 0;           /* data holding register */
+  static unsigned short ready = 0;             /* true if datareg valid */
   static unsigned short enabled = 0;           /* interrupts enabled */
   static unsigned short interrupting = 0;      /* true if interrupt pending */
   static unsigned short usel = 0;              /* last unit selected */
@@ -618,8 +729,11 @@ int devmt (short class, short func, short device) {
    bytes for the 4-byte .TAP format record length at the beginning &
    end of each record */
 
-  unsigned short iobuf[8*1024+4];       /* 16-bit WORDS! */
+#define MAXTAPEWORDS 8*1024
+
+  unsigned short iobuf[MAXTAPEWORDS+4]; /* 16-bit WORDS! */
   unsigned short dmxreg;                /* DMA/C register address */
+  short dmxnch;                         /* number of DMX channels - 1 */
   unsigned short dmxaddr;
   unsigned long dmcpair;
   short dmxnw;
@@ -657,8 +771,9 @@ int devmt (short class, short func, short device) {
     } else if (func == 017) {             /* initialize */
       mtvec = 014;
       dmxchan = 0;
-      datareg = 0xFFFF;
+      datareg = 0;
       interrupting = 0;
+      ready = 0;
       usel = 0;
 
     } else {
@@ -669,17 +784,29 @@ int devmt (short class, short func, short device) {
 
   case 1:
     if (T_INST || T_TIO) fprintf(stderr," SKS '%02o%02o\n", func, device);
-    printf("Unimplemented SKS device '%02o function '%02o\n", device, func);
-    fatal(NULL);
+    if (func == 00) {                      /* skip if ready */
+      if (ready)
+	IOSKIP;
+    } else if (func == 01) {               /* skip if not busy */
+      IOSKIP;
+    } else if (func == 04) {               /* skip if not interrupting */
+      if (!interrupting)
+	IOSKIP;
+    } else {
+      printf("Unimplemented SKS device '%02o function '%02o\n", device, func);
+      fatal(NULL);
+    }
     break;
 
   case 2:
     if (T_INST || T_TIO) fprintf(stderr," INA '%02o%02o\n", func, device);
     if (func == 0) {
-      if (datareg == 0xFFFF)
-	warn("INA 00 on tape device w/o matching OTA!");
+#if 0
+      if (!ready) warn("INA 00 on tape device w/o matching OTA!");
+#endif
       crs[A] = datareg;
-      datareg = 0xFFFF;
+      datareg = 0;
+      ready = 0;
       IOSKIP;
 
     } else {
@@ -711,8 +838,16 @@ int devmt (short class, short func, short device) {
 	fatal("em: no unit selected on tape OTA '01");
       usel = u;
 
-      /* if the tape file has never been opened, do it now.
-	 if the tape file inode changes, re-open the file (new tape reel) */
+      /* XXX: if the tape device file changes (inode changes?), close
+	 and re-open the file (new tape reel).  Does offline need to
+	 be reported at least once in this case?  Or should it somehow
+	 be related to rewinds? (only do the check at BOT?) */
+
+      if (unit[u].mtstat & 8 && /* tape device file changed */) {
+	/* close tape fd if open & set to -1 */
+      }
+
+      /* if the tape file has never been opened, do it now. */
 
       if (unit[u].fd == -1) {
 	unit[u].mtstat = 0;
@@ -728,7 +863,7 @@ int devmt (short class, short func, short device) {
       }
       
       /* "select only" is ignored.  On a real tape controller, this
-       blocks if the previous tape operation is in progress */
+       blocks (I think) if the previous tape operation is in progress */
 
       if (crs[A] & 0x8000) {
 	if (T_TIO) fprintf(stderr," select only\n");
@@ -744,15 +879,17 @@ int devmt (short class, short func, short device) {
       /* for rewind, read, write, & space, setup a completion
 	 interrupt if controller interrupts are enabled.  NOTE: there
 	 is a race condition here.  Immediately following OTA 01,
-	 Primos clears pending interrupts.  To get around this,
-	 "interrupting" is a counter and we set it to 2 so that when
-	 Primos clears interrupts, the counter is decremented in this
-	 driver, but the interrupt will still occur later */
+	 Primos clears pending interrupts because of an old tape
+	 controller bug.  To get around this, "interrupting" is a
+	 counter and is set to 2 so that when Primos clears
+	 interrupts, the counter is decremented in this driver, but
+	 the interrupt will still occur later */
 
       interrupting = 2;
       devpoll[device] = 10;
 
       if ((crs[A] & 0x00E0) == 0x0020) {       /* rewind */
+	//traceflags = ~TB_MAP;
 	if (T_TIO) fprintf(stderr," rewind\n");
 	if (lseek(unit[u].fd, 0, SEEK_SET) == -1) {
 	  perror("Unable to rewind tape drive file");
@@ -764,7 +901,7 @@ int devmt (short class, short func, short device) {
       }
 
       /* Now we're reading, writing, or spacing either a record or file:
-	 - space file/record (forward or backward) = okay
+	 - space file/record, forward or backward = okay
 	 - read record = okay, read file doesn't make sense
 	 - write record = okay, write file = write file mark */
 
@@ -776,7 +913,7 @@ int devmt (short class, short func, short device) {
       if ((crs[A] & 0x4010) == 0x0010) {
 	if (T_TIO) fprintf(stderr," write file mark\n");
 	*(int *)iobuf = 0;
-	n = mtwrite(unit[u].fd, iobuf, 2, &unit[u].mtstat);
+	mtwrite(unit[u].fd, iobuf, 2, &unit[u].mtstat);
 	ftruncate(unit[u].fd, lseek(unit[u].fd, 0, SEEK_CUR));
 	IOSKIP;
 	break;
@@ -789,13 +926,12 @@ int devmt (short class, short func, short device) {
 	  warn("Motion = 0 for tape spacing operation");
 	else if (crs[A] & 0x4000) {    /* record operation */
 	  if (T_TIO) fprintf(stderr," space record, dir=%x\n", crs[A] & 0x80);
-	  n = mtread(unit[u].fd, iobuf, 0, crs[A] & 0x80, &unit[u].mtstat);
-	} else {
+	  mtread(unit[u].fd, iobuf, 0, crs[A] & 0x80, &unit[u].mtstat);
+	} else {                       /* file spacing operation */
 	  if (T_TIO) fprintf(stderr," space file, dir=%x\n", crs[A] & 0x80);
-	  n = 1;
-	  while (n != 0) {
-	    n = mtread(unit[u].fd, iobuf, 0, crs[A] & 0x80, &unit[u].mtstat);
-	  }
+	  do {
+	    mtread(unit[u].fd, iobuf, 0, crs[A] & 0x80, &unit[u].mtstat);
+	  } while (!(unit[u].mtstat & 0x128));  /* FM, EOT, BOT */
 	}
 	IOSKIP;
 	break;
@@ -814,6 +950,7 @@ int devmt (short class, short func, short device) {
 
       if (T_TIO) fprintf(stderr," read/write record\n");
       dmxreg = dmxchan & 0x7FF;
+      dmxnch = dmxchan >> 12;
       if (dmxchan & 0x0800) {         /* DMC */
 	dmcpair = get32r(dmxreg, 0); /* fetch begin/end pair */
 	dmxaddr = dmcpair>>16;
@@ -830,8 +967,8 @@ int devmt (short class, short func, short device) {
 	dmxaddr = regs.sym.regdmx[dmxreg+1];
 	if (T_INST || T_TIO) fprintf(stderr, " DMA channels: ['%o]='%o, ['%o]='%o, nwords=%d\n", dmxreg, regs.sym.regdmx[dmxreg], dmxreg+1, dmxaddr, dmxnw);
       }
-      if (dmxnw < 0 || dmxnw > sizeof(iobuf)/2) {
-	fprintf(stderr,"devmt: requested DMX of size %d, emulator buffer is %d words\n", dmxnw, sizeof(iobuf)/2);
+      if (dmxnw < 0 || dmxnw > MAXTAPEWORDS) {
+	fprintf(stderr,"devmt: requested DMX of size %d, emulator buffer is %d words\n", dmxnw, MAXTAPEWORDS);
 	fatal(NULL);
       }
 
@@ -856,7 +993,7 @@ int devmt (short class, short func, short device) {
 	n = dmxnw;
       } else {                         /* read record */
 	if (T_TIO) fprintf(stderr," read record\n");
-	n = mtread(unit[u].fd, iobuf, sizeof(iobuf), 1, &unit[u].mtstat);
+	n = mtread(unit[u].fd, iobuf, MAXTAPEWORDS, 1, &unit[u].mtstat);
 	if (n > dmxnw) {
 	  if (T_TIO) fprintf(stderr, " DMA Overrun, reclen = %d words, DMA = %d words\n", n, dmxnw);
 	  unit[u].mtstat |= 0x800;           /* DMA overrun status bit */
@@ -880,14 +1017,17 @@ int devmt (short class, short func, short device) {
       if (crs[A] & 0x8000)
 	datareg = unit[usel].mtstat;
       else if (crs[A] & 0x4000)
-	datareg = 014;            /* device ID number */
+	datareg = 0114;           /* device ID */
       else if (crs[A] & 0x2000)
 	datareg = dmxchan;
       else if (crs[A] & 0x1000)
 	datareg = mtvec;
       else {
-	fprintf(stderr,"em: Bad OTA '02 to tape drive\n");
-	fatal(NULL);
+	if (T_TIO) fprintf(stderr,"  Bad OTA '02 to tape drive, A='%06o, 0x$04x\n", crs[A], crs[A]);
+	if (enabled) {
+	  interrupting = 1;
+	  devpoll[device] = 10;
+	}
       }
       if (T_TIO) fprintf(stderr, "  datareg='%06o, 0x%04x\n", datareg, datareg);
       IOSKIP;
@@ -896,10 +1036,17 @@ int devmt (short class, short func, short device) {
       if (T_TIO) fprintf(stderr, " power on\n");
       IOSKIP;
 
+    } else if (func == 05) {                /* illegal - DIAG */
+      if (T_TIO) fprintf(stderr, " illegal DIAG OTA '05\n");
+      if (enabled) {
+	interrupting = 1;
+	devpoll[device] = 10;
+	IOSKIP;
+      }
+
     } else if (func == 014) {               /* set DMX channel */
-      dmxchan = crs[A] & 0x0FFF;
+      dmxchan = crs[A];
       if (T_TIO) fprintf(stderr, " dmx channel '%o, 0x%04x\n", dmxchan, dmxchan);
-      //traceflags = ~TB_MAP;
       IOSKIP;
 
     } else if (func == 016) {               /* set interrupt vector */
@@ -1016,7 +1163,7 @@ int devcp (short class, short func, short device) {
       ticks = 0;
       SETCLKPOLL;
 
-      /* if --map is used, lookup DATNOW symbol and set the 32-bit 
+      /* if -map is used, lookup DATNOW symbol and set the 32-bit 
 	 Primos time value (DATNOW+TIMNOW) */
 
       datnowea = 0;
@@ -1748,7 +1895,7 @@ int devamlc (short class, short func, short device) {
 	  fatal(NULL);
 	}
       } else
-	printf("--tport is zero, can't start AMLC devices");
+	printf("-tport is zero, can't start AMLC devices");
       inited = 1;
     }
 
