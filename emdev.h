@@ -111,7 +111,7 @@ int devnew (short class, short func, short device) {
     return 0;
 
   case 0:
-    if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
+    TRACE(T_INST, " OCP '%02o%02o\n", func, device);
     if (func == 99) {
       ;
     } else {
@@ -121,7 +121,7 @@ int devnew (short class, short func, short device) {
     break;
 
   case 1:
-    if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
+    TRACE(T_INST, " SKS '%02o%02o\n", func, device);
     if (func == 99)
       IOSKIP;                     /* assume it's always ready */
     else {
@@ -131,7 +131,7 @@ int devnew (short class, short func, short device) {
     break;
 
   case 2:
-    if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
+    TRACE(T_INST, " INA '%02o%02o\n", func, device);
     if (func == 99) {
       ;
     } else {
@@ -141,7 +141,7 @@ int devnew (short class, short func, short device) {
     break;
 
   case 3:
-    if (T_INST) fprintf(stderr," OTA '%02o%02o\n", func, device);
+    TRACE(T_INST, " OTA '%02o%02o\n", func, device);
     if (func == 99) {
       IOSKIP;
     } else {
@@ -165,19 +165,19 @@ int devnone (short class, short func, short device) {
     return 0;
 
   case 0:
-    if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
+    TRACE(T_INST, " OCP '%02o%02o\n", func, device);
     break;
 
   case 1:
-    if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
+    TRACE(T_INST, " SKS '%02o%02o\n", func, device);
     break;
 
   case 2:
-    if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
+    TRACE(T_INST, " INA '%02o%02o\n", func, device);
     break;
 
   case 3:
-    if (T_INST) fprintf(stderr," OTA '%02o%02o\n", func, device);
+    TRACE(T_INST, " OTA '%02o%02o\n", func, device);
     break;
   }
   if (device != lastdev)
@@ -302,11 +302,11 @@ int devasr (short class, short func, short device) {
     return 0;
 
   case 0:
-    if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
+    TRACE(T_INST, " OCP '%02o%02o\n", func, device);
     break;
 
   case 1:
-    if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
+    TRACE(T_INST, " SKS '%02o%02o\n", func, device);
 
     if (func == 6) {               /* skip if room for a character */
 #if 0
@@ -346,7 +346,7 @@ int devasr (short class, short func, short device) {
     break;
 
   case 2:
-    if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
+    TRACE(T_INST, " INA '%02o%02o\n", func, device);
     if (func == 0 || func == 010) {
       if (BLOCKIO)
 	newflags = ttyflags & ~O_NONBLOCK;
@@ -375,16 +375,16 @@ readasr:
 	  traceflags = ~traceflags;
 	  traceflags &= ~TB_MAP;
 	  if (traceflags == 0)
-	    fprintf(stderr,"\nTRACE DISABLED:\n\n");
+	    TRACEA("\nTRACE DISABLED:\n\n");
 	  else
-	    fprintf(stderr,"\nTRACE ENABLED:\n\n");
+	    TRACEA("\nTRACE ENABLED:\n\n");
 	  //memdump(0, 0xFFFF);
 	  goto readasr;
 	}
 	if (func >= 010)
 	  crs[A] = 0;
 	crs[A] = crs[A] | ch;
-	if (T_INST) fprintf(stderr," character read=%o: %c\n", crs[A], crs[A] & 0x7f);
+	TRACE(T_INST, " character read=%o: %c\n", crs[A], crs[A] & 0x7f);
 	if (ch != 015) {         /* don't log carriage returns */
 	  fputc(ch, conslog);
 	  fflush(conslog);
@@ -413,10 +413,10 @@ readasr:
     break;
 
   case 3:
-    if (T_INST) fprintf(stderr," OTA '%02o%02o\n", func, device);
+    TRACE(T_INST, " OTA '%02o%02o\n", func, device);
     if (func == 0) {
       ch = crs[A] & 0x7f;
-      if (T_INST) fprintf(stderr," char to write=%o: %c\n", crs[A], ch);
+      TRACE(T_INST, " char to write=%o: %c\n", crs[A], ch);
       if (ch == 0 || ch == 0x7f) {
 	IOSKIP;
 	return;
@@ -547,12 +547,12 @@ int mtread (int fd, unsigned short *iobuf, int nw, int fw, int *mtstat) {
   unsigned char buf[4];
   int n,reclen,reclen2,bytestoread;
 
-  if (T_TIO) fprintf(stderr," mtread, nw=%d, initial tape status is 0x%04x\n", nw, *mtstat);
+  TRACE(T_TIO, " mtread, nw=%d, initial tape status is 0x%04x\n", nw, *mtstat);
   if (fw) {
     if (*mtstat & 0x20)             /* already at EOT, can't read */
       return 0;
     n = read(fd, buf, 4);
-    if (T_TIO) fprintf(stderr," mtread read foward, %d bytes for reclen\n", n);
+    TRACE(T_TIO, " mtread read foward, %d bytes for reclen\n", n);
     if (n == 0) {                   /* now we're at EOT */
       *mtstat |= 0x20;
       return 0;
@@ -572,7 +572,7 @@ fmterr:
       return 0;
     }
     reclen = buf[0] | (buf[1]<<8) | (buf[2]<<16) | (buf[3]<<24);
-    if (T_TIO) fprintf(stderr, " mtread reclen = %d bytes\n", reclen);
+    TRACE(T_TIO,  " mtread reclen = %d bytes\n", reclen);
     if (reclen == 0) {             /* hit a file mark */
       *mtstat |= 0x100;
       return 0;
@@ -609,7 +609,7 @@ fmterr:
 	perror("em: unable to forward space record");
 	goto fmterr;
       } else {
-	if (T_TIO) fprintf(stderr," spaced forward %d bytes to position %d\n", reclen, n);
+	TRACE(T_TIO, " spaced forward %d bytes to position %d\n", reclen, n);
       }
     } else {
       if ((reclen+1)/2 > nw) {
@@ -620,7 +620,7 @@ fmterr:
 	bytestoread = reclen;
       }
       n = read(fd, iobuf, bytestoread);
-      if (T_TIO) fprintf(stderr," mtread read %d/%d bytes of data \n", n, reclen);
+      TRACE(T_TIO, " mtread read %d/%d bytes of data \n", n, reclen);
       if (n == -1) goto readerr;
       if (n != bytestoread) goto fmterr;
       if (bytestoread != reclen) {     /* skip the rest of the record */
@@ -634,7 +634,7 @@ fmterr:
     /* now get the trailing record length */
 
     n = read(fd, buf, 4);
-    if (T_TIO) fprintf(stderr," mtread read %d bytes for trailer reclen\n", n);
+    TRACE(T_TIO, " mtread read %d bytes for trailer reclen\n", n);
     if (n == -1) goto readerr;
     if (n != 4) goto fmterr;
     reclen2 = buf[0] | (buf[1]<<8) | (buf[2]<<16) | (buf[3]<<24);
@@ -732,11 +732,13 @@ int devmt (short class, short func, short device) {
 #define MAXTAPEWORDS 8*1024
 
   unsigned short iobuf[MAXTAPEWORDS+4]; /* 16-bit WORDS! */
+  unsigned short *iobufp;
   unsigned short dmxreg;                /* DMA/C register address */
+  unsigned short tempdmxchan;           /* temp to incr during xfer */
   short dmxnch;                         /* number of DMX channels - 1 */
   unsigned short dmxaddr;
   unsigned long dmcpair;
-  short dmxnw;
+  short dmxnw, dmxtotnw;
   int i,n;
   char reclen[4];
 
@@ -751,7 +753,7 @@ int devmt (short class, short func, short device) {
     return 0;
 
   case 0:
-    if (T_INST || T_TIO) fprintf(stderr," OCP '%02o%02o\n", func, device);
+    TRACE(T_INST|T_TIO, " OCP '%02o%02o\n", func, device);
 
     if (func == 012 || func == 013) {     /* set normal/diag mode - ignored */
       ;
@@ -783,7 +785,7 @@ int devmt (short class, short func, short device) {
     break;
 
   case 1:
-    if (T_INST || T_TIO) fprintf(stderr," SKS '%02o%02o\n", func, device);
+    TRACE(T_INST|T_TIO, " SKS '%02o%02o\n", func, device);
     if (func == 00) {                      /* skip if ready */
       if (ready)
 	IOSKIP;
@@ -799,7 +801,7 @@ int devmt (short class, short func, short device) {
     break;
 
   case 2:
-    if (T_INST || T_TIO) fprintf(stderr," INA '%02o%02o\n", func, device);
+    TRACE(T_INST|T_TIO, " INA '%02o%02o\n", func, device);
     if (func == 0) {
 #if 0
       if (!ready) warn("INA 00 on tape device w/o matching OTA!");
@@ -816,7 +818,7 @@ int devmt (short class, short func, short device) {
     break;
 
   case 3:
-    if (T_INST || T_TIO) fprintf(stderr," OTA '%02o%02o, A='%06o %04x\n", func, device, crs[A], crs[A]);
+    TRACE(T_INST|T_TIO, " OTA '%02o%02o, A='%06o %04x\n", func, device, crs[A], crs[A]);
 
 #if 0
     /* don't accept any OTA's if we're interrupting */
@@ -843,9 +845,11 @@ int devmt (short class, short func, short device) {
 	 be reported at least once in this case?  Or should it somehow
 	 be related to rewinds? (only do the check at BOT?) */
 
+#if 0
       if (unit[u].mtstat & 8 && /* tape device file changed */) {
 	/* close tape fd if open & set to -1 */
       }
+#endif
 
       /* if the tape file has never been opened, do it now. */
 
@@ -853,7 +857,7 @@ int devmt (short class, short func, short device) {
 	unit[u].mtstat = 0;
 	unit[u].firstwrite = 1;
 	snprintf(devfile,sizeof(devfile),"dev%ou%d", device, u);
-	if (T_TIO) fprintf(stderr," filename for tape dev '%o unit %d is %s\n", device, u, devfile);
+	TRACE(T_TIO, " filename for tape dev '%o unit %d is %s\n", device, u, devfile);
 	if ((unit[u].fd = open(devfile, O_RDWR, 0770)) == -1) {
 	  fprintf(stderr,"em: unable to open tape device file %s for device '%o unit %d for read/write\n", devfile, device, u);
 	  IOSKIP;
@@ -866,7 +870,7 @@ int devmt (short class, short func, short device) {
        blocks (I think) if the previous tape operation is in progress */
 
       if (crs[A] & 0x8000) {
-	if (T_TIO) fprintf(stderr," select only\n");
+	TRACE(T_TIO, " select only\n");
 	IOSKIP;
 	break;
       }
@@ -890,7 +894,7 @@ int devmt (short class, short func, short device) {
 
       if ((crs[A] & 0x00E0) == 0x0020) {       /* rewind */
 	//traceflags = ~TB_MAP;
-	if (T_TIO) fprintf(stderr," rewind\n");
+	TRACE(T_TIO, " rewind\n");
 	if (lseek(unit[u].fd, 0, SEEK_SET) == -1) {
 	  perror("Unable to rewind tape drive file");
 	  fatal(NULL);
@@ -911,7 +915,7 @@ int devmt (short class, short func, short device) {
 	 write, not on each file mark */
 
       if ((crs[A] & 0x4010) == 0x0010) {
-	if (T_TIO) fprintf(stderr," write file mark\n");
+	TRACE(T_TIO, " write file mark\n");
 	*(int *)iobuf = 0;
 	mtwrite(unit[u].fd, iobuf, 2, &unit[u].mtstat);
 	ftruncate(unit[u].fd, lseek(unit[u].fd, 0, SEEK_CUR));
@@ -925,10 +929,10 @@ int devmt (short class, short func, short device) {
 	if ((crs[A] & 0xC0) == 0)
 	  warn("Motion = 0 for tape spacing operation");
 	else if (crs[A] & 0x4000) {    /* record operation */
-	  if (T_TIO) fprintf(stderr," space record, dir=%x\n", crs[A] & 0x80);
+	  TRACE(T_TIO, " space record, dir=%x\n", crs[A] & 0x80);
 	  mtread(unit[u].fd, iobuf, 0, crs[A] & 0x80, &unit[u].mtstat);
 	} else {                       /* file spacing operation */
-	  if (T_TIO) fprintf(stderr," space file, dir=%x\n", crs[A] & 0x80);
+	  TRACE(T_TIO, " space file, dir=%x\n", crs[A] & 0x80);
 	  do {
 	    mtread(unit[u].fd, iobuf, 0, crs[A] & 0x80, &unit[u].mtstat);
 	  } while (!(unit[u].mtstat & 0x128));  /* FM, EOT, BOT */
@@ -946,74 +950,100 @@ int devmt (short class, short func, short device) {
 	break;
       }
 
-      /* read/write record */
+      /* for read command, fill the io buffer first.  Note that mtread
+	 doesn't store record lengths in iobuf and the return value is
+	 the actual data record length in words.  It also ensures that
+	 the return value is never > the # of words requested (MAXTAPEWORDS)
 
-      if (T_TIO) fprintf(stderr," read/write record\n");
-      dmxreg = dmxchan & 0x7FF;
-      dmxnch = dmxchan >> 12;
-      if (dmxchan & 0x0800) {         /* DMC */
-	dmcpair = get32r(dmxreg, 0); /* fetch begin/end pair */
-	dmxaddr = dmcpair>>16;
-	dmxnw = (dmcpair & 0xffff) - dmxaddr + 1;
-	if (T_INST || T_TIO) fprintf(stderr, " DMC channels: ['%o]='%o, ['%o]='%o, nwords=%d\n", dmxreg, dmxaddr, dmxreg+1, (dmcpair & 0xffff), dmxnw);
+         for write commands, the 4-byte .TAP record length IS stored in
+	 iobuf and the length returned by mtwrite reflects that */
 
-      } else {                        /* DMA */
-	dmxreg = dmxreg << 1;
-	dmxnw = regs.sym.regdmx[dmxreg];
-	if (dmxnw <= 0)
-	  dmxnw = -(dmxnw>>4);
+      if (crs[A] & 0x10) {         /* write record */
+	dmxtotnw = 0;
+	iobufp = iobuf+2;
+      } else {
+	TRACE(T_TIO, " read record\n");
+	dmxtotnw = mtread(unit[u].fd, iobuf, MAXTAPEWORDS, 1, &unit[u].mtstat);
+	iobufp = iobuf;
+      }
+
+      /* data transfer from iobuf (read) or to iobuf (write) */
+
+      while (1) {
+	dmxreg = dmxchan & 0x7FF;
+	if (dmxchan & 0x0800) {         /* DMC */
+	  dmcpair = get32r(dmxreg, 0); /* fetch begin/end pair */
+	  dmxaddr = dmcpair>>16;
+	  dmxnw = (dmcpair & 0xffff) - dmxaddr + 1;
+	  TRACE(T_INST|T_TIO,  " DMC channels: ['%o]='%o, ['%o]='%o, nwords=%d\n", dmxreg, dmxaddr, dmxreg+1, (dmcpair & 0xffff), dmxnw);
+	} else {                        /* DMA */
+	  dmxreg = dmxreg << 1;
+	  dmxnw = regs.sym.regdmx[dmxreg];
+	  if (dmxnw <= 0)
+	    dmxnw = -(dmxnw>>4);
+	  else
+	    dmxnw = -((dmxnw>>4) ^ 0xF000);
+	  dmxaddr = regs.sym.regdmx[dmxreg+1];
+	  TRACE(T_INST|T_TIO,  " DMA channels: ['%o]='%o, ['%o]='%o, nwords=%d\n", dmxreg, regs.sym.regdmx[dmxreg], dmxreg+1, dmxaddr, dmxnw);
+	}
+	if (dmxnw < 0) {            /* but is legal for >32K DMC transfer... */
+	  printf("devmt: requested negative DMX of size %d\n", dmxnw);
+	  fatal(NULL);
+	}
+	if (crs[A] & 0x10) {            /* write record */
+	  if (dmxtotnw+dmxnw > MAXTAPEWORDS)
+	    fatal("Tape write is too big");
+	  for (n=dmxnw; n > 0; n--) {
+	    *iobufp++ = get16r(dmxaddr+i, 0);
+	  }
+	  dmxtotnw = dmxtotnw + dmxnw;
+	} else {
+	  if (dmxnw > dmxtotnw)
+	    dmxnw = dmxtotnw;
+	  for (n=dmxnw; n > 0; n--) {
+	    put16r(*iobufp++, dmxaddr+i, 0);
+	  }
+	  dmxtotnw = dmxtotnw - dmxnw;
+	}
+	TRACE(T_TIO, " read/wrote %d words\n", dmxnw);
+	if (dmxchan & 0x0800) {         /* DMC */
+	  put16r(dmxaddr+dmxnw, dmxreg, 0);        /* update starting address */
+	} else {
+	  regs.sym.regdmx[dmxreg] += dmxnw<<4;     /* increment # words */
+	  regs.sym.regdmx[dmxreg+1] += dmxnw;      /* increment address */
+	}
+
+	/* if chaining, bump channel number and decrement # channels */
+
+	if (dmxchan & 0xF000)
+	  dmxchan = dmxchan + 2 - (1<<12);
 	else
-	  dmxnw = -((dmxnw>>4) ^ 0xF000);
-	dmxaddr = regs.sym.regdmx[dmxreg+1];
-	if (T_INST || T_TIO) fprintf(stderr, " DMA channels: ['%o]='%o, ['%o]='%o, nwords=%d\n", dmxreg, regs.sym.regdmx[dmxreg], dmxreg+1, dmxaddr, dmxnw);
-      }
-      if (dmxnw < 0 || dmxnw > MAXTAPEWORDS) {
-	fprintf(stderr,"devmt: requested DMX of size %d, emulator buffer is %d words\n", dmxnw, MAXTAPEWORDS);
-	fatal(NULL);
+	  break;
       }
 
-      /* IMPORTANT: for mtwrite, the record length words are stored in
-	 iobuf and the length returned by mtwrite reflects that.  But
-	 for mtread, lengths are not stored in iobuf and the actual
-	 data record length is the return value */
+      /* for write record, do the write */
 
       if (crs[A] & 0x10) {             /* write record */
-	//traceflags = ~0;
-	if (T_TIO) fprintf(stderr," write record\n");
-	for (i=0; i<dmxnw; i++)
-	  iobuf[i+2] = get16r(dmxaddr+i, 0);
-	n = dmxnw*2;
+	TRACE(T_TIO, " write record\n");
+	n = dmxtotnw*2;
 	reclen[0] = n & 0xFF;
 	reclen[1] = n>>8 & 0xFF;
 	reclen[2] = n>>16 & 0xFF;
 	reclen[3] = n>>24 & 0xFF;
 	*(int *)iobuf = *(int *)reclen;
-	*(int *)(iobuf+2+dmxnw) = *(int *)reclen;
-	mtwrite(unit[u].fd, iobuf, dmxnw+4, &unit[u].mtstat);
-	n = dmxnw;
+	*(int *)(iobuf+2+dmxtotnw) = *(int *)reclen;
+	mtwrite(unit[u].fd, iobuf, dmxtotnw+4, &unit[u].mtstat);
       } else {                         /* read record */
-	if (T_TIO) fprintf(stderr," read record\n");
-	n = mtread(unit[u].fd, iobuf, MAXTAPEWORDS, 1, &unit[u].mtstat);
-	if (n > dmxnw) {
-	  if (T_TIO) fprintf(stderr, " DMA Overrun, reclen = %d words, DMA = %d words\n", n, dmxnw);
-	  unit[u].mtstat |= 0x800;           /* DMA overrun status bit */
-	  n = dmxnw;
+	if (dmxtotnw > 0) {
+	  TRACE(T_TIO,  " DMA Overrun, lost %d words\n", dmxtotnw);
+	  unit[u].mtstat |= 0x800;
 	}
-	for (i=0; i<n; i++)
-	  put16r(iobuf[i], dmxaddr+i, 0);
-      }
-      if (T_TIO) fprintf(stderr," read/wrote %d words\n", n);
-      if (dmxchan & 0x0800) {         /* DMC */
-	put16r(dmxaddr+n, dmxreg, 0);        /* update starting address */
-      } else {
-	regs.sym.regdmx[dmxreg] += n<<4;     /* increment # words */
-	regs.sym.regdmx[dmxreg+1] += n;      /* increment address */
       }
       IOSKIP;
       break;
 	
     } else if (func == 02) {
-      if (T_TIO) fprintf(stderr, "  setup INA, A='%06o, 0x%04x\n", crs[A], crs[A]);
+      TRACE(T_TIO,  "  setup INA, A='%06o, 0x%04x\n", crs[A], crs[A]);
       if (crs[A] & 0x8000)
 	datareg = unit[usel].mtstat;
       else if (crs[A] & 0x4000)
@@ -1023,21 +1053,21 @@ int devmt (short class, short func, short device) {
       else if (crs[A] & 0x1000)
 	datareg = mtvec;
       else {
-	if (T_TIO) fprintf(stderr,"  Bad OTA '02 to tape drive, A='%06o, 0x$04x\n", crs[A], crs[A]);
+	TRACE(T_TIO, "  Bad OTA '02 to tape drive, A='%06o, 0x$04x\n", crs[A], crs[A]);
 	if (enabled) {
 	  interrupting = 1;
 	  devpoll[device] = 10;
 	}
       }
-      if (T_TIO) fprintf(stderr, "  datareg='%06o, 0x%04x\n", datareg, datareg);
+      TRACE(T_TIO,  "  datareg='%06o, 0x%04x\n", datareg, datareg);
       IOSKIP;
 
     } else if (func == 03) {                /* power on */
-      if (T_TIO) fprintf(stderr, " power on\n");
+      TRACE(T_TIO,  " power on\n");
       IOSKIP;
 
     } else if (func == 05) {                /* illegal - DIAG */
-      if (T_TIO) fprintf(stderr, " illegal DIAG OTA '05\n");
+      TRACE(T_TIO,  " illegal DIAG OTA '05\n");
       if (enabled) {
 	interrupting = 1;
 	devpoll[device] = 10;
@@ -1046,12 +1076,12 @@ int devmt (short class, short func, short device) {
 
     } else if (func == 014) {               /* set DMX channel */
       dmxchan = crs[A];
-      if (T_TIO) fprintf(stderr, " dmx channel '%o, 0x%04x\n", dmxchan, dmxchan);
+      TRACE(T_TIO,  " dmx channel '%o, 0x%04x\n", dmxchan, dmxchan);
       IOSKIP;
 
     } else if (func == 016) {               /* set interrupt vector */
       mtvec = crs[A];
-      if (T_TIO) fprintf(stderr, " interrupt vector '%o\n", mtvec);
+      TRACE(T_TIO,  " interrupt vector '%o\n", mtvec);
       IOSKIP;
 
     } else {
@@ -1061,10 +1091,10 @@ int devmt (short class, short func, short device) {
     break;
 
   case 4:
-    if (T_TIO) fprintf(stderr, " POLL device '%02o, enabled=%d, interrupting=%d\n", device, enabled, interrupting);
+    TRACE(T_TIO,  " POLL device '%02o, enabled=%d, interrupting=%d\n", device, enabled, interrupting);
     if (enabled && interrupting) {
       if (intvec == -1) {
-	if (T_TIO) fprintf(stderr, " CPU interrupt to vector '%o\n", mtvec);
+	TRACE(T_TIO,  " CPU interrupt to vector '%o\n", mtvec);
 	intvec = mtvec;
       }
       /* HACK: keep interrupting because of Primos race bug */
@@ -1139,7 +1169,7 @@ int devcp (short class, short func, short device) {
     return 0;
 
   case 0:
-    if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
+    TRACE(T_INST, " OCP '%02o%02o\n", func, device);
 
     if (func == 00) {           /* does something on VCP after OCP '0420 */
       ;
@@ -1156,7 +1186,7 @@ int devcp (short class, short func, short device) {
     } else if (func == 015) {   /* set interrupt mask */
       /* this enables tracing when the clock process initializes */
       //traceflags = ~TB_MAP;
-      //fprintf(stderr,"Clock interrupt enabled!\n");
+      //TRACEA("Clock interrupt enabled!\n");
       enabled = 1;
       if (gettimeofday(&start_tv, NULL) != 0)
 	fatal("em: gettimeofday 2 failed");
@@ -1189,13 +1219,13 @@ int devcp (short class, short func, short device) {
     break;
 
   case 1:
-    if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
+    TRACE(T_INST, " SKS '%02o%02o\n", func, device);
     printf("Unimplemented SKS device '%02o function '%02o\n", device, func);
     fatal(NULL);
     break;
 
   case 2:
-    if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
+    TRACE(T_INST, " INA '%02o%02o\n", func, device);
     if (func == 011) {             /* input ID */
       crs[A] = 020;                /* this is the Option-A board */
       crs[A] = 0220;               /* VCP board? */
@@ -1212,16 +1242,16 @@ int devcp (short class, short func, short device) {
     break;
 
   case 3:
-    if (T_INST) fprintf(stderr," OTA '%02o%02o\n", func, device);
+    TRACE(T_INST, " OTA '%02o%02o\n", func, device);
     if (func == 02) {            /* set PIC interval */
       clkpic = *(short *)(crs+A);
       SETCLKPOLL;
-      //printf("Clock PIC interval set to %d\n", clkpic);
+      TRACE(T_INST, "Clock PIC interval set to %d\n", clkpic);
     } else if (func == 07) {
-      //printf("Clock control register set to '%o\n", crs[A]);
+      TRACE(T_INST, "Clock control register set to '%o\n", crs[A]);
     } else if (func == 013) {
       clkvec = crs[A];
-      //printf("Clock interrupt vector address = '%o\n", clkvec);
+      TRACE(T_INST, "Clock interrupt vector address = '%o\n", clkvec);
     } else if (func == 017) {           /* write lights */
     } else {
       printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
@@ -1383,7 +1413,7 @@ int devdisk (short class, short func, short device) {
     return 0;
       
   case 0:
-    if (T_INST || T_DIO) fprintf(stderr," OCP '%2o%2o\n", func, device);
+    TRACE(T_INST|T_DIO, " OCP '%2o%2o\n", func, device);
     if (func == 016) {                /* reset interrupt */
       if (dc[device].state == S_INT) {
 	dc[device].state = S_RUN;
@@ -1394,24 +1424,24 @@ int devdisk (short class, short func, short device) {
       dc[device].status = 0100000;
       dc[device].usel = -1;
     } else {
-      fprintf(stderr," Unrecognized OCP '%2o%2o\n", func, device);
+      printf(" Unrecognized OCP '%2o%2o\n", func, device);
       fatal(NULL);
     }
     break;
 
   case 1:
-    if (T_INST || T_DIO) fprintf(stderr," SKS '%2o%2o\n", func, device);
+    TRACE(T_INST|T_DIO, " SKS '%2o%2o\n", func, device);
     if (func == 04) {                  /* skip if not interrupting */
       if (dc[device].state != S_INT)
 	IOSKIP;
     } else {
-      fprintf(stderr," Unrecognized SKS '%2o%2o\n", func, device);
+      printf(" Unrecognized SKS '%2o%2o\n", func, device);
       fatal(NULL);
     }
     break;
 
   case 2:
-    if (T_INST || T_DIO) fprintf(stderr," INA '%2o%2o\n", func, device);
+    TRACE(T_INST|T_DIO, " INA '%2o%2o\n", func, device);
 
     /* this turns tracing on when the Primos disk processes initialize */
     //traceflags = ~TB_MAP;
@@ -1435,7 +1465,7 @@ int devdisk (short class, short func, short device) {
     break;
 
   case 3:
-    if (T_INST || T_DIO) fprintf(stderr," OTA '%02o%02o\n", func, device);
+    TRACE(T_INST|T_DIO, " OTA '%02o%02o\n", func, device);
     if (func == 017) {        /* set OAR (order address register) */
       dc[device].state = S_RUN;
       dc[device].oar = crs[A];
@@ -1452,7 +1482,7 @@ int devdisk (short class, short func, short device) {
     while (dc[device].state == S_RUN) {
       m = get16r(dc[device].oar, 0);
       m1 = get16r(dc[device].oar+1, 0);
-      if (T_INST || T_DIO) fprintf(stderr,"\nDIOC %o: %o %o %o\n", dc[device].oar, m, m1, get16r(dc[device].oar+2, 0));
+      TRACE(T_INST|T_DIO, "\nDIOC %o: %o %o %o\n", dc[device].oar, m, m1, get16r(dc[device].oar+2, 0));
       dc[device].oar += 2;
       order = m>>12;
 
@@ -1469,7 +1499,7 @@ int devdisk (short class, short func, short device) {
       case 0: /* DHLT = Halt */
 	dc[device].state = S_HALT;
 	devpoll[device] = 0;
-	if (T_INST || T_DIO) fprintf(stderr," channel halted at '%o\n", dc[device].oar);
+	TRACE(T_INST|T_DIO, " channel halted at '%o\n", dc[device].oar);
 	break;
 
       case 2: /* SFORM = Format */
@@ -1488,7 +1518,7 @@ int devdisk (short class, short func, short device) {
 	  strcpy(ordertext,"Read");
 	else if (order == 6)
 	  strcpy(ordertext,"Write");
-	if (T_INST || T_DIO) fprintf(stderr,"%s, head=%d, track=%d, rec=%d, recsize=%d\n", ordertext, head, track, rec, recsize);
+	TRACE(T_INST|T_DIO, "%s, head=%d, track=%d, rec=%d, recsize=%d\n", ordertext, head, track, rec, recsize);
 	if (u == -1) {
 	  fprintf(stderr," Device '%o, order %d with no unit selected\n", device, order);
 	  dc[device].status |= 2;      /* select error (right?)... */
@@ -1505,17 +1535,17 @@ int devdisk (short class, short func, short device) {
 	  break;
 	}
 	if (dc[device].unit[u].devfd == -1) {
-	  if (T_INST || T_DIO) fprintf(stderr," Device '%o unit %d not ready\n", device, u);
+	  TRACE(T_INST|T_DIO, " Device '%o unit %d not ready\n", device, u);
 	  dc[device].status = 0100001;
 	} else if (order == 2) {
-	  if (T_INST || T_DIO) fprintf(stderr," Format order\n");
+	  TRACE(T_INST|T_DIO, " Format order\n");
 	  //fatal("DFORMAT channel order not implemented");
 	} else {            /* order = 5 (read) or 6 (write) */
 
 	  /* translate head/track/sector to drive record address */
 
 	  phyra = (track*dc[device].unit[u].theads*dc[device].unit[u].spt) + head*9 + rec;
-	  if (T_INST || T_DIO) fprintf(stderr, " Unix ra=%d, byte offset=%d\n", phyra, phyra*2080);
+	  TRACE(T_INST|T_DIO,  " Unix ra=%d, byte offset=%d\n", phyra, phyra*2080);
 
 	  /* does this record exist in the disk unit hash table?  If it does,
 	     we'll do I/O to the hash entry.  If it doesn't, then for read,
@@ -1571,7 +1601,7 @@ int devdisk (short class, short func, short device) {
 	    dmanw = regs.sym.regdmx[dmareg];
 	    dmanw = -(dmanw>>4);
 	    dmaaddr = regs.sym.regdmx[dmareg+1];
-	    if (T_INST || T_DIO) fprintf(stderr, " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dc[device].dmanch, dc[device].dmachan, regs.sym.regdmx[dmareg], dc[device].dmachan+1, dmaaddr, dmanw);
+	    TRACE(T_INST|T_DIO,  " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dc[device].dmanch, dc[device].dmachan, regs.sym.regdmx[dmareg], dc[device].dmachan+1, dmaaddr, dmanw);
 	    
 	    if (order == 5) {
 	      if (crs[MODALS] & 020)
@@ -1628,7 +1658,7 @@ int devdisk (short class, short func, short device) {
 	} else {
 	  track = m1 & 01777;
 	}
-	if (T_INST || T_DIO) fprintf(stderr," seek track %d, restore=%d, clear=%d\n", track, (m1 & 0100000) != 0, (m1 & 040000) != 0);
+	TRACE(T_INST|T_DIO, " seek track %d, restore=%d, clear=%d\n", track, (m1 & 0100000) != 0, (m1 & 040000) != 0);
 	dc[device].unit[u].curtrack = track;
 	break;
 
@@ -1636,7 +1666,7 @@ int devdisk (short class, short func, short device) {
 	u = (m1 & 017);            /* get unit bits */
 	if (u == 0) {
 	  dc[device].usel = -1;    /* de-select */
-	  if (T_INST || T_DIO) fprintf(stderr," de-select\n");
+	  TRACE(T_INST|T_DIO, " de-select\n");
 	  break;
 	}
 	dc[device].status &= ~3;  /* clear 15-16: select err + unavailable */
@@ -1648,11 +1678,11 @@ int devdisk (short class, short func, short device) {
 	}
 	u = u >> 1;                /* unit => 0/1/2/4 */
 	if (u == 4) u = 3;         /* unit => 0/1/2/3 */
-	if (T_INST || T_DIO) fprintf(stderr," select unit %d\n", u);
+	TRACE(T_INST|T_DIO, " select unit %d\n", u);
 	dc[device].usel = u;
 	if (dc[device].unit[u].devfd == -1) {
 	  snprintf(devfile,sizeof(devfile),"dev%ou%d", device, u);
-	  if (T_INST || T_DIO) fprintf(stderr," filename for dev '%o unit %d is %s\n", device, u, devfile);
+	  TRACE(T_INST|T_DIO, " filename for dev '%o unit %d is %s\n", device, u, devfile);
 	  /* NOTE: add O_CREAT to allow creating new drives on the fly */
 	  if ((dc[device].unit[u].devfd = open(devfile, O_RDWR, 0770)) == -1) {
 	    fprintf(stderr,"em: unable to open disk device file %s for device '%o unit %d; flagging \n", devfile, device, u);
@@ -1667,7 +1697,7 @@ int devdisk (short class, short func, short device) {
 	break;
 
       case 7: /* DSTALL = Stall */
-	if (T_INST || T_DIO) fprintf(stderr," stall\n");
+	TRACE(T_INST|T_DIO, " stall\n");
 
 	/* NOTE: technically, the stall command is supposed to wait
 	   210 usecs, so that the disk controller doesn't hog the I/O
@@ -1683,23 +1713,23 @@ int devdisk (short class, short func, short device) {
 	return;
 
       case 9: /* DSTAT = Store status to memory */
-	if (T_INST || T_DIO) fprintf(stderr, " store status='%o to '%o\n", dc[device].status, m1);
+	TRACE(T_INST|T_DIO,  " store status='%o to '%o\n", dc[device].status, m1);
 	put16r(dc[device].status,m1,0);
 	break;
 
       case 11: /* DOAR = Store OAR to memory (2 words) */
-	if (T_INST || T_DIO) fprintf(stderr, " store OAR='%o to '%o\n", dc[device].oar, m1);
+	TRACE(T_INST|T_DIO,  " store OAR='%o to '%o\n", dc[device].oar, m1);
 	put16r(dc[device].oar,m1,0);
 	break;
 
       case 13: /* SDMA = select DMA channel(s) to use */
 	dc[device].dmanch = m & 017;
 	dc[device].dmachan = m1;
-	if (T_INST || T_DIO) fprintf(stderr, " set DMA channels, nch-1=%d, channel='%o\n", dc[device].dmanch, dc[device].dmachan);
+	TRACE(T_INST|T_DIO,  " set DMA channels, nch-1=%d, channel='%o\n", dc[device].dmanch, dc[device].dmachan);
 	break;
 
       case 14: /* DINT = generate interrupt through vector address */
-	if (T_INST || T_DIO) fprintf(stderr, " interrupt through '%o\n", m1);
+	TRACE(T_INST|T_DIO,  " interrupt through '%o\n", m1);
 	if (intvec >= 0 || !(crs[MODALS] & 0100000) || inhcount > 0)
 	  dc[device].oar -= 2;     /* can't take interrupt right now */
 	else {
@@ -1712,7 +1742,7 @@ int devdisk (short class, short func, short device) {
 
       case 15: /* DTRAN = channel program jump */
 	dc[device].oar = m1;
-	if (T_INST || T_DIO) fprintf(stderr, " jump to '%o\n", m1);
+	TRACE(T_INST|T_DIO,  " jump to '%o\n", m1);
 	break;
 
       default:
@@ -1920,7 +1950,7 @@ int devamlc (short class, short func, short device) {
     return 0;
 
   case 0:
-    if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
+    TRACE(T_INST, " OCP '%02o%02o\n", func, device);
     //printf(" OCP '%02o%02o\n", func, device);
 
     if (func == 012) {            /* set normal (DMT) mode */
@@ -1956,7 +1986,7 @@ int devamlc (short class, short func, short device) {
     break;
 
   case 1:
-    if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
+    TRACE(T_INST, " SKS '%02o%02o\n", func, device);
 
     if (func == 04) {             /* skip if not interrupting */
       if (!dc[device].interrupting)
@@ -1969,7 +1999,7 @@ int devamlc (short class, short func, short device) {
     break;
 
   case 2:
-    if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
+    TRACE(T_INST, " INA '%02o%02o\n", func, device);
 
     if (func == 00) {              /* input Data Set Sense (carrier) */
       crs[A] = ~dc[device].dss;    /* to the outside world, 1 = no carrier*/
@@ -2001,7 +2031,7 @@ int devamlc (short class, short func, short device) {
     break;
 
   case 3:
-    if (T_INST) fprintf(stderr," OTA '%02o%02o\n", func, device);
+    TRACE(T_INST, " OTA '%02o%02o\n", func, device);
 
     if (func == 01) {              /* set line configuration */
       lx = crs[A] >> 12;
@@ -2366,7 +2396,7 @@ int devpnc (short class, short func, short device) {
     return 0;
 
   case 0:
-    if (T_INST) fprintf(stderr," OCP '%02o%02o\n", func, device);
+    TRACE(T_INST, " OCP '%02o%02o\n", func, device);
     if (func == 00) {           /* disconnect from ring */
       pncstat &= ~PNCCONNECTED;
 
@@ -2418,7 +2448,7 @@ int devpnc (short class, short func, short device) {
     break;
 
   case 1:
-    if (T_INST) fprintf(stderr," SKS '%02o%02o\n", func, device);
+    TRACE(T_INST, " SKS '%02o%02o\n", func, device);
     if (func == 99)
       IOSKIP;                     /* assume it's always ready */
     else {
@@ -2428,7 +2458,7 @@ int devpnc (short class, short func, short device) {
     break;
 
   case 2:
-    if (T_INST) fprintf(stderr," INA '%02o%02o\n", func, device);
+    TRACE(T_INST, " INA '%02o%02o\n", func, device);
     if (func == 011) {          /* input ID */
       crs[A] = 07;
       IOSKIP;
@@ -2452,7 +2482,7 @@ int devpnc (short class, short func, short device) {
     break;
 
   case 3:
-    if (T_INST) fprintf(stderr," OTA '%02o%02o\n", func, device);
+    TRACE(T_INST, " OTA '%02o%02o\n", func, device);
     if (func == 014) {          /* initiate recv, dma chan in A */
       dmachan = crs[A];
       dmareg = dmachan << 1;
