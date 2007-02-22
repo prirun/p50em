@@ -12,7 +12,7 @@
    '01 = paper tape reader
    '02 = paper tape punch
    '03 = #1 MPC/URC (line printer/card reader/card punch)
-   '04 = SOC board (system console/user terminal)
+   '04 = SOC/Option A/VCP board (system console/user terminal)
    '05 = #2 MPC/URC (line printer/card reader/card punch)
    '06 = card punch? (RTOS User Guide, A-1) / IPC (Engr Handbook p.101)
    '06 = Interproc. Channel (IPC) (R20 Hacker's Guide)
@@ -292,13 +292,13 @@ int devasr (short class, short func, short device) {
       fatal(NULL);
     }
 
-    /* open console log file */
+    /* open console log file and set to line buffering */
 
     if ((conslog = fopen("console.log", "w")) == NULL) {
       perror(" unable to open console log file");
       fatal(NULL);
     }
-    setvbuf(conslog, NULL, _IOLBF, 0);   /* set to line buffering */
+    setvbuf(conslog, NULL, _IOLBF, 0);
     return 0;
 
   case 0:
@@ -309,32 +309,28 @@ int devasr (short class, short func, short device) {
     TRACE(T_INST, " SKS '%02o%02o\n", func, device);
 
     if (func == 6) {               /* skip if room for a character */
-#if 0
       timeout.tv_sec = 0;
       timeout.tv_usec = 0;
       FD_SET(ttydev, &fds);
       n = select(ttydev+1, NULL, &fds, NULL, &timeout);
       if (n == -1) {
-	perror(" unable to do write select on ttydev");
+	perror(" unable to do write select on tty");
 	fatal(NULL);
       }
       if (n) {
 	IOSKIP;
       }
-#else
-      IOSKIP;                      /* assume there is room under Unix */
-#endif
 
     } else if (func == 7) {        /* skip if received a char */
       if (crs[MODALS] & 010)       /* PX enabled? */
 	timeout.tv_sec = 0;        /* yes, can't delay */
       else
-	timeout.tv_sec = 1;
+	timeout.tv_sec = 1;        /* single user: okay to delay */
       timeout.tv_usec = 0;
       FD_SET(ttydev, &fds);
       n = select(ttydev+1, &fds, NULL, NULL, &timeout);
       if (n == -1) {
-	perror(" unable to do select on tty");
+	perror(" unable to do read select on tty");
 	fatal(NULL);
       }
       if (n) {
@@ -357,11 +353,12 @@ int devasr (short class, short func, short device) {
 	fatal(NULL);
       }
       ttyflags = newflags;
-      if (needflush && BLOCKIO) {
-	fflush(stdout);
+      if (needflush) {
+	if (fflush(stdout) == 0) {
+	  needflush = 0;
+	  devpoll[device] = 0;
+	}
 	fflush(conslog);
-	needflush = 0;
-	devpoll[device] = 0;
       }
 readasr:
       n = read(ttydev, &ch, 1);
@@ -385,9 +382,9 @@ readasr:
 	  crs[A] = 0;
 	crs[A] = crs[A] | ch;
 	TRACE(T_INST, " character read=%o: %c\n", crs[A], crs[A] & 0x7f);
-	if (ch != 015) {         /* don't log carriage returns */
+	if (ch != 015) {         /* log all except carriage returns */
 	  fputc(ch, conslog);
-	  fflush(conslog);
+	  fflush(conslog);       /* immediately flush typing echos */
 	}
 	IOSKIP;
       } else  if (n != 0) {
@@ -438,15 +435,16 @@ readasr:
 	printf("%10d| ", instcount);
 #endif
       putchar(ch);
-      if (ch != 015)
-	putc(ch, conslog);
       if (ch == 015)
 	atbol = 1;
-      else if (ch == 012)
-	atnewl = 1;
       else {
-	atbol = 0;
-	atnewl = 0;
+	putc(ch, conslog);
+	if (ch == 012)
+	  atnewl = 1;
+	else {
+	  atbol = 0;
+	  atnewl = 0;
+	}
       }
       needflush = 1;
       if (devpoll[device] == 0)
@@ -469,17 +467,17 @@ readasr:
     break;
 
   case 4:
-    /* since the tty device is in non-blocking mode under Primos, keep
-       flushing output every .1 seconds for smoothest and fastest
-       output.  Problem is, we can't tell if fflush was able to send
-       everything out (check fflush return?), so we just keep flushing */
+
+    /* tty output is blocking, even under Primos, which means that
+       writes and fflush can hang the entire system, eg, if XOFF
+       happens while writing to the console) */
 
     if (needflush) {
-      fflush(stdout);
-      if (BLOCKIO)
+      if (fflush(stdout) == 0)
 	needflush = 0;
       else
 	devpoll[device] = instpermsec*100;
+      fflush(conslog);
     }
   }
 }
@@ -1147,25 +1145,49 @@ int devmt (short class, short func, short device) {
 
 */
 
+/* initclock sets Primos' real-time clock variable */
+
+initclock(datnowea) {
+  int datnow, i;
+  time_t unixtime;
+  struct tm *tms;
+
+  unixtime = time(NULL);
+  tms = localtime(&unixtime);
+  datnow = tms->tm_year<<25 | (tms->tm_mon+1)<<21 | tms->tm_mday<<16 | ((tms->tm_hour*3600 + tms->tm_min*60 + tms->tm_sec)/4);
+  put32r(datnow, datnowea, 0);
+}
+
+
 int devcp (short class, short func, short device) {
   static short enabled = 0;
   static unsigned short clkvec;
-  static short clkpic;
-  static unsigned long ticks=0;
+  static short clkpic = 0;
+  static unsigned long ticks = -1;
+  static unsigned long absticks = -1;
   static struct timeval start_tv;
+  static ea_t datnowea = 0;
+  static struct timeval prev_tv;
+  static unsigned long previnstcount=0; /* value of instcount corresponding to above */
 
   struct timeval tv;
   unsigned long elapsedms,targetticks;
-  int datnow, i;
-  time_t unixtime;
-  ea_t datnowea;
-  struct tm *tms;
+  int i;
 
 #define SETCLKPOLL devpoll[device] = instpermsec*(-clkpic*3.2)/1000;
 
   switch (class) {
 
   case -1:
+
+    /* if -map is used, lookup DATNOW symbol and set the 32-bit 
+       Primos time value (DATNOW+TIMNOW) */
+
+    datnowea = 0;
+    for (i=0; i<numsyms; i++) {
+      if (strcmp(mapsym[i].symname, "DATNOW") == 0)
+	datnowea = mapsym[i].address;
+    }
     return 0;
 
   case 0:
@@ -1188,25 +1210,8 @@ int devcp (short class, short func, short device) {
       //traceflags = ~TB_MAP;
       //TRACEA("Clock interrupt enabled!\n");
       enabled = 1;
-      if (gettimeofday(&start_tv, NULL) != 0)
-	fatal("em: gettimeofday 2 failed");
-      ticks = 0;
       SETCLKPOLL;
-
-      /* if -map is used, lookup DATNOW symbol and set the 32-bit 
-	 Primos time value (DATNOW+TIMNOW) */
-
-      datnowea = 0;
-      for (i=0; i<numsyms; i++) {
-	if (strcmp(mapsym[i].symname, "DATNOW") == 0)
-	  datnowea = mapsym[i].address;
-      }
-      if (datnowea != 0) {
-	unixtime = time(NULL);
-	tms = localtime(&unixtime);
-	datnow = tms->tm_year<<25 | (tms->tm_mon+1)<<21 | tms->tm_mday<<16 | ((tms->tm_hour*3600 + tms->tm_min*60 + tms->tm_sec)/4);
-	put32(datnow, datnowea);
-      }
+      ticks = -1;
 
     } else if (func == 016 || func == 017) {
       enabled = 0;
@@ -1259,29 +1264,72 @@ int devcp (short class, short func, short device) {
     }
     break;
 
+    /* Clock poll important considerations are:
+       1. ticks = -1 initially; this triggers initialization here
+       2. start_tv corresponds to the time where ticks = 0
+       3. if the clock gets out of sync, it ticks faster or slower until
+          it is right
+       4. if the clock is WAY out of sync, try to jump to the correct time
+       5. once the clock is in sync, reset start_tv if ticks gets too big
+          (uh, after 5 months!) to prevent overflows in time calculations
+    */
+
   case 4:
+    /* interrupt if enabled and no interrupt active */
+
     if (enabled) {
       if (intvec == -1) {
 	intvec = clkvec;
+	SETCLKPOLL;
 	ticks++;
 	if (gettimeofday(&tv, NULL) != 0)
 	  fatal("em: gettimeofday 3 failed");
-	if (tv.tv_usec > start_tv.tv_usec)
-	  elapsedms = (tv.tv_sec-start_tv.tv_sec)*1000 + (tv.tv_usec-start_tv.tv_usec)/1000;
-	else
-	  elapsedms = (tv.tv_sec-start_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-start_tv.tv_usec)/1000;
+	if (ticks == 0) {
+	  start_tv = tv;
+	  prev_tv = tv;
+	  previnstcount = instcount;
+	  if (datnowea != 0)
+	    initclock(datnowea);
+	  printf("em: resetting real time clock\n");
+	} 
+	elapsedms = (tv.tv_sec-start_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-start_tv.tv_usec)/1000;
 	targetticks = elapsedms/(-clkpic*3.2/1000);
-	if (ticks < targetticks) {
-	  //printf("Clock catchup, elapsed=%d, target=%d, ticks=%d\n", elapsedms, targetticks, ticks);
-	  devpoll[device] = 100;       /* behind, so catch-up */
-        } else {
-#if 0
-	  if (ticks%1000 == 0)
-	    printf("Clock check: target=%d, ticks=%d\n", targetticks, ticks);
+#if 1
+	absticks++;
+	if (absticks%1000 == 0)
+	  printf("Clock check: target=%d, ticks=%d\n", targetticks, ticks);
 #endif
-	  SETCLKPOLL;
-	  if (ticks > targetticks)
-	    devpoll[device] = devpoll[device]*2;
+
+	/* if the clock gets way out of whack (eg, because of a host
+	   suspend or time change (eg, DST), reset it IFF datnowea is
+	   known.  This causes an immediate jump to the correct time.
+	   If datnowea is not available (no Primos maps), then we have
+	   to tick our way to the correct time */
+
+	if (abs(ticks-targetticks) > 1000 && datnowea != 0)
+	  ticks = -1;
+	else if (ticks < targetticks)
+	  devpoll[device] = 100;                /* behind, so catch-up */
+	else if (ticks > targetticks)
+	  devpoll[device] = devpoll[device]*2;  /* ahead, so slow down */
+	else {                                  /* just right! */
+	  if (ticks > 1000000000) {             /* after a long time, */
+	    start_tv = tv;                      /* reset tick vars */
+	    ticks = 0;
+	  }
+	}
+
+	/* update instpermsec every 5 seconds
+	   NB: this should probably be done whether the clock is running
+	   or not */
+
+	if (instcount-previnstcount > instpermsec*1000*5) {
+	  instpermsec = (instcount-previnstcount) /
+	    ((tv.tv_sec-prev_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-prev_tv.tv_usec)/1000);
+	  //printf("instcount = %d, previnstcount = %d, diff=%d, instpermsec=%d\n", instcount, previnstcount, instcount-previnstcount, instpermsec);
+	  printf("instpermsec=%d\n", instpermsec);
+	  previnstcount = instcount;
+	  prev_tv = tv;
 	}
       } else {
 	devpoll[device] = 100;         /* couldn't interrupt, try again soon */
@@ -2520,5 +2568,3 @@ int devpnc (short class, short func, short device) {
     break;
   }
 }
-
-

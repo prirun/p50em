@@ -257,7 +257,6 @@ unsigned short sswitch = 0;          /* sense switches, set with -ss & -boot*/
 unsigned short cpuid = 27;           /* STPM CPU model, set with -cpuid */
 
 unsigned long instcount=0;      /* global instruction count */
-unsigned long previnstcount=0;       /* value of above at last gettimeofday */
 
 unsigned short inhcount = 0;         /* number of instructions to stay inhibited */
 
@@ -1040,7 +1039,7 @@ int (*devmap[64])(short, short, short) = {
 
 
 
-/* NOTE: This code is untested! */
+/* 16S Addressing Mode */
 
 ea_t ea16s (unsigned short inst, short i, short x) {
   
@@ -1077,7 +1076,7 @@ ea_t ea16s (unsigned short inst, short i, short x) {
 }
 
 
-/* NOTE: This code is untested! */
+/* 32S Addressing Mode */
 
 ea_t ea32s (unsigned short inst, short i, short x) {
   
@@ -1276,9 +1275,9 @@ ea_t apea(unsigned short *bitarg) {
   unsigned short ibr, ea_s, ea_w, bit, br, a;
   ea_t ea, ip;
   
-  ibr = get16(RP);
+  ibr = iget16(RP);
   RPL++;
-  a = get16(RP);
+  a = iget16(RP);
   RPL++;
   bit = (ibr >> 12) & 0xF;
   br = (ibr >> 8) & 3;
@@ -2756,7 +2755,6 @@ main (int argc, char **argv) {
   unsigned char zch1, zch2, *zcp1, *zcp2, zspace;
 
   struct timeval boot_tv;
-  struct timeval tv, prev_tv;
   struct timezone tz;
   float mips;
 
@@ -3026,7 +3024,6 @@ For disk boots, the last 3 digits can be:\n\
     perror("gettimeofday failed");
     fatal(NULL);
   }
-  prev_tv = boot_tv;
 
   /* main instruction decode loop */
 
@@ -3041,7 +3038,8 @@ For disk boots, the last 3 digits can be:\n\
 
   while (1) {
 
-#if 1
+#if 0
+    /* this is for FTN Generic 3 trace */
     if (crs[OWNERL] == 0100100 && RPL >= 034750 && RPL <= 034760)
       traceflags = -1;
     else
@@ -3089,10 +3087,6 @@ For disk boots, the last 3 digits can be:\n\
       if (devpoll[i] && (--devpoll[i] <= 0)) {
 	if (!devmap[i])
 	  fatal("devpoll set but devmap is null");
-#if 0
-	if (i == 054)
-	  traceflags = savetraceflags;
-#endif
 	devmap[i](4, 0, i);
       }
 
@@ -3160,19 +3154,6 @@ For disk boots, the last 3 digits can be:\n\
     inst = iget16(ea);
     RPL++;
     instcount++;
-
-    /* update instpermsec every 5 seconds */
-
-    if (instcount-previnstcount > instpermsec*1000*5) {
-      if (gettimeofday(&tv, NULL) != 0)
-	fatal("em: gettimeofday failed");
-      instpermsec = (instcount-previnstcount) /
-	((tv.tv_sec*1000+(tv.tv_usec/1000)) - (prev_tv.tv_sec*1000+(prev_tv.tv_usec/1000)));
-      //printf("instcount = %d, previnstcount = %d, diff=%d, instpermsec=%d\n", instcount, previnstcount, instcount-previnstcount, instpermsec);
-      //printf("instpermsec=%d\n", instpermsec);
-      previnstcount = instcount;
-      prev_tv = tv;
-    }
 
     /* while a process is running, RP is the real program counter, PBH
        is the active procedure segment, and PBL is zero.  When a
@@ -3613,7 +3594,6 @@ stfa:
 	  if (crsl[FLR1] & 0x8000)
 	    zea2 |= EXTMASK32;
 	  TRACE(T_INST, " ea1=%o/%o, ea2=%o/%o, len=%d\n", zea1>>16, zea1&0xffff, zea2>>16, zea2&0xffff, zlen1);
-	  //printf("ZMVD: ea1=%o/%o, ea2=%o/%o, len=%d\n", zea1>>16, zea1&0xffff, zea2>>16, zea2&0xffff, zlen1);
 	  zclen1 = 0;
 	  zclen2 = 0;
 	  while (zlen2) {
@@ -4311,10 +4291,7 @@ bidy:
 	      usleep(delayusec);
 	      if (gettimeofday(&tv1, NULL) != 0)
 		fatal("em: gettimeofday 1 failed");
-	      if (tv1.tv_usec > tv0.tv_usec)
-		actualmsec = (tv1.tv_sec-tv0.tv_sec)*1000 + (tv1.tv_usec-tv0.tv_usec)/1000;
-	      else
-		actualmsec = (tv1.tv_sec-tv0.tv_sec-1)*1000 + (tv1.tv_usec+1000000-tv0.tv_usec)/1000;
+	      actualmsec = (tv1.tv_sec-tv0.tv_sec-1)*1000 + (tv1.tv_usec+1000000-tv0.tv_usec)/1000;
 	      // TRACEA(" BDX loop at %o/%o, remainder=%d, owner=%o, utempl=%d, wanted %d us, got %d ms\n", prevpc>>16, prevpc&0xffff, crs[X], crs[OWNERL], utempl, delayusec, actualusec);
 
 	      /* do timer bookkeeping that would have occurred if we had 
