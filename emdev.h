@@ -103,7 +103,7 @@
 
 /* this is a template for new device handlers */
 
-int devnew (short class, short func, short device) {
+int devnew (int class, int func, int device) {
 
   switch (class) {
 
@@ -155,9 +155,9 @@ int devnew (short class, short func, short device) {
 
 /* this is a template for null (not present) devices */
 
-int devnone (short class, short func, short device) {
+int devnone (int class, int func, int device) {
 
-  static short lastdev=-1;
+  static int seen[64] = {64*0};
 
   switch (class) {
 
@@ -180,9 +180,9 @@ int devnone (short class, short func, short device) {
     TRACE(T_INST, " OTA '%02o%02o\n", func, device);
     break;
   }
-  if (device != lastdev)
+  if (!seen[device])
     fprintf(stderr, " unimplemented device '%o\n", device);
-  lastdev = device;
+  seen[device] = 1;
 }
 
 
@@ -249,7 +249,7 @@ int devnone (short class, short func, short device) {
 */
 
 
-int devasr (short class, short func, short device) {
+int devasr (int class, int func, int device) {
 
   static FILE *conslog;
   static int ttydev;
@@ -283,14 +283,26 @@ int devasr (short class, short func, short device) {
       perror(" unable to get tty attributes");
       fatal(NULL);
     }
+
+    /* NOTE: some of these are not restored after the emulator
+       is suspended (VSUSP) then restarted, eg, the VSUSP and
+       VINTR characters */
+
     terminfo.c_iflag &= ~(INLCR | ICRNL);
     terminfo.c_lflag &= ~(ECHOCTL | ICANON);
+    terminfo.c_oflag &= ~(TOSTOP);
+    terminfo.c_cc[VINTR] = _POSIX_VDISABLE;  /* use ^\ instead */
+    terminfo.c_cc[VSUSP] = '';
     terminfo.c_cc[VMIN] = 0;
     terminfo.c_cc[VTIME] = 0;
     if (tcsetattr(ttydev, TCSANOW, &terminfo) == -1) {
       perror(" unable to set tty attributes");
       fatal(NULL);
     }
+
+    /* ignore SIGTTIN in case the emulator is put in the background */
+
+    signal(SIGTTIN, SIG_IGN);
 
     /* open console log file and set to line buffering */
 
@@ -341,6 +353,9 @@ int devasr (short class, short func, short device) {
       IOSKIP;                     /* assume it's always ready */
     break;
 
+  /* signal SIGTTIN is ignore during initialization, so if the
+     emulator is put in the background, read() will return EIO */
+
   case 2:
     TRACE(T_INST, " INA '%02o%02o\n", func, device);
     if (func == 0 || func == 010) {
@@ -363,7 +378,7 @@ int devasr (short class, short func, short device) {
 readasr:
       n = read(ttydev, &ch, 1);
       if (n < 0) {
-	if (errno != EAGAIN) {
+	if (errno != EAGAIN && errno != EIO) {
 	  perror(" error reading from tty");
 	  fatal(NULL);
 	}
@@ -375,6 +390,7 @@ readasr:
 	    TRACEA("\nTRACE DISABLED:\n\n");
 	  else
 	    TRACEA("\nTRACE ENABLED:\n\n");
+	  fflush(tracefile);
 	  //memdump(0, 0xFFFF);
 	  goto readasr;
 	}
@@ -419,6 +435,13 @@ readasr:
 	return;
       }
 #if 0
+      /* could do this here too, but Primos does it with SKS before
+	 doing the OTA for the console, so it isn't really necessary.
+	 Also, if done here, it might confused a program if SKS said
+	 the character could be output, then OTA said it couldn't.
+	 The program might stay in a tight OTA loop and hang the
+	 machine until sys console output clears */
+
       timeout.tv_sec = 0;
       timeout.tv_usec = 0;
       FD_SET(2, &fds);
@@ -705,7 +728,7 @@ int mtwrite (int fd, unsigned short *iobuf, int nw, int *mtstat) {
   *mtstat &= ~8;                     /* not at BOT now */
 }
 
-int devmt (short class, short func, short device) {
+int devmt (int class, int func, int device) {
 
   static unsigned short mtvec = 0114;          /* interrupt vector */
   static unsigned short dmxchan = 0;           /* dmx channel number */
@@ -1159,7 +1182,7 @@ initclock(datnowea) {
 }
 
 
-int devcp (short class, short func, short device) {
+int devcp (int class, int func, int device) {
   static short enabled = 0;
   static unsigned short clkvec;
   static short clkpic = 0;
@@ -1290,11 +1313,10 @@ int devcp (short class, short func, short device) {
 	  previnstcount = instcount;
 	  if (datnowea != 0)
 	    initclock(datnowea);
-	  printf("em: resetting real time clock\n");
 	} 
 	elapsedms = (tv.tv_sec-start_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-start_tv.tv_usec)/1000;
 	targetticks = elapsedms/(-clkpic*3.2/1000);
-#if 1
+#if 0
 	absticks++;
 	if (absticks%1000 == 0)
 	  printf("Clock check: target=%d, ticks=%d\n", targetticks, ticks);
@@ -1306,7 +1328,7 @@ int devcp (short class, short func, short device) {
 	   If datnowea is not available (no Primos maps), then we have
 	   to tick our way to the correct time */
 
-	if (abs(ticks-targetticks) > 1000 && datnowea != 0)
+	if (abs(ticks-targetticks) > 5000 && datnowea != 0)
 	  ticks = -1;
 	else if (ticks < targetticks)
 	  devpoll[device] = 100;                /* behind, so catch-up */
@@ -1327,7 +1349,7 @@ int devcp (short class, short func, short device) {
 	  instpermsec = (instcount-previnstcount) /
 	    ((tv.tv_sec-prev_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-prev_tv.tv_usec)/1000);
 	  //printf("instcount = %d, previnstcount = %d, diff=%d, instpermsec=%d\n", instcount, previnstcount, instcount-previnstcount, instpermsec);
-	  printf("instpermsec=%d\n", instpermsec);
+	  //printf("instpermsec=%d\n", instpermsec);
 	  previnstcount = instcount;
 	  prev_tv = tv;
 	}
@@ -1371,7 +1393,7 @@ int devcp (short class, short func, short device) {
 
  */
 
-int devdisk (short class, short func, short device) {
+int devdisk (int class, int func, int device) {
 
 #define S_HALT 0
 #define S_RUN 1
@@ -1880,7 +1902,7 @@ int devdisk (short class, short func, short device) {
   - emulator stores in a structure
 */
 
-int devamlc (short class, short func, short device) {
+int devamlc (int class, int func, int device) {
 
 #define MAXLINES 128
 #define MAXFD MAXLINES+20
@@ -2194,7 +2216,7 @@ conloop:
 	    while (n < sizeof(buf) && rtq(qcbea, &utempa, 0)) {
 	      if (utempa & 0x8000) {           /* valid character */
 		//printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
-		buf[n++] = utempa ^ 0x80;
+		buf[n++] = utempa & 0x7F;
 	      }
 	    }
 	  } else {         /* no line connected, just drain queue */
@@ -2206,7 +2228,7 @@ conloop:
 	  if (utempa != 0) {
 	    if ((utempa & 0x8000) && (dc[device].dss & bitmask16[lx+1])) {
 	      //printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
-	      buf[n++] = utempa ^ 0x80;
+	      buf[n++] = utempa & 0x7F;
 	    }
 	    put16r(0, dc[device].baseaddr + lx, 0);
 	  }
@@ -2416,7 +2438,7 @@ conloop:
 
 */
 
-int devpnc (short class, short func, short device) {
+int devpnc (int class, int func, int device) {
 
   /* PNC controller status bits */
 #define PNCRCVINT  0x8000    /* bit 1 rcv interrupt (rcv complete) */

@@ -1,7 +1,7 @@
 /* this version is derived from the flowchart in the preliminary P400
    release notes */
 
-ea_t ea64v (ea_t earp, unsigned short inst, short i, short x, unsigned short *opcode, unsigned short *bit) {
+inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned short *opcode, unsigned short *bit) {
 
   ea_t ea;                                       /* full seg/word va */
   unsigned short ea_s;                           /* eff address segno */
@@ -9,6 +9,7 @@ ea_t ea64v (ea_t earp, unsigned short inst, short i, short x, unsigned short *op
   unsigned short ea_w;                           /* eff address wordno */
   unsigned short br;
   unsigned short live;                           /* max live register addr */
+  unsigned short i;
   unsigned short y;
   unsigned short xok;
   unsigned short a;
@@ -17,6 +18,7 @@ ea_t ea64v (ea_t earp, unsigned short inst, short i, short x, unsigned short *op
   unsigned short rph,rpl;
 
   *bit = 0;
+  i = inst & 0100000;           /* indirect is bit 1 (left/MS bit) */
 
   /* rph/rpl (and earp) are usually = RPH/RPL in the register file,
      except for the case of an XEC instruction; in that case, these

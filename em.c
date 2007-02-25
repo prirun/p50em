@@ -28,7 +28,7 @@
    -------------
    Usage:  to load SAM.SAVE from Unix FS and run diagnostics from pdev 2466
 
-   $ time ./em  -cpuid 5 -ss 14114 -boot SAM.SAVE 2>err
+$ time ./em  -cpuid 5 -ss 14114 -boot SAM.SAVE 2>err
 
 [SAM Rev. 16.2, DTS Release: 0004.A, Copyright (c) 1990, Prime Computer, Inc.]
 Enter physical device = 2466
@@ -41,7 +41,7 @@ SAM>
    --------------
    Usage:  to load initial boot from tape, then prompt for disk pdev
 
-   $ time ./em -boot 1005 -tport 8000 -cpuid 5
+$ time ./em -boot 1005 -tport 8000 -cpuid 5
 Boot file is dev14u0             <--- note tape drive boot
 Sense switches set to 1005       <--- these cause pdev prompt
 [BOOT Rev. 20.2.3 Copyright (c) 1987, Prime Computer, Inc.]
@@ -52,8 +52,25 @@ DISK ERROR, STATUS: 000001
 PHYSICAL DEVICE=
 
    ---------------
+   Usage:  to load .SAVE image from tape:
 
-   Instruction details are spewed to stderr depending on the trace flags.
+$ time ./em -boot 10005
+[BOOT Rev. 20.2.3 Copyright (c) 1987, Prime Computer, Inc.]
+
+RUN FILE TREENAME=MFD>DOS>DOS.SAVE
+
+BOOTING FROM MT0    MFD>DOS>DOS.SAVE
+
+
+PRIMOS II REV 20.0 03/15/85 (AT 170000) 
+Copyright (c) Prime Computer, Inc. 1985.
+PRIMOS II is being phased out.  To boot PRIMOS return to CP mode. 
+("BOOT 14xxx" will autoboot PRIMOS.)
+
+OK: 
+   ---------------
+
+   Instruction details are spewed to trace.log depending on the trace flags.
 
    IMPORTANT NOTE: this only runs on a big-endian machine, like the Prime.
 */
@@ -250,7 +267,7 @@ int intvec=-1;                       /* currently raised interrupt (if >= zero) 
 /* NOTE: Primos II gives "NOT FOUND" on startup 2460 if sense switches
    are set to 014114.  But DIAGS like this sense switch setting. :( */
 
-unsigned short sswitch = 0;          /* sense switches, set with -ss & -boot*/
+unsigned short sswitch = 014114;     /* sense switches, set with -ss & -boot*/
 
 /* NOTE: the default cpuid is a 4150: 2 MIPS, 32MB of memory */
 
@@ -331,11 +348,16 @@ unsigned int prevpc;                 /* backed program counter */
 unsigned short amask;                /* address mask */
 
 #define FAULTMASK32 0x80000000       /* fault bit */
-#define RINGMASK32 0x60000000        /* ring bits */
-#define EXTMASK32 0x10000000         /* E-bit */
-#define SEGMASK32 0x0FFF0000         /* segment number */
-#define RINGMASK16 0x6000            /* ring bits */
-#define EXTMASK16 0x1000             /* E-bit */
+#define RINGMASK32  0x60000000       /* ring bits */
+#define EXTMASK32   0x10000000       /* E-bit */
+#define SEGMASK32   0x0FFF0000       /* segment number */
+#define RINGMASK16  0x6000           /* ring bits */
+#define EXTMASK16   0x1000           /* E-bit */
+
+#define DTAR(ea) (((ea)>>26) & 3)
+#define SEGNO(ea) (((ea)>>16) & 07777)
+#define PAGENO(ea) (((ea)>>10) & 077)
+
 
 /* Fault/interrupt vectors */
 
@@ -491,7 +513,8 @@ char *searchloadmap(int addr, char type) {
   static char buf[MAXBUFIX][100];
   static int bufix=-1;
 
-  if ((ix = findsym(addr, type)) > 0) {
+  if ((SEGNO(addr) <= 01777 | SEGNO(addr) >= 06000) &&
+      (ix = findsym(addr, type)) > 0) {
     diff = addr - mapsym[ix].address;
     if (diff) {
       if (++bufix == MAXBUFIX)
@@ -504,10 +527,6 @@ char *searchloadmap(int addr, char type) {
     return &blank;
 }
 
-
-#define DTAR(ea) (((ea)>>26) & 3)
-#define SEGNO(ea) (((ea)>>16) & 07777)
-#define PAGENO(ea) (((ea)>>10) & 077)
 
 /* intended memory access types:
    1 = PCL (PACC)
@@ -705,7 +724,7 @@ double get64r(ea_t ea, ea_t rpring) {
    Ring 0.  I tried using get64 (with appropriate mask changes) and
    performance was much worse than not prefetching at all on a G4 */
 
-#if 1
+#if 0
 inline unsigned short iget16(ea_t ea) {
   static ea_t eafirst = -1;             /* ea of instruction buffer */
   static unsigned short insts[2];       /* instruction buffer */
@@ -1000,7 +1019,7 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
 
 /* I/O device map table, containing function pointers to handle device I/O */
 
-long devpoll[64] = {0};
+int devpoll[64] = {0};
 
 #include "emdev.h"
 
@@ -1022,7 +1041,7 @@ int (*devmap[64])(short, short, short) = {
 
 /* this is the "minimum system" controller configuration */
 
-int (*devmap[64])(short, short, short) = {
+int (*devmap[64])(int, int, int) = {
   /* '0x */ 0,0,0,0,devasr,0,0,devpnc,
 #if 1
   /* '1x */ devnone,devnone,0,devnone,devmt,devnone, devnone, devnone,
@@ -1041,11 +1060,12 @@ int (*devmap[64])(short, short, short) = {
 
 /* 16S Addressing Mode */
 
-ea_t ea16s (unsigned short inst, short i, short x) {
+ea_t ea16s (unsigned short inst, short x) {
   
-  unsigned short ea, m, rpl, amask, live;
+  unsigned short ea, m, rpl, amask, live, i;
   ea_t va;
 
+  i = inst & 0100000;                            /* indirect */
   if (crs[MODALS] & 4)                           /* segmentation enabled? */
     live = 010;                                  /* yes, limit register traps */
   else
@@ -1078,11 +1098,12 @@ ea_t ea16s (unsigned short inst, short i, short x) {
 
 /* 32S Addressing Mode */
 
-ea_t ea32s (unsigned short inst, short i, short x) {
+ea_t ea32s (unsigned short inst, short x) {
   
-  unsigned short ea, m,rpl, amask, live;
+  unsigned short ea, m,rpl, amask, live, i;
   ea_t va;
 
+  i = inst & 0100000;                            /* indirect */
   if (crs[MODALS] & 4)                           /* segmentation enabled? */
     live = 010;                                  /* yes, limit register traps */
   else
@@ -1120,11 +1141,12 @@ ea_t ea32s (unsigned short inst, short i, short x) {
    bit, is that 32R indirect words have an indirect bit for multi-level
    indirects */
 
-ea_t ea32r64r (ea_t earp, unsigned short inst, short i, short x, unsigned short *opcode) {
+ea_t ea32r64r (ea_t earp, unsigned short inst, short x, unsigned short *opcode) {
 
-  unsigned short live, ea, m, rph, rpl, amask, class;
+  unsigned short live, ea, m, rph, rpl, amask, class, i;
   ea_t va;
 
+  i = inst & 0100000;                            /* indirect */
   if (crs[MODALS] & 4)                           /* segmentation enabled? */
     live = 010;                                  /* yes, limit register traps */
   else
@@ -1266,7 +1288,7 @@ special:
 
 #include "ea64v.h"
 
-unsigned int ea32i (ea_t earp, unsigned short inst, short i, short x) {
+unsigned int ea32i (ea_t earp, unsigned short inst, short x) {
   TRACE(T_EAI, "Mode 32I not implemented\n");
 }
 
@@ -2737,7 +2759,7 @@ main (int argc, char **argv) {
   short i,j,x;
   unsigned short savemask;
   unsigned short class;
-  int nw;
+  int nw,nw2;
   unsigned short rvec[9];    /* SA, EA, P, A, B, X, keys, dummy, dummy */
   unsigned short inst;
   unsigned short m,m1,m2;
@@ -2932,8 +2954,6 @@ main (int argc, char **argv) {
        Bits 11-12 are the unit number, 0-4
     */
 
-    if (sswitch == 0)
-      sswitch = 014114;
     bootunit = (sswitch>>7) & 3;
     rvec[2] = 01000;                  /* starting address */
     rvec[3] = rvec[4] = rvec[5] = rvec[6] = 0;
@@ -2941,15 +2961,17 @@ main (int argc, char **argv) {
     if ((sswitch & 0x7) == 4) {         /* disk boot */
       bootctrl = bootdiskctrl[(sswitch>>4) & 3];
       rvec[0] = 0760;                   /* disk load starts at '760 */
-      rvec[1] = 0760+1040-1;            /* read 1 disk block */
+      rvec[1] = rvec[0]+1040-1;         /* read 1 disk block */
       /* setup DMA register '20 (address only) for the next boot record */
       regs.sym.regdmx[041] = 03000;
 
     } else if ((sswitch & 0x7) == 5) {  /* tape boot */
       bootctrl = 014;
       rvec[0] = 0200;                   /* tape load starts at '200 */
-      rvec[1] = 3072-rvec[0];           /* read in at most 3 pages (6K) */
+      rvec[1] = rvec[0]+2355-1;         /* read in at most 3 pages (6K) */
       bootskip = 4;                     /* to skip .TAP header */
+      /* setup DMA register '20 (address only) for the next boot record */
+      regs.sym.regdmx[041] = 0200+2355;;
 
     } else {
       printf("\
@@ -2996,7 +3018,7 @@ For disk boots, the last 3 digits can be:\n\
   /* read memory image from SA to EA inclusive */
 
   nw = rvec[1]-rvec[0]+1;
-  if ((i=read(bootfd, mem+rvec[0], nw*2)) == -1) {
+  if ((nw2=read(bootfd, mem+rvec[0], nw*2)) == -1) {
     perror("Error reading memory image");
     fatal(NULL);
   }
@@ -3004,8 +3026,10 @@ For disk boots, the last 3 digits can be:\n\
   /* check we got it all, except for tape boots; the boot program size
      is unpredictable on tape */
   
-  if (i != nw*2 && (sswitch & 0x7) != 5)
+  if (nw2 != nw*2 && ((sswitch & 0x7) == 4 || bootarg)) {
+    printf("rvec[0]=%d, rvec[1]=%d, nw2=%d, nw=%d, nw*2=%d\n", rvec[0], rvec[1], nw2, nw, nw*2);
     fatal("Didn't read entire boot program");
+  }
 
   /* setup execution (registers, keys, address mask, etc.) from rvec */
 
@@ -3056,7 +3080,7 @@ For disk boots, the last 3 digits can be:\n\
       savetraceflags = traceflags;
 #endif
 
-#if 0
+#if 1
     if (traceflags != 0)
       savetraceflags = traceflags;
     if (crs[OWNERL] == 0100200 && savetraceflags)
@@ -4027,7 +4051,7 @@ irtn:
 
 	case 000003:
 	  TRACE(T_FLOW, " gen 3?\n");
-	  printf("#%d: %o/%o: Generic instruction 3?\n", instcount, RPH, RPL);
+	  TRACEA("#%d: %o/%o: Generic instruction 3?\n", instcount, RPH, RPL);
 	  continue;
 
 	default:
@@ -5423,13 +5447,13 @@ keys = 14200, modals=100177
       continue;
     }
 
-    /* get ix bits and adjust opcode so that PMA manual opcode
+    /* get x bit and adjust opcode so that PMA manual opcode
        references can be used directly, ie, if the PMA manual says the
        opcode is '15 02, then 01502 can be used here.  If the PMA
        manual says the opcode is '11, then use 01100 (the XX extended
        opcode bits are zero) */
 
-    i = inst & 0100000;           /* indirect is bit 1 (left/MS bit) */
+    i = inst & 0100000;           /* (for trace) indirect is bit 1 */
     x = inst & 040000;            /* indexed is bit 2 */
     opcode = (inst & 036000) >> 4;  /* isolate opcode bits */
 
@@ -5461,24 +5485,24 @@ keys = 14200, modals=100177
 
     TRACE(T_INST, " opcode=%5#0o, i=%o, x=%o\n", opcode, i != 0, x != 0);
 
-    switch ((crs[KEYS] & 016000) >> 10) {
+    switch (crs[KEYS] & 016000) {
     case 0:  /* 16S */
-      ea = ea16s(inst, i, x);
+      ea = ea16s(inst, x);
       break;
-    case 1:  /* 32S */
-      ea = ea32s(inst, i, x);
+    case 1<<10:  /* 32S */
+      ea = ea32s(inst, x);
       break;
-    case 2:  /* 64R */
-    case 3:  /* 32R */
-      ea = ea32r64r(earp, inst, i, x, &opcode);
+    case 2<<10:  /* 64R */
+    case 3<<10:  /* 32R */
+      ea = ea32r64r(earp, inst, x, &opcode);
       break;
-    case 4:  /* 32I */
-      ea = ea32i(earp, inst, i, x);
+    case 4<<10:  /* 32I */
+      ea = ea32i(earp, inst, x);
       warn("32I mode not supported");
       fault(RESTRICTFAULT, 0, 0);
       break;
-    case 6:  /* 64V */
-      ea = ea64v(earp, inst, i, x, &opcode, &eabit);
+    case 6<<10:  /* 64V */
+      ea = ea64v(earp, inst, x, &opcode, &eabit);
       break;
     default:
       printf("Bad CPU mode in EA calculation, keys = %o\n", crs[KEYS]);
@@ -5716,6 +5740,9 @@ keys = 14200, modals=100177
       put16(crs[X],ea);
       continue;
 
+    /* MPY can't overflow in V-mode, but in R-mode (31 bits),
+       -32768*-32768 can overflow and yields 0x8000/0x0000 */
+
     case 01600:
       m = get16(ea);
       TRACE(T_FLOW, " MPY ='%o/%d\n", m, *(short *)&m);
@@ -5724,12 +5751,11 @@ keys = 14200, modals=100177
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	*(int *)(crs+L) = templ;
       } else {                           /* R/S mode */
-	if (crs[A] == 0x8000 && m == 0x8000)
+	utempa = crs[A];
+	crs[A] = (templ >> 15);
+	crs[B] = templ & 077777;
+	if (utempa == 0x8000 && m == 0x8000)
 	  mathexception('i', FC_INT_OFLOW, 0);
-	else {
-	  crs[A] = (templ >> 15);
-	  crs[B] = templ & 077777;
-	}
       }
       continue;
 
@@ -5743,6 +5769,7 @@ keys = 14200, modals=100177
 
     case 01700:
       m = get16(ea);
+      //printf("L='%o/%d, DIV ='%o/%d\n", *(unsigned int *)(crs+L), *(int *)(crs+L), m, *(short *)&m);
       TRACE(T_FLOW, " DIV ='%o/%d\n", m, *(short *)&m);
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	templ = *(int *)(crs+A);
@@ -5751,16 +5778,25 @@ keys = 14200, modals=100177
 	templ = (templ<<15) | (crs[B] & 0x7FFF);
 	//printf("\nR-mode DIV: A='%o/%d, B='%o/%d, templ='%o/%d\n", crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), templ, templ);
       }
-      if (m != 0 && abs(*(short *)(crs+A)) < abs(*(short *)&m)) {
-	crs[A] = templ / *(short *)&m;
+      if (m == 0)
+	mathexception('i', FC_INT_ZDIV, 0);
+      else if (abs(*(short *)(crs+A)) < abs(*(short *)&m)) {
+	templ2 = templ / *(short *)&m;
+	crs[A] = templ2;
 	crs[B] = templ % *(short *)&m;
-	CLEARC;
 	//printf("DIV results: m='%o/%d, A='%o/%d, B='%o/%d\n", m, *(short *)&m, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B));
+	if ((crs[A] & 0x8000) ^ (templ2 & 0x80000000)>>16)
+	  mathexception('i', FC_INT_OFLOW, 0);
+	else
+	  CLEARC;
       } else {
-	SETC;
+	mathexception('i', FC_INT_OFLOW, 0);
 	//printf("DIV overflow\n");
       }
       continue;
+
+    /* NOTE:  RESET QVFY, DVL runs okay with cpuid=5 (P750), but
+       fails with default cpuid (P4450) */
 
     case 01703:
       templ = get32(ea);
@@ -5771,7 +5807,7 @@ keys = 14200, modals=100177
 	*(int *)(crs+E) = templl % templ;
 	CLEARC;
       } else
-	SETC;
+	mathexception('i', FC_INT_ZDIV, 0);
       continue;
 
     case 03500:
@@ -5791,8 +5827,8 @@ keys = 14200, modals=100177
 
     case 00203:
       if (crs[KEYS] & 010000) {          /* V/I mode */
-	TRACE(T_FLOW, " LDL\n");
 	*(unsigned int *)(crs+L) = get32(ea);
+	TRACE(T_FLOW, " LDL ='%o/%d\n", *(unsigned int *)(crs+A), *(int *)(crs+A));
       } else {
 	TRACE(T_FLOW, " JEQ\n");
 	if (*(short *)(crs+A) == 0)
@@ -5843,7 +5879,7 @@ keys = 14200, modals=100177
     case 00503:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	utempl = get32(ea);
-	TRACE(T_FLOW, " ERL ='%o\n", utempl);
+	TRACE(T_FLOW, " ERL ='%o/%d  '%o/'%o  %d/%d\n", utempl, *(int *)&utempl, utempl>>16, utempl&0xFFFF, utempl>>16, utempl&0xFFFF);
 	*(unsigned int *)(crs+L) ^= utempl;
       } else {
 	TRACE(T_FLOW, " JGT\n");
@@ -6922,9 +6958,9 @@ badsvc:
 */
 
 pio(unsigned int inst) {
-  short class;
-  short func;
-  short device;
+  int class;
+  int func;
+  int device;
 
   RESTRICT();
   class = inst >> 14;
