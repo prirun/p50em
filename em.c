@@ -3672,8 +3672,6 @@ stfa:
 
 	/* Decimal and character instructions */
 
-#if 1
- 
 #define ZGETC(zea, zlen, zcp, zclen, zch) \
   if (zclen == 0) { \
     zcp = (unsigned char *) (mem+mapva(zea, RACC, &zaccess, RP)); \
@@ -3710,13 +3708,35 @@ stfa:
   zclen--; \
   zlen--
 
+#if 1
+	  /* if the high-speed code is enabled & eafa masks the far:
+	     Primos wont' start:
+		  368K bytes wired.
+		  System clock has been initialized.
+
+		  Error: condition "RESTRICTED_INST$" raised at 41(3)/151750.
+		  ER! 
+
+	     if the high-speed code is enabled, and eafa doesn't mask the far,
+	     Primos boots but emacs fails badly:
+	     1. garbage display on the mode line
+	     2. ^x^f won't load a file (filename is off by one character)
+	     3. explore P command (dive) doesn't work
+
+	     if the medium-speed code is enabled (ldc/stc loop), Primos
+	     boots and emacs mostly works except:
+             1. explore P command (dive) doesn't work
+
+	     if the Prime UII library is used instead, these all work :(
+	  */
+
 	case 001114:
 	  TRACE(T_FLOW, " ZMV\n");
+	  zspace = 0240;
 	  if (crs[KEYS] & 020)
 	    zspace = 040;
-	  else
-	    zspace = 0240;
-	  //printf("ZMV: source=%o/%o, len=%d, dest=%o/%o, len=%d, keys=%o\n", crsl[FAR0]>>16, crsl[FAR0]&0xffff, GETFLR(0), crsl[FAR1]>>16, crsl[FAR1]&0xffff, GETFLR(1), crs[KEYS]);
+	  TRACE(T_INST, "ZMV: source=%o/%o, len=%d, dest=%o/%o, len=%d, keys=%o\n", crsl[FAR0]>>16, crsl[FAR0]&0xffff, GETFLR(0), crsl[FAR1]>>16, crsl[FAR1]&0xffff, GETFLR(1), crs[KEYS]);
+
 	  zlen1 = GETFLR(0);
 	  zlen2 = GETFLR(1);
 	  zea1 = crsl[FAR0];
@@ -3725,7 +3745,7 @@ stfa:
 	  zea2 = crsl[FAR1];
 	  if (crsl[FLR1] & 0x8000)
 	    zea2 |= EXTMASK32;
-	  TRACE(T_INST, " ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
+	  TRACE(T_INST, "     ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
 	  zclen1 = 0;
 	  zclen2 = 0;
 	  while (zlen2) {
@@ -4197,7 +4217,7 @@ irtn:
 	    continue;
 
 	  if (001100 <= inst && inst <= 001146) {
-	    //traceflags = -1;
+	    savetraceflags = ~TB_MAP;
 	    TRACE(T_FLOW, " X/Z UII %o\n", inst);
 	    fault(UIIFAULT, RPL, RP);
 	    continue;
@@ -4612,10 +4632,16 @@ a1a:
 	  *(int *)(crs+L) = 0;
 	  continue;
 
-	/* XXX: this should set the L bit like subtract */
-
 	case 0140214:
 	  TRACE(T_FLOW, " CAZ\n");
+#if 1
+	  crs[KEYS] = (crs[KEYS] & ~0100) | 020200;   /* clear EQ, set L, LT */
+	  if (crs[A] == 0) {                  /* set EQ? */
+	    crs[KEYS] |= 0100; 
+	    RPL++;
+	  } else if (*(short *)(crs+A) < 0)
+	    RPL += 2;
+#else
 	  crs[KEYS] &= ~020300;               /* clear L, LT, EQ */
 	  if (*(short *)(crs+A) < 0) {        /* A < 0? */
 	    crs[KEYS] |= 0200;                /* yes, set LT */
@@ -4625,6 +4651,7 @@ a1a:
 	    RPL++;                            /* skip */
 	  }                                   /* else, A > 0 */
 	  XSETL(0);
+#endif
 	  continue;
 
 	/* NOTE: using "if (crs[X]++ == 0)" doesn't work because of
