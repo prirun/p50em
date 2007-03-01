@@ -2585,8 +2585,16 @@ lpsw() {
   RPL = get16(INCVA(ea,1));
   newkeys(get16(INCVA(ea,2)));
   m = get16(INCVA(ea,3));
-  if ((m & 0340) != (crs[MODALS] & 0340))
+  if ((m & 0340) != (crs[MODALS] & 0340)) {
     TRACE(T_PX, "LPSW: WARNING: changed current register set: current modals=%o, new modals=%o\n", crs[MODALS], m);
+#if 0
+    /* not sure about doing this... */
+    fprintf(stderr, "WARNING: LPSW changed current register set: current modals=%o, new modals=%o\n", crs[MODALS], m);
+    crs = regs.rs16[2+((m & 040) >> 5)];
+    crsl = (void *)crs;
+#endif
+  }
+
   crs[MODALS] = m;
   inhcount = 1;
 
@@ -3412,7 +3420,11 @@ xec:
 	case 001300:
 	  TRACE(T_FLOW, " EAFA 0\n");
 	  ea = apea(&eabit);
+#if 1
+	  crsl[FAR0] = ea & 0x6FFFFFFF;
+#else
 	  crsl[FAR0] = ea;
+#endif
 	  crsl[FLR0] = (crsl[FLR0] & 0xFFFF0FFF) | (eabit << 12);
 	  TRACE(T_INST, " FAR0=%o/%o, eabit=%d, FLR=%x\n", crsl[FAR0]>>16, crsl[FAR0]&0xFFFF, eabit, crsl[FLR0]);
 	  continue;
@@ -3420,7 +3432,11 @@ xec:
 	case 001310:
 	  TRACE(T_FLOW, " EAFA 1\n");
 	  ea = apea(&eabit);
+#if 1
+	  crsl[FAR1] = ea & 0x6FFFFFFF;
+#else
 	  crsl[FAR1] = ea;
+#endif
 	  crsl[FLR1] = (crsl[FLR1] & 0xFFFF0FFF) | (eabit << 12);
 	  TRACE(T_INST, " FAR1=%o/%o, eabit=%d, FLR=%x\n", crsl[FAR1]>>16, crsl[FAR1]&0xFFFF, eabit, crsl[FLR1]);
 	  continue;
