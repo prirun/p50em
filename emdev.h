@@ -384,14 +384,14 @@ readasr:
 	}
       } else if (n == 1) {
 	if (ch == '') {
-	  traceflags = ~traceflags;
-	  traceflags &= ~TB_MAP;
-	  if (traceflags == 0)
-	    TRACEA("\nTRACE DISABLED:\n\n");
-	  else
+	  if (savetraceflags == 0) {
 	    TRACEA("\nTRACE ENABLED:\n\n");
+	    savetraceflags = ~TB_MAP;;
+	  } else {
+	    TRACEA("\nTRACE DISABLED:\n\n");
+	    savetraceflags = 0;
+	  }
 	  fflush(tracefile);
-	  //memdump(0, 0xFFFF);
 	  goto readasr;
 	}
 	if (func >= 010)

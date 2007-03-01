@@ -1,8 +1,10 @@
-/* Pr1me Computer emulator, Jim Wilcoxson (jim@meritnet.com), April 4, 2005
-   Copyright (C) 2005, Jim Wilcoxson (jim@meritnet.com).  All Rights Reserved.
+/* Pr1me Computer emulator, Jim Wilcoxson (prirun@gmail.com), April 4, 2005
+   Copyright (C) 2005, Jim Wilcoxson (prirun@gmail.com).  All Rights Reserved.
 
-   Restores a Prime R-mode .save image from stdin to memory and
-   emulates execution, or boots from a Prime disk image.
+   Emulates a Prime Computer system by:
+   - booting from a Prime disk image (normal usage)
+   - booting from a Prime MAGSAV tape
+   - restoring a Prime R-mode .save image from the host file system
 
    This is a project in development, so please don't publish it.
    Comments, suggestions, corrections, and general notes that you're
@@ -18,6 +20,10 @@
    where u=1/3/5/7 for units 0/1/2/3
    and c=1/3/5/7 for controller 26/27/...
       (See complete boot table below)
+
+   NOTE: the -map command is optional, but is needed to set the
+   real-time clock automatically.  If not available, use the Primos SE
+   command to set the clock manually after the system boots.
 
    -------------
    Usage:  (to load and start an R-mode runfile directly from the Unix FS)
@@ -217,27 +223,29 @@ char gen0nam[][5] = {
    T_EAAP       AP effective address calculation
    T_DIO        disk I/O
    T_TIO        tape I/O
+   T_TERM       terminal output (tnou[a])
    T_MAP        segmentation
    T_PCL        PCL instructions
    T_FAULT      Faults
    T_PX         Process exchange
 */
 
-#define TB_EAR 0x00000001
-#define TB_EAV 0x00000002
-#define TB_EAI 0x00000004
-#define TB_INST 0x00000008
-#define TB_FLOW 0x00000010
-#define TB_MODE 0x00000020
-#define TB_EAAP 0x00000040
-#define TB_DIO 0x00000080
-#define TB_MAP 0x00000100
-#define TB_PCL 0x00000200
+#define TB_EAR   0x00000001
+#define TB_EAV   0x00000002
+#define TB_EAI   0x00000004
+#define TB_INST  0x00000008
+#define TB_FLOW  0x00000010
+#define TB_MODE  0x00000020
+#define TB_EAAP  0x00000040
+#define TB_DIO   0x00000080
+#define TB_MAP   0x00000100
+#define TB_PCL   0x00000200
 #define TB_FAULT 0x00000400
-#define TB_PX 0x00000800
-#define TB_TIO 0x00001000
+#define TB_PX    0x00000800
+#define TB_TIO   0x00001000
+#define TB_TERM  0x00002000
 
-#define T_EAR  TB_EAR
+#define T_EAR TB_EAR
 #define T_EAV TB_EAV
 #define T_EAI TB_EAI
 #define T_INST TB_INST
@@ -250,6 +258,7 @@ char gen0nam[][5] = {
 #define T_FAULT TB_FAULT
 #define T_PX TB_PX
 #define T_TIO TB_TIO
+#define T_TERM TB_TERM
 
 #if defined(NOTRACE)
   #define TRACE(flags, formatargs...)
@@ -258,9 +267,35 @@ char gen0nam[][5] = {
   #define TRACEA(formatargs...) fprintf(tracefile,formatargs)
 #endif
 
+/* traceflags is the variable used to test tracing of each instruction
+
+   traceuser is the user number to trace, 0 meaning any user
+
+   savetraceflags hold the real traceflags, while "traceflags" switches
+   on and off for each instruction
+
+   traceprocs is an array of procedure names we're tracing, with flags
+   and various associated data
+
+   numtraceprocs is the number of entries in traceprocs, 0=none
+
+   TRACEUSER is a macro that is true if the current user is being traced
+*/
+
 int traceflags=0;                    /* each bit is a trace flag */
 int savetraceflags=0;                /* see ITLB */
+int traceuser=0;                     /* OWNERL to trace */
+int numtraceprocs=0;
+#define MAXTRACEPROCS 2
+struct {
+  char  name[11];                    /* procedure name */
+  int   ecb;                         /* ecb ea of proc */
+  int   sb;                          /* sb before the call */
+  int   oneshot;                     /* disable trace after call? */
+} traceprocs[MAXTRACEPROCS];
+
 FILE *tracefile;                     /* trace.log file */
+#define TRACEUSER (traceuser == 0 || crs[OWNERL] == traceuser)
 
 int intvec=-1;                       /* currently raised interrupt (if >= zero) */
 
@@ -440,7 +475,7 @@ addsym(char *sym, unsigned short seg, unsigned short word, char type) {
     if (ix+1 < numsyms)          /* make room for the new symbol */
       for (ix2 = numsyms; ix2 > ix; ix2--)
 	mapsym[ix2] = mapsym[ix2-1];
-    //printf("%s = %o/%o\n", sym, segno, wordno);
+    //TRACEA("%s = %o/%o\n", sym, seg, words);
     strcpy(mapsym[ix+1].symname, sym);
     mapsym[ix+1].address = addr;
     mapsym[ix+1].symtype = type;
@@ -1329,9 +1364,6 @@ ea_t apea(unsigned short *bitarg) {
   return ea;
 }
 
-#define GETFLR(n) (((crsl[FLR0+2*(n)] >> 11) & 0x1FFFE0) | (crsl[FLR0+2*(n)] & 0x1F))
-#define PUTFLR(n,v) crsl[FLR0+2*(n)] = (((v) << 11) & 0xFFFF0000) | (crsl[FLR0+2*(n)] & 0xF000) | ((v) & 0x1F);
-
 /* exception handler types:
 
   'i' = integer exception
@@ -1381,19 +1413,22 @@ mathexception(unsigned char extype, unsigned short fcode, ea_t faddr)
 memdump(int start, int end) {
   int ea;
 
-  /* dump sector zero for debugging */
+  if (domemdump) {
 
-  TRACEA("\nSector 0:\n");
-  for (ea=0; ea<01000; ea=ea+8)
-    if (mem[ea]|mem[ea+1]|mem[ea+2]|mem[ea+3]|mem[ea+4]|mem[ea+5]|mem[ea+6]|mem[ea+7])
-      TRACEA("%3o: %6o %6o %6o %6o %6o %6o %6o %6o\n", ea, mem[ea], mem[ea+1], mem[ea+2], mem[ea+3], mem[ea+4], mem[ea+5], mem[ea+6], mem[ea+7]);
-    
-  /* dump main memory for debugging */
+    /* dump sector zero for debugging */
 
-  TRACEA("\nMain memory:\n");
-  for (ea=start; ea<=end; ea=ea+8)
-    if (mem[ea]|mem[ea+1]|mem[ea+2]|mem[ea+3]|mem[ea+4]|mem[ea+5]|mem[ea+6]|mem[ea+7])
-      TRACEA("%o: %6o %6o %6o %6o %6o %6o %6o %6o\n", ea, mem[ea], mem[ea+1], mem[ea+2], mem[ea+3], mem[ea+4], mem[ea+5], mem[ea+6], mem[ea+7]);
+    TRACEA("\nSector 0:\n");
+    for (ea=0; ea<01000; ea=ea+8)
+      if (mem[ea]|mem[ea+1]|mem[ea+2]|mem[ea+3]|mem[ea+4]|mem[ea+5]|mem[ea+6]|mem[ea+7])
+	TRACEA("%3o: %6o %6o %6o %6o %6o %6o %6o %6o\n", ea, mem[ea], mem[ea+1], mem[ea+2], mem[ea+3], mem[ea+4], mem[ea+5], mem[ea+6], mem[ea+7]);
+
+    /* dump main memory for debugging */
+
+    TRACEA("\nMain memory:\n");
+    for (ea=start; ea<=end; ea=ea+8)
+      if (mem[ea]|mem[ea+1]|mem[ea+2]|mem[ea+3]|mem[ea+4]|mem[ea+5]|mem[ea+6]|mem[ea+7])
+	TRACEA("%o: %6o %6o %6o %6o %6o %6o %6o %6o\n", ea, mem[ea], mem[ea+1], mem[ea+2], mem[ea+3], mem[ea+4], mem[ea+5], mem[ea+6], mem[ea+7]);
+  }
 }
 
 
@@ -1675,11 +1710,19 @@ fault: jumping to fault table entry at RP=60013/61212
       fault(POINTERFAULT, ea>>16, iwea);
 #endif
     bit = 0;
-#if 0
+#if 1
     /* CPU.PCL Case 33 shows that the bit field is not stored in the stack frame
-       for a 3-word indirect pointer, even though the E bit remains set */
+       for a 3-word indirect pointer, even though the E bit remains set.
+
+       NOTE: this comment is screwy, and probably reflects a microcode bug on certain
+       machines.  If this code is disabled, the SAC command doesn't work:
+               SAC X JIMMY:PDALURW  sets permission as  JIMMY:PAUW
+
+       NOTE 2: turns out that this code was fetching the bit offset from ea+2 instead
+       of from iwea+2, which could account for lots of weirdness! */
+
     if (ea & EXTMASK32)
-      bit = get16(ea+2) >> 12;
+      bit = get16(iwea+2) >> 12;
 #endif
     TRACE(T_PCL, " After indirect, PCLAP ea = %o/%o, bit=%d\n", ea>>16, ea & 0xFFFF, bit);
   }
@@ -1709,7 +1752,7 @@ fault: jumping to fault table entry at RP=60013/61212
 
 
 pcl (ea_t ecbea) {
-  short i;
+  short i,j;
   unsigned short access;
   unsigned short ecb[9];
   short bit;                  /* bit offset for args */
@@ -1726,8 +1769,9 @@ pcl (ea_t ecbea) {
   pa_t pa;                    /* physical address of ecb */
   unsigned short brsave[6];   /* old PB,SB,LB */
   unsigned short utempa;
-  unsigned short tnstring[500];
-  unsigned short tnlen;
+  unsigned char tnstring[500];
+  unsigned short tnlen, tnword;
+  unsigned char tnchar;
 
 #define FATAL$ MAKEVA(06,0164600)
 #define INIT$3 MAKEVA(013,0174041)
@@ -1878,42 +1922,39 @@ pcl (ea_t ecbea) {
     crs[XL] = 0;
     argt();
 
-#if 0
-    /* do something here to intercept TNOUx calls for user 1, to avoid
-       9600-bps system console issue.  This sort of works, but not all
-       console output is trapped so it gets mixed together.  Trapping
-       tolio$ may work better.  However, that has the problem of not
-       putting characters into the como file.  Could also trap, do
-       printf, let it go into asrbuf, ignore it in devasr.  With a big
-       ASRBUF, this might work fine.  */
+    /* if tracing terminal output, display it now.  This has to occur
+     after ARGT has setup the argument pointers.  Note that if a fault
+     occurs while accessing the arguments here, it will return to ARGT
+     in the main emulator loop and nothing will be logged. */
 
-    if (ecbea == tnou_ea || ecbea == tnoua_ea) {
-      TRACEA(" TNOUx called, ea=%o/%o\n", ecbea>>16, ecbea&0xffff);
+    if (TRACEUSER && ((ecbea & 0xFFFFFFF) == tnou_ea || (ecbea & 0xFFFFFFF) == tnoua_ea)) {
       ea = *(unsigned int *)(crs+SB) + ecb[4];
-      utempa = get16(get32(ea));        /* userid */
-      if (utempa == 1) {
-	ea = ea + 6;
-	tnlen = get16(get32(ea));      /* length in bytes */
-	ea = get32(ea-3);              /* address of string */
-	for (i=0; i<(tnlen+1)/2; i++)
-	  tnstring[i] = get16(ea+i) & 0x7f7f;
-	tnstring[i] = 0;
-	if (ecbea == tnoua_ea) {
-	  printf("%s", tnstring);
-	  fflush(stdout);
-	} else
-	  printf("%s\n", tnstring);
-	prtn();
-	return;
-
-	/* HOWEVER, RP really needs to point to a real PRTN
-	   instruction in case prtn faults.  Right now, RP points to
-	   ARGT.  Maybe use flags in the stackframe header to indicate
-	   that the ARGT should actually prtn instead??
-	*/
+      utempa = get16(get32(ea));       /* 1st arg: userid */
+      if (utempa == ((crs[OWNERL]>>6) & 0xff)) {
+	ea = ea + 6;                   /* 3rd arg: length */
+	tnlen = get16(get32(ea));
+	ea = get32(ea-3);              /* 2nd arg: string */
+	j = 0;
+	for (i=0; i<tnlen; i++) {
+	  if (i & 1)
+	    tnchar = tnword & 0x7f;
+	  else {
+	    tnword = get16(ea+i/2);
+	    tnchar = (tnword >> 8) & 0x7f;
+	  }
+	  if (j > sizeof(tnstring)-5)
+	    j = sizeof(tnstring)-5;
+	  if (tnchar >= ' ' && tnchar < 0177)
+	    tnstring[j++] = tnchar;
+	    else {
+	      sprintf((char *)(tnstring+j), "%03o ", tnchar);
+	      j = j+4;
+	    }
+	}
+	tnstring[j] = 0;
+	TRACE(T_TERM, " TNOUx user %d, len %d: %s\n", utempa, tnlen, tnstring);
       }
     }
-#endif
 
     RPL++;    /* advance real RP past ARGT after argument transfer */
   }
@@ -2476,7 +2517,7 @@ nfy(unsigned short inst) {
   utempl = get32r(ea, 0);     /* get count and BOL */
   scount = utempl>>16;        /* count (signed) */
   bol = utempl & 0xFFFF;      /* beginning of wait list */
-  TRACE(T_PX, "%o/%o: opcode %o %s, ea=%o/%o, count=%d, bol=%o, I am %o\n", RPH, RPL, inst, nfyname[inst-01200], ea>>16, ea&0xFFFF, scount, bol, crs[OWNERL]);
+  TRACE(T_PX, "%o/%o: opcode %o %s, ea=%o/%o, count=%d, bol=%o, I am %o\n", RPH, RPL, inst, nfyname[inst-01210], ea>>16, ea&0xFFFF, scount, bol, crs[OWNERL]);
 
   /* on later models, semaphore overflow should cause a fault */
 
@@ -2581,8 +2622,8 @@ lpsw() {
   }
 #if 0
   /* XXX: hack to disable serial number checking if E32I is enabled.
-     Look for ERA/ANA sequence after illegal shift instruction, set
-     the ANA operand to zero. */
+     Look for ERA/ANA sequence after illegal shift instruction (SSSN),
+     set the ANA operand to zero. */
 
   ea = MAKEVA(014,040747);
   put16(0,ea);
@@ -2591,6 +2632,9 @@ lpsw() {
 
 
 /* Character instructions */
+
+#define GETFLR(n) (((crsl[FLR0+2*(n)] >> 11) & 0x1FFFE0) | (crsl[FLR0+2*(n)] & 0x1F))
+#define PUTFLR(n,v) crsl[FLR0+2*(n)] = (((v) << 11) & 0xFFFF0000) | (crsl[FLR0+2*(n)] & 0xF000) | ((v) & 0x1F);
 
 ldc(n) {
   unsigned int utempl;
@@ -2617,7 +2661,7 @@ ldc(n) {
       //printf(" ldc %d = '%o (%c) from %o/%o right\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
     } else {
       crs[A] = m >> 8;
-      crsl[flr] |= 0x8000;
+      crsl[flr] |= 0x8000;      /* set bit offset */
       TRACE(T_INST, " ldc %d = '%o (%c) from %o/%o left\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
       //printf(" ldc %d = '%o (%c) from %o/%o left\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
     }
@@ -2656,13 +2700,13 @@ stc(n) {
       m = (m & 0xFF00) | (crs[A] & 0xFF);
       put16(m,crsl[far]);
       crsl[flr] &= 0xFFFF0FFF;
-      crsl[far] = (crsl[far] & 0x6FFF0000) | ((crsl[far]+1) & 0xFFFF); \
+      crsl[far] = (crsl[far] & 0x6FFF0000) | ((crsl[far]+1) & 0xFFFF);
     } else {
       TRACE(T_INST, " stc %d = '%o (%c) to %o/%o left\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
       //printf(" stc %d = '%o (%c) to %o/%o left\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
       m = (crs[A] << 8) | (m & 0xFF);
       put16(m,crsl[far]);
-      crsl[flr] |= 0x8000;
+      crsl[flr] |= 0x8000;      /* set bit offset */
     }
     utempl--;
     PUTFLR(n,utempl);
@@ -2740,7 +2784,7 @@ main (int argc, char **argv) {
   int bootskip=0;                      /* skip this many bytes on boot dev */
 
   short tempa,tempa1,tempa2;
-  unsigned short utempa;
+  unsigned short utempa,utempa1,utempa2;
   int templ,templ1,templ2;
   long long templl,templl1, templl2;
   unsigned long long utempll, utempll1, utempll2;
@@ -2834,61 +2878,82 @@ main (int argc, char **argv) {
       domemdump = 1;
     else if (strcmp(argv[i],"-ss") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
-	sscanf(argv[i+1],"%o", &templ);
+	sscanf(argv[++i],"%o", &templ);
 	sswitch = templ;
       } else
 	sswitch = 0;
     } else if (strcmp(argv[i],"-cpuid") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
-	sscanf(argv[i+1],"%d", &templ);
+	sscanf(argv[++i],"%d", &templ);
 	cpuid = templ;
       } else
 	fprintf(stderr,"-cpuid needs an argument\n");
     } else if (strcmp(argv[i],"-tport") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
-	sscanf(argv[i+1],"%d", &templ);
+	sscanf(argv[++i],"%d", &templ);
 	tport = templ;
       } else
 	fprintf(stderr,"-tport needs an argument\n");
     } else if (strcmp(argv[i],"-nport") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
-	sscanf(argv[i+1],"%d", &templ);
+	sscanf(argv[++i],"%d", &templ);
 	nport = templ;
       } else
 	fprintf(stderr,"-nport needs an argument\n");
     } else if (strcmp(argv[i],"-trace") == 0)
       while (i+1 < argc && argv[i+1][0] != '-') {
-	if (strcmp(argv[i+1],"ear") == 0)
-	  traceflags |= TB_EAR;
-	else if (strcmp(argv[i+1],"eav") == 0)
-	  traceflags |= TB_EAV;
-	else if (strcmp(argv[i+1],"eai") == 0)
-	  traceflags |= TB_EAI;
-	else if (strcmp(argv[i+1],"inst") == 0)
-	  traceflags |= TB_INST;
-	else if (strcmp(argv[i+1],"flow") == 0)
-	  traceflags |= TB_FLOW;
-	else if (strcmp(argv[i+1],"mode") == 0)
-	  traceflags |= TB_MODE;
-	else if (strcmp(argv[i+1],"eaap") == 0)
-	  traceflags |= TB_EAAP;
-	else if (strcmp(argv[i+1],"dio") == 0)
-	  traceflags |= TB_DIO;
-	else if (strcmp(argv[i+1],"map") == 0)
-	  traceflags |= TB_MAP;
-	else if (strcmp(argv[i+1],"pcl") == 0)
-	  traceflags |= TB_PCL;
-	else if (strcmp(argv[i+1],"fault") == 0)
-	  traceflags |= TB_FAULT;
-	else if (strcmp(argv[i+1],"px") == 0)
-	  traceflags |= TB_PX;
-	else if (strcmp(argv[i+1],"tio") == 0)
-	  traceflags |= TB_TIO;
-	else if (strcmp(argv[i+1],"all") == 0)
-	  traceflags = ~0;
-	else
-	  fprintf(stderr,"Unrecognized trace flag: %s\n", argv[i+1]);
 	i++;
+	if (strcmp(argv[i],"ear") == 0)
+	  traceflags |= TB_EAR;
+	else if (strcmp(argv[i],"eav") == 0)
+	  traceflags |= TB_EAV;
+	else if (strcmp(argv[i],"eai") == 0)
+	  traceflags |= TB_EAI;
+	else if (strcmp(argv[i],"inst") == 0)
+	  traceflags |= TB_INST;
+	else if (strcmp(argv[i],"flow") == 0)
+	  traceflags |= TB_FLOW;
+	else if (strcmp(argv[i],"mode") == 0)
+	  traceflags |= TB_MODE;
+	else if (strcmp(argv[i],"eaap") == 0)
+	  traceflags |= TB_EAAP;
+	else if (strcmp(argv[i],"dio") == 0)
+	  traceflags |= TB_DIO;
+	else if (strcmp(argv[i],"map") == 0)
+	  traceflags |= TB_MAP;
+	else if (strcmp(argv[i],"pcl") == 0)
+	  traceflags |= TB_PCL;
+	else if (strcmp(argv[i],"fault") == 0)
+	  traceflags |= TB_FAULT;
+	else if (strcmp(argv[i],"px") == 0)
+	  traceflags |= TB_PX;
+	else if (strcmp(argv[i],"tio") == 0)
+	  traceflags |= TB_TIO;
+	else if (strcmp(argv[i],"term") == 0)
+	  traceflags |= TB_TERM;
+	else if (strcmp(argv[i],"all") == 0)
+	  traceflags = ~0;
+	else if (isdigit(argv[i][0]) && strlen(argv[i]) < 2 && sscanf(argv[i],"%d", &templ) == 1)
+	  traceuser = 0100000 | (templ<<6);   /* form OWNERL for user # */
+	else if (strlen(argv[i]) == 6 && sscanf(argv[i],"%o", &templ) == 1)
+	  traceuser = templ;                  /* specify OWNERL directly */
+	else if (strlen(argv[i]) <= 8 && argv[i][0] != '-') {
+	  if (numtraceprocs >= MAXTRACEPROCS)
+	    fprintf(stderr,"Only %d trace procs are allowed\n", MAXTRACEPROCS);
+	  else {
+	    traceprocs[numtraceprocs].oneshot = 1;
+	    for (j=0; argv[i][j]; j++)
+	      if (argv[i][j] == '+')
+		traceprocs[numtraceprocs].oneshot = 0;
+	      else
+		traceprocs[numtraceprocs].name[j] = argv[i][j];
+	    traceprocs[numtraceprocs].name[j] = 0;
+	    traceprocs[numtraceprocs].sb = -1;
+	    traceprocs[numtraceprocs].ecb = 0;
+	    numtraceprocs++;
+	  }
+	} else
+	  fprintf(stderr,"Unrecognized trace flag: %s\n", argv[i]);
       }
     else if (strcmp(argv[i],"-boot") == 0) {
       boot = 1;
@@ -2900,10 +2965,31 @@ main (int argc, char **argv) {
 	  bootarg = argv[i];
       }
 
-    } else if (argv[i][0] == '-' && argv[i][1] == '-')
+    } else
       fprintf(stderr,"Unrecognized argument: %s\n", argv[i]);
   }
 
+  /* finish setting up tracing after all options are read, ie, maps */
+
+  if (traceuser != 0)
+    TRACEA("Tracing enabled for OWNERL %o\n", traceuser);
+  else
+    TRACEA("Tracing enabled for all users");
+  savetraceflags = traceflags;
+  for (i=0; i<numtraceprocs; i++) {
+    for (j=0; j<numsyms; j++) {
+      if (strcasecmp(mapsym[j].symname, traceprocs[i].name) == 0 && mapsym[j].symtype == 'e') {
+	ea = mapsym[j].address;
+	traceprocs[i].ecb = ea;
+	TRACEA("Tracing procedure %s ecb ea '%o/%o\n", traceprocs[i].name, SEGNO(ea), ea&0xFFFF);
+	printf("Tracing procedure %s ecb ea '%o/%o\n", traceprocs[i].name, SEGNO(ea), ea&0xFFFF);
+	break;
+      }
+    }
+    if (j == numsyms)
+      fprintf(stderr,"Can't find procedure %s in load maps for tracing.\n", traceprocs[i].name);
+  }
+    
   /* set some vars after the options have been read */
 
   pmap32bits = (cpuid == 15 || cpuid == 18 || cpuid == 19 || cpuid == 24 || cpuid >= 26);
@@ -3039,8 +3125,7 @@ For disk boots, the last 3 digits can be:\n\
   newkeys(rvec[6]);
   RPL = rvec[2];
 
-  if (domemdump)
-    memdump(rvec[0], rvec[1]);
+  memdump(rvec[0], rvec[1]);
 
   /* initialize the timer stuff */
 
@@ -3049,13 +3134,8 @@ For disk boots, the last 3 digits can be:\n\
     fatal(NULL);
   }
 
-  /* main instruction decode loop */
-
-  trapaddr = 0144003;
-  trapvalue = -12345;
-  trapaddr = 0;
-
-  /* faults longjmp here: the top of the instruction fetch loop */
+  /* main instruction decode loop
+     faults longjmp here: the top of the instruction fetch loop */
 
   if (setjmp(jmpbuf))
     ;
@@ -3063,9 +3143,27 @@ For disk boots, the last 3 digits can be:\n\
   while (1) {
 
 #if 0
+    /* trace AC$SET call not working
+
+       NOTE: a 2-word range is needed for RPL because a procedure with
+       arguments may start executing at the ARGT instruction (listed
+       in the load map as procedure start), or at the instruction
+       following ARGT (if PCL completes w/o faults) */
+
+    if (TRACEUSER && SEGNO16(RPH) == 041 && 06200 <= RPL && RPL <= 06201) { /* ac$set */
+      savetraceflags = ~TB_MAP;
+      printf("enable trace, RPH=%o, RPL=%o\n", SEGNO16(RPH), RPL);
+    }
+    if (TRACEUSER && SEGNO16(RPH) == 013 && 044030 <= RPL && RPL <= 044031) { /* setrc$ */
+      savetraceflags = 0;
+      printf("disable trace, RPH=%o, RPL=%o\n", SEGNO16(RPH), RPL);
+    }
+#endif
+
+#if 0
     /* this is for FTN Generic 3 trace */
-    if (crs[OWNERL] == 0100100 && RPL >= 034750 && RPL <= 034760)
-      traceflags = -1;
+    if (SEGNO16(RPH) == 4000 && RPL >= 034750 && RPL <= 034760)
+      traceflags = ~TB_MAP;
     else
       traceflags = 0;
 #endif
@@ -3073,20 +3171,6 @@ For disk boots, the last 3 digits can be:\n\
 #if 0
     if (instcount > 77500000)
       traceflags = ~TB_MAP;
-#endif
-
-#if 0
-    if (traceflags != 0)
-      savetraceflags = traceflags;
-#endif
-
-#if 1
-    if (traceflags != 0)
-      savetraceflags = traceflags;
-    if (crs[OWNERL] == 0100200 && savetraceflags)
-      traceflags = savetraceflags;
-    else
-      traceflags = 0;
 #endif
 
 #if 0
@@ -3104,6 +3188,13 @@ For disk boots, the last 3 digits can be:\n\
       }
     }
 #endif
+
+    /* is this user being traced? */
+
+    if (TRACEUSER)
+      traceflags = savetraceflags;
+    else
+      traceflags = 0;
 
     /* poll any devices that requested a poll */
 
@@ -3216,8 +3307,17 @@ For disk boots, the last 3 digits can be:\n\
 xec:
     /* NOTE: don't trace JMP * instructions (used to test PX) */
 
+#if 0
     if (inst == 03777)
       traceflags = 0;
+#endif
+
+#if 0
+    if (crs[OWNERL] == 0100200 && inst == 001114 && savetraceflags)
+      traceflags = ~0;
+    else
+      traceflags = 0;
+#endif
 
     TRACE(T_FLOW, "\n			#%u [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%:0d B='%o/%d L='%o/%d E='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d K=%o M=%o\n", instcount, searchloadmap(*(unsigned int *)(crs+OWNER),'x'), crs[OWNERL], *(short *)(crs+TIMER), crs[SBH], crs[SBL], crs[LBH], crs[LBL], searchloadmap(*(unsigned int *)(crs+LBH),'l'), crs[XBH], crs[XBL], RPH, RPL-1, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), *(unsigned int *)(crs+L), *(int *)(crs+L), *(unsigned int *)(crs+E), *(int *)(crs+E), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&020000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, crs[KEYS], crs[MODALS]);
 
@@ -3313,7 +3413,7 @@ xec:
 	  ea = apea(&eabit);
 	  crsl[FAR0] = ea;
 	  crsl[FLR0] = (crsl[FLR0] & 0xFFFF0FFF) | (eabit << 12);
-	  TRACE(T_INST, " FAR0=%o, eabit=%d, FLR=%x\n", crsl[FAR0], eabit, crsl[FLR0]);
+	  TRACE(T_INST, " FAR0=%o/%o, eabit=%d, FLR=%x\n", crsl[FAR0]>>16, crsl[FAR0]&0xFFFF, eabit, crsl[FLR0]);
 	  continue;
 
 	case 001310:
@@ -3321,25 +3421,27 @@ xec:
 	  ea = apea(&eabit);
 	  crsl[FAR1] = ea;
 	  crsl[FLR1] = (crsl[FLR1] & 0xFFFF0FFF) | (eabit << 12);
-	  TRACE(T_INST, " FAR1=%o, eabit=%d, FLR=%x\n", crsl[FAR1], eabit, crsl[FLR1]);
+	  TRACE(T_INST, " FAR1=%o/%o, eabit=%d, FLR=%x\n", crsl[FAR1]>>16, crsl[FAR1]&0xFFFF, eabit, crsl[FLR1]);
 	  continue;
 
 	case 001301:
 	  TRACE(T_FLOW, " ALFA 0\n");
-	  TRACE(T_INST, " before add, FAR0=%o, FLR=%o\n", crsl[FAR0], crsl[FLR0]);
+	  TRACE(T_INST, " before add, FAR0=%o/%o, FLR=%o\n", crsl[FAR0]>>16, crsl[FAR0]&0xFFFF, crsl[FLR0]);
 	  utempl = ((crsl[FAR0] & 0xFFFF) << 4) | ((crsl[FLR0] >> 12) & 0xF);
 	  utempl += *(int *)(crs+L);
 	  crsl[FAR0] = (crsl[FAR0] & 0xFFFF0000) | ((utempl >> 4) & 0xFFFF);
 	  crsl[FLR0] = (crsl[FLR0] & 0xFFFF0FFF) | ((utempl & 0xF) << 12);
-	  TRACE(T_INST, " after add, FAR0=%o, FLR=%o\n", crsl[FAR0], crsl[FLR0]);
+	  TRACE(T_INST, " after add, FAR0=%o/%o, FLR=%o\n", crsl[FAR0]>>16, crsl[FAR0]&0xFFFF, crsl[FLR0]);
 	  continue;
 
 	case 001311:
 	  TRACE(T_FLOW, " ALFA 1\n");
+	  TRACE(T_INST, " before add, FAR1=%o/%o, FLR=%o\n", crsl[FAR1]>>16, crsl[FAR1]&0xFFFF, crsl[FLR1]);
 	  utempl = ((crsl[FAR1] & 0xFFFF) << 4) | ((crsl[FLR1] >> 12) & 0xF);
 	  utempl += *(int *)(crs+L);
 	  crsl[FAR1] = (crsl[FAR1] & 0xFFFF0000) | ((utempl >> 4) & 0xFFFF);
 	  crsl[FLR1] = (crsl[FLR1] & 0xFFFF0FFF) | ((utempl & 0xF) << 12);
+	  TRACE(T_INST, " after add, FAR1=%o/%o, FLR=%o\n", crsl[FAR1]>>16, crsl[FAR1]&0xFFFF, crsl[FLR1]);
 	  continue;
 
 	case 001303:
@@ -3433,6 +3535,19 @@ stfa:
 	case 000611:
 	  TRACE(T_FLOW, " PRTN\n");
 	  prtn();
+
+	  /* if this PRTN is for a procedure being traced, disable
+	     tracing if one-shot is true */
+
+	  if (numtraceprocs > 0 && TRACEUSER)
+	    for (i=0; i<numtraceprocs; i++)
+	      if (*(int *)(crs+SB) == traceprocs[i].sb) {
+		printf("Disabled trace for %s at sb '%o/%o\n", traceprocs[i].name, crs[SBH], crs[SBL]);
+		savetraceflags = 0;
+		traceprocs[i].sb = -1;
+		fflush(tracefile);
+		break;
+	      }
 	  continue;
 
 	case 001005:
@@ -5867,6 +5982,15 @@ keys = 14200, modals=100177
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	//traceflags = ~TB_MAP;
 	//TRACE(T_FLOW|T_PCL, "#%d %o/%o: PCL %o/%o\n", instcount, RPH, RPL-2, ea>>16, ea&0xFFFF);
+	if (numtraceprocs > 0 && TRACEUSER)
+	  for (i=0; i<numtraceprocs; i++)
+	    if (traceprocs[i].ecb == (ea & 0xFFFFFFF) && traceprocs[i].sb == -1) {
+	      traceflags = ~TB_MAP;
+	      savetraceflags = traceflags;
+	      traceprocs[i].sb = *(int *)(crs+SB);
+	      printf("Enabled trace for %s at sb '%o/%o\n", traceprocs[i].name, crs[SBH], crs[SBL]);
+	      break;
+	    }
 	TRACE(T_FLOW|T_PCL, " PCL %s\n", searchloadmap(ea, 'e'));
 	pcl(ea);
       } else {
@@ -6974,7 +7098,7 @@ pio(unsigned int inst) {
     printf("pio: no handler, class=%d, func='%o, device='%o, A='%o\n", class, func, device, crs[A]);
     fatal(NULL);
 #else
-    TRACEA(, "pio: no handler, class=%d, func='%o, device='%o, A='%o\n", class, func, device, crs[A]);
+    TRACEA("pio: no handler, class=%d, func='%o, device='%o, A='%o\n", class, func, device, crs[A]);
 #endif
   }
 }

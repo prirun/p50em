@@ -55,6 +55,17 @@
 #define TIMERH 48
 #define TIMERL 49
 
+/* I-mode offsets for 16-bit access to registers, eg, crs[GR0H] */
+
+#define GR0H 0
+#define GR1H 2
+#define GR2H 4
+#define GR3H 6
+#define GR4H 8
+#define GR5H 10
+#define GR6H 12
+#define GR7H 14
+
 /* these are 32-bit offsets into crsl (current register set long) */
 
 #define GR0 0
