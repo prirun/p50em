@@ -3737,6 +3737,7 @@ stfa:
 	    zspace = 040;
 	  TRACE(T_INST, "ZMV: source=%o/%o, len=%d, dest=%o/%o, len=%d, keys=%o\n", crsl[FAR0]>>16, crsl[FAR0]&0xffff, GETFLR(0), crsl[FAR1]>>16, crsl[FAR1]&0xffff, GETFLR(1), crs[KEYS]);
 
+#if 1
 	  zlen1 = GETFLR(0);
 	  zlen2 = GETFLR(1);
 	  zea1 = crsl[FAR0];
@@ -3756,7 +3757,19 @@ stfa:
 	    TRACE(T_INST, " zch1=%o (%c)\n", zch1, zch1&0x7f);
 	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
 	  }
-	  crs[KEYS] |= 0100;
+#else
+	  /* this should work, but emacs explore "dive" (P) breaks */
+	  utempa = crs[A];
+	  utempa2 = crs[KEYS];
+	  do {
+	    ldc(0);
+	    if (crs[KEYS] & 0100)
+	      crs[A] = zspace;
+	    stc(1);
+	  } while (!(crs[KEYS] & 0100));
+	  crs[A] = utempa;
+	  crs[KEYS] = utempa2;
+#endif
 	  continue;
 
 	case 001115:
