@@ -389,8 +389,9 @@ unsigned short amask;                /* address mask */
 #define RINGMASK16  0x6000           /* ring bits */
 #define EXTMASK16   0x1000           /* E-bit */
 
-#define DTAR(ea) (((ea)>>26) & 3)
-#define SEGNO(ea) (((ea)>>16) & 07777)
+#define DTAR32(ea) (((ea)>>26) & 3)
+#define SEGNO32(ea) (((ea)>>16) & 07777)
+#define SEGNO16(ea) ((ea) & 07777)
 #define PAGENO(ea) (((ea)>>10) & 077)
 
 
@@ -548,7 +549,7 @@ char *searchloadmap(int addr, char type) {
   static char buf[MAXBUFIX][100];
   static int bufix=-1;
 
-  if ((SEGNO(addr) <= 01777 | SEGNO(addr) >= 06000) &&
+  if ((SEGNO32(addr) <= 01777 | SEGNO32(addr) >= 06000) &&
       (ix = findsym(addr, type)) > 0) {
     diff = addr - mapsym[ix].address;
     if (diff) {
@@ -604,7 +605,7 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
   unsigned int dtar,sdw,staddr,ptaddr,pmaddr,ppn;
   pa_t pa;
 
-  seg = SEGNO(ea);
+  seg = SEGNO32(ea);
   ring = ((rp | ea) >> 29) & 3;  /* current ring | ea ring = access ring */
 
   if ((seg > 0 && (crs[MODALS] & 4)) || (seg == 0 && (crs[MODALS] & 020))) {
@@ -620,7 +621,7 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
        then the STLB has to be loaded first */
 
     if (!stlbp->valid || stlbp->seg != seg || (seg >= 04000 && stlbp->procid != crs[OWNERL])) {
-      dtar = *(unsigned int *)(crs+DTAR0-2*DTAR(ea));  /* get dtar register */
+      dtar = *(unsigned int *)(crs+DTAR0-2*DTAR32(ea));  /* get dtar register */
       nsegs = 1024-(dtar>>22);
       relseg = seg & 0x3FF;     /* segment within segment table */
       TRACE(T_MAP, "   MAP: ea=%o/%o, seg=%o, dtar=%o, nsegs=%d, relseg=%d, page=%d\n", ea>>16, ea&0xFFFF, seg, dtar, nsegs, relseg, PAGENO(ea));
@@ -2981,8 +2982,8 @@ main (int argc, char **argv) {
       if (strcasecmp(mapsym[j].symname, traceprocs[i].name) == 0 && mapsym[j].symtype == 'e') {
 	ea = mapsym[j].address;
 	traceprocs[i].ecb = ea;
-	TRACEA("Tracing procedure %s ecb ea '%o/%o\n", traceprocs[i].name, SEGNO(ea), ea&0xFFFF);
-	printf("Tracing procedure %s ecb ea '%o/%o\n", traceprocs[i].name, SEGNO(ea), ea&0xFFFF);
+	TRACEA("Tracing procedure %s ecb ea '%o/%o\n", traceprocs[i].name, SEGNO32(ea), ea&0xFFFF);
+	printf("Tracing procedure %s ecb ea '%o/%o\n", traceprocs[i].name, SEGNO32(ea), ea&0xFFFF);
 	break;
       }
     }
