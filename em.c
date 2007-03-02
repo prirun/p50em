@@ -760,7 +760,7 @@ double get64r(ea_t ea, ea_t rpring) {
    Ring 0.  I tried using get64 (with appropriate mask changes) and
    performance was much worse than not prefetching at all on a G4 */
 
-#if 0
+#if 1
 inline unsigned short iget16(ea_t ea) {
   static ea_t eafirst = -1;             /* ea of instruction buffer */
   static unsigned short insts[2];       /* instruction buffer */
@@ -1711,7 +1711,7 @@ fault: jumping to fault table entry at RP=60013/61212
       fault(POINTERFAULT, ea>>16, iwea);
 #endif
     bit = 0;
-#if 1
+
     /* CPU.PCL Case 33 shows that the bit field is not stored in the stack frame
        for a 3-word indirect pointer, even though the E bit remains set.
 
@@ -1724,7 +1724,6 @@ fault: jumping to fault table entry at RP=60013/61212
 
     if (ea & EXTMASK32)
       bit = get16(iwea+2) >> 12;
-#endif
     TRACE(T_PCL, " After indirect, PCLAP ea = %o/%o, bit=%d\n", ea>>16, ea & 0xFFFF, bit);
   }
 
@@ -2436,19 +2435,8 @@ pwait() {
   TRACE(T_PX, " wait list count was %d, bol was %o\n", count, bol);
   count++;
   if (count > 0) {      /* I have to wait */
-#if 1
     if (count == 1 && bol != 0)
       fatal("WAIT: count == 1 but bol != 0");
-#else
-    /* NOTE: hack to fix:
-
-CFatal error: instruction #81929908 at 6/54311: 315 4400
-WAIT: count == 1 but bol != 0
-keys = 14200, modals=137
-    */
-    if (count == 1)
-      bol = 0;
-#endif
     if (count > 1 && bol == 0)
       fatal("WAIT: count > 1 but bol == 0");
     if (regs.sym.pcba == 0)
@@ -2508,12 +2496,10 @@ nfy(unsigned short inst) {
 
   resched = 0;
   begend = inst & 1;
-#if 1
   if (regs.sym.pcba != crs[OWNERL]) {
     printf("NFY: regs.pcba = %o, but crs[OWNERL] = %o\n", regs.sym.pcba, crs[OWNERL]);
     fatal(NULL);
   }
-#endif
   ea = apea(NULL);
   utempl = get32r(ea, 0);     /* get count and BOL */
   scount = utempl>>16;        /* count (signed) */
@@ -3420,11 +3406,7 @@ xec:
 	case 001300:
 	  TRACE(T_FLOW, " EAFA 0\n");
 	  ea = apea(&eabit);
-#if 1
 	  crsl[FAR0] = ea & 0x6FFFFFFF;
-#else
-	  crsl[FAR0] = ea;
-#endif
 	  crsl[FLR0] = (crsl[FLR0] & 0xFFFF0FFF) | (eabit << 12);
 	  TRACE(T_INST, " FAR0=%o/%o, eabit=%d, FLR=%x\n", crsl[FAR0]>>16, crsl[FAR0]&0xFFFF, eabit, crsl[FLR0]);
 	  continue;
@@ -3432,11 +3414,7 @@ xec:
 	case 001310:
 	  TRACE(T_FLOW, " EAFA 1\n");
 	  ea = apea(&eabit);
-#if 1
 	  crsl[FAR1] = ea & 0x6FFFFFFF;
-#else
-	  crsl[FAR1] = ea;
-#endif
 	  crsl[FLR1] = (crsl[FLR1] & 0xFFFF0FFF) | (eabit << 12);
 	  TRACE(T_INST, " FAR1=%o/%o, eabit=%d, FLR=%x\n", crsl[FAR1]>>16, crsl[FAR1]&0xFFFF, eabit, crsl[FLR1]);
 	  continue;
@@ -3709,15 +3687,7 @@ stfa:
   zlen--
 
 #if 1
-	  /* if the high-speed code is enabled & eafa masks the far:
-	     Primos wont' start:
-		  368K bytes wired.
-		  System clock has been initialized.
-
-		  Error: condition "RESTRICTED_INST$" raised at 41(3)/151750.
-		  ER! 
-
-	     if the high-speed code is enabled, and eafa doesn't mask the far,
+	  /* if the high-speed code is enabled, and eafa doesn't mask the far,
 	     Primos boots but emacs fails badly:
 	     1. garbage display on the mode line
 	     2. ^x^f won't load a file (filename is off by one character)
@@ -3727,7 +3697,8 @@ stfa:
 	     boots and emacs mostly works except:
              1. explore P command (dive) doesn't work
 
-	     if the Prime UII library is used instead, these all work :(
+	     if the Prime UII library is used, which is identical to the medium
+	     speed loop as far as I can tell, everything works. ??  :(
 	  */
 
 	case 001114:
@@ -3758,9 +3729,9 @@ stfa:
 	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
 	  }
 #else
-	  /* this should work, but emacs explore "dive" (P) breaks */
+	  /* this should work, but emacs explore "dive" (P) breaks :( */
 	  utempa = crs[A];
-	  utempa2 = crs[KEYS];
+	  utempa1 = crs[KEYS];   /* UII does this because of fault */
 	  do {
 	    ldc(0);
 	    if (crs[KEYS] & 0100)
@@ -3768,7 +3739,7 @@ stfa:
 	    stc(1);
 	  } while (!(crs[KEYS] & 0100));
 	  crs[A] = utempa;
-	  crs[KEYS] = utempa2;
+	  crs[KEYS] = utempa1;
 #endif
 	  continue;
 
@@ -3790,7 +3761,6 @@ stfa:
 	    TRACE(T_INST, " zch1=%o (%c)\n", zch1, zch1&0x7f);
 	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
 	  }
-	  crs[KEYS] |= 0100;
 	  continue;
 
 	/* NOTE: ZFIL is used early after PX enabled, and can be used to cause
@@ -3813,7 +3783,6 @@ stfa:
 	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch2);
 	    //printf(" after put, zlen2=%d, zcp2=%x, zclen2=%d, zch2=%o\n", zlen2, zcp2, zclen2, zch2);
 	  }
-	  crs[KEYS] |= 0100;
 	  continue;
 
 	case 001117:
@@ -3997,14 +3966,7 @@ stfa:
 
 	case 001702:
 	  TRACE(T_FLOW, " 1702?\n", inst);
-#if 1
 	  fatal("Primos software assertion failure");
-#else
-	  RESTRICT();
-	  //fault(UIIFAULT, RPL, RP);
-	  traceflags = ~TB_MAP;
-	  dispatcher();
-#endif
 	  continue;
 
 	case 000601:
@@ -4647,24 +4609,13 @@ a1a:
 
 	case 0140214:
 	  TRACE(T_FLOW, " CAZ\n");
-#if 1
+	  /* set keys like CAS =0 would (subtract) */
 	  crs[KEYS] = (crs[KEYS] & ~0100) | 020200;   /* clear EQ, set L, LT */
-	  if (crs[A] == 0) {                  /* set EQ? */
+	  if (crs[A] == 0) {                  /* if zero, set EQ*/
 	    crs[KEYS] |= 0100; 
 	    RPL++;
 	  } else if (*(short *)(crs+A) < 0)
 	    RPL += 2;
-#else
-	  crs[KEYS] &= ~020300;               /* clear L, LT, EQ */
-	  if (*(short *)(crs+A) < 0) {        /* A < 0? */
-	    crs[KEYS] |= 0200;                /* yes, set LT */
-	    RPL += 2;                         /* skip */
-	  } else if (crs[A] == 0) {           /* A == 0? */
-	    crs[KEYS] |= 0100;                /* yes, set EQ */
-	    RPL++;                            /* skip */
-	  }                                   /* else, A > 0 */
-	  XSETL(0);
-#endif
 	  continue;
 
 	/* NOTE: using "if (crs[X]++ == 0)" doesn't work because of
@@ -6469,7 +6420,13 @@ keys = 14200, modals=100177
       utempa = ea;                 /* word number portion only */
       if (utempa & 040000) {       /* absolute RF addressing */
 	RESTRICT();
-	*(int *)(crs+L) = regs.s32[utempa & 0377];
+	utempa &= 0377;
+	if (utempa == 020)
+	  *(int *)(crs+L) = 1;
+	else if (utempa == 024)
+	  *(int *)(crs+L) = -1;
+	else
+	  *(int *)(crs+L) = regs.s32[utempa];
       } else {
 	utempa &= 037;
 	if (utempa > 017) RESTRICT();
