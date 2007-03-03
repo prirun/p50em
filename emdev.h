@@ -386,9 +386,11 @@ readasr:
 	if (ch == '') {
 	  if (savetraceflags == 0) {
 	    TRACEA("\nTRACE ENABLED:\n\n");
-	    savetraceflags = ~TB_MAP;;
+	    savetraceflags = ~TB_MAP;
+	    savetraceflags = ~0;
 	  } else {
 	    TRACEA("\nTRACE DISABLED:\n\n");
+	    dumpsegs();
 	    savetraceflags = 0;
 	  }
 	  fflush(tracefile);

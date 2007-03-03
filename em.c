@@ -23,7 +23,8 @@
 
    NOTE: the -map command is optional, but is needed to set the
    real-time clock automatically.  If not available, use the Primos SE
-   command to set the clock manually after the system boots.
+   command to set the clock manually after the system boots:
+      SE -MMDDYY HHMM
 
    -------------
    Usage:  (to load and start an R-mode runfile directly from the Unix FS)
@@ -397,11 +398,13 @@ unsigned short amask;                /* address mask */
 
 /* Fault/interrupt vectors */
 
+#define FIRSTFAULT    062
 #define RESTRICTFAULT 062
 #define PROCESSFAULT  063
 #define PAGEFAULT     064
 #define SVCFAULT      065
 #define UIIFAULT      066
+#define SEMFAULT      067   /* note duplicate w/parity */
 #define PARITYCHECK   067
 #define MACHCHECK     070
 #define MISSMEMCHECK  071
@@ -411,6 +414,7 @@ unsigned short amask;                /* address mask */
 #define STACKFAULT    075
 #define SEGFAULT      076
 #define POINTERFAULT  077
+#define LASTFAULT     077
 
 ea_t tnoua_ea=0, tnou_ea=0;
 int verbose;                         /* -v (not used anymore) */
@@ -678,11 +682,17 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
 
 
 /* these are shorthand macros for get/put that use the current program
-   counter - the typical usage */
+   counter - the typical usage - or Ring 0, the other typical case
+   The other places the ring field is important are PCL (ring may be
+   changing) and queue instructions (user process usescurrent ring, while
+   device controllers use Ring 0 (physical queues) */
 
 #define get16(ea) (get16r((ea),RP))
+#define get16r0(ea) (get16r((ea),0))
 #define get32(ea) (get32r((ea),RP))
+#define get32r0(ea) (get32r((ea),0))
 #define get64(ea) (get64r((ea),RP))
+#define get64r0(ea) (get64r((ea),0))
 #define put16(value, ea) (put16r((value),(ea),RP))
 #define put32(value, ea) (put32r((value),(ea),RP))
 #define put64(value, ea) (put64r((value),(ea),RP))
@@ -887,9 +897,13 @@ void calf(ea_t ea) {
   csea = MAKEVA(crs[OWNERH]+csoffset, this);
   TRACE(T_FAULT,"CALF: cs frame is at %o/%o\n", csea>>16, csea&0xFFFF);
 
-  /* make sure ecb specifies zero arguments */
+  /* make sure ecb specifies zero arguments 
+     NOTE: this check needs get16r too because in Rev 19, segment 5
+     only has gate access and this read caused an access fault when an
+     R-mode I/O instruction occurs under Primos (causing a restricted
+     inst fault that is handled in the outer ring). */
 
-  if (get16(ea+5) !=0) {
+  if (get16r(ea+5, 0) != 0) {
     printf("CALF ecb at %o/%o has arguments!\n", ea>>16, ea&0xFFFF);
     fatal(NULL);
   }
@@ -953,6 +967,9 @@ newkeys (unsigned short new) {
 }
 
 void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
+  static unsigned char faultname[LASTFAULT-FIRSTFAULT+2][4] = 
+    {"RXM", "PRC", "PAG", "SVC", "UII", "SEM", "MCK", "MM", "ILL", "ACC", "ARI", "STK", "SEG", "PTR", "-?-"};
+  unsigned char *faultnamep;
   ea_t pcbp, pxfvec, csea, ea;
   unsigned short first, next, last;
   unsigned short m;
@@ -960,6 +977,9 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
   int i,namlen;
   unsigned short name[128];
   ea_t faultrp;
+
+  /* NOTE: Prime Hackers Guide says RP is backed for SVC fault, other
+     docs say it is current */
 
   if (fvec == PROCESSFAULT || fvec == SVCFAULT || fvec == ARITHFAULT)
     faultrp = RP;
@@ -973,12 +993,16 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
   crs[FCODE] = fcode;
   *(unsigned int *)(crs+FADDR) = faddr;
   
-  TRACE(T_FAULT, "#%d: fault '%o, fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", instcount, fvec, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
+  if (FIRSTFAULT <= fvec && fvec <= LASTFAULT)
+    faultnamep = faultname[fvec-FIRSTFAULT];
+  else
+    faultnamep = faultname[LASTFAULT-FIRSTFAULT+1];
+  TRACE(T_FAULT, "#%d: fault '%o (%s), fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", instcount, fvec, faultnamep, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
 
   if (crs[MODALS] & 010) {   /* process exchange is enabled */
     ring = (RPH>>13) & 3;                     /* save current ring */
     pcbp = *(ea_t *)(crs+OWNER);
-    if (fvec == PROCESSFAULT || fvec == ACCESSFAULT || fvec == STACKFAULT || fvec == SEGFAULT)
+    if (fvec == PROCESSFAULT || fvec == SEMFAULT || fvec == ACCESSFAULT || fvec == STACKFAULT || fvec == SEGFAULT)
       pxfvec = get32r(pcbp+PCBFVR0,0);        /* use R0 handler */
     else if (fvec == PAGEFAULT)
       pxfvec = get32r(pcbp+PCBFVPF,0);        /* use page fault handler, also R0 */
@@ -1438,6 +1462,7 @@ dumpsegs() {
   unsigned short pte,xxx;
   unsigned int dtar,staddr,sdw,ptaddr,pmaddr;
 
+  TRACEA("\nSEGMENT TABLE DUMP:\n");
   for (i=0; i<4; i++) {
     dtar = *(unsigned int *)(crs+DTAR0-2*i);  /* get dtar register */
     nsegs = 1024-(dtar>>22);
@@ -4192,7 +4217,7 @@ irtn:
 	    continue;
 
 	  if (001100 <= inst && inst <= 001146) {
-	    savetraceflags = ~TB_MAP;
+	    //savetraceflags = ~TB_MAP;
 	    TRACE(T_FLOW, " X/Z UII %o\n", inst);
 	    fault(UIIFAULT, RPL, RP);
 	    continue;
