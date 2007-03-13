@@ -1,6 +1,7 @@
-/* emdev.h, Jim Wilcoxson, April 17, 2005
+/* emdev.h, Jim Wilcoxson (prirun@gmail.com), April 17, 2005
    Device handlers for pio instructions.  Use devnull as a template for
    new handlers.
+
    NOTES:
 
    OCP instructions never skip
@@ -31,11 +32,11 @@
    '23 = disk #4
    '24 = disk (was Writable Control Store)
    '25 = disk (was 4000 disk controller)
-   '26 = 1st disk controller
-   '27 = 2nd disk controller
+   '26 = #1 disk controller
+   '27 = #2 disk controller
    '30-32 = BPIOC #1-3 (RTOS User Guide, A-1)
    '32 = AMLC #8 or ICS1
-   '33 = #1 Versatec (verdim)
+   '33 = #1 Versatec
    '34 = #2 Versatec
    '35 = #4 AMLC or ICS1
    '36-37 = ELFBUS #1 & 2 (ICS1 #1, ICS1 #2)
@@ -47,7 +48,7 @@
    '45 = disk (was D/A converter type 6060 (analog output) - obsolete)
    '46 = disk
    '47 = #2 PNC
-   '50 = #1 HSSMLC/MDLC (cs/slcdim.pma)
+   '50 = #1 HSSMLC/MDLC (synchronous comm)
    '51 = #2 HSSMLC/MDLC
    '52 = #3 AMLC or ICS1
    '53 = #2 AMLC 
@@ -75,6 +76,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <time.h>
+#include <sys/file.h>
 
 /* this macro is used when I/O is successful.  In VI modes, it sets
    the EQ condition code bit.  In SR modes, it does a skip */
@@ -87,14 +89,14 @@
 
 /* this macro is used to decide whether blocking should be enabled for
    an I/O operation.  The rules are:
-   - if process exchange is enabled, I/O can never block (check modals)
+   - if process exchange is disabled then it's safe to block
    - if the instruction (assumed to be I/O) is followed by JMP *-1 (SR
      modes) or BCNE *-2 (VI modes), then it's okay to block
 */
 
 #if 1
 #define BLOCKIO \
-  (!(crs[MODALS] & 010) && (get16(RP) == 03776 || (get16(RP) == 0141603 && get16(RP+1) == RPL-2)))
+  (!(crs[MODALS] & 010) && (iget16(RP) == 03776 || (iget16(RP) == 0141603 && iget16(RP+1) == RPL-2)))
 #else
 #define BLOCKIO 0
 #endif
@@ -181,7 +183,7 @@ int devnone (int class, int func, int device) {
     break;
   }
   if (!seen[device])
-    fprintf(stderr, " unimplemented device '%o\n", device);
+    fprintf(stderr, " pio to unimplemented device '%o, class '%o, func '%o\n", device, class, func);
   seen[device] = 1;
 }
 
@@ -189,10 +191,11 @@ int devnone (int class, int func, int device) {
 /* Device '4: system console
 
    NOTES:
+   - this driver only implements the basic needs of the system console
    - needs to reset tty attributes when emulator shuts down
    - Primos only handles ASRATE 110 (10cps), 1010 (30cps), 3410 (960 cps)
    - input ID is wrong, causes OCP '0477 on clock interrupt
-   - instruction counters on output are bogus, need to intercept TNOUA instead
+   - issues with setting blocking flags & terminal attributes: doesn't block
 
    OCP '0004 = initialize for input only, echoplex, 110 baud, 8-bit, no parity
    OCP '0104 = same, but for output only
@@ -255,15 +258,15 @@ int devasr (int class, int func, int device) {
   static int ttydev;
   static int ttyflags;
   static int needflush;     /* true if data has been written but not flushed */
-  static int atbol=1;       /* true if cursor is at bol */
-  static int atnewl=1;      /* true if cursor is on a blank line */
   static struct termios terminfo;
   static fd_set fds;
   struct timeval timeout;
   unsigned char ch;
   int newflags;
   int n;
+  int doblock;
 
+  doblock = BLOCKIO;
 
   switch (class) {
 
@@ -284,8 +287,8 @@ int devasr (int class, int func, int device) {
       fatal(NULL);
     }
 
-    /* NOTE: some of these are not restored after the emulator
-       is suspended (VSUSP) then restarted, eg, the VSUSP and
+    /* NOTE: some of these are not restored by the host OS after the
+       emulator is suspended (VSUSP) then restarted, eg, the VSUSP and
        VINTR characters */
 
     terminfo.c_iflag &= ~(INLCR | ICRNL);
@@ -321,7 +324,10 @@ int devasr (int class, int func, int device) {
     TRACE(T_INST, " SKS '%02o%02o\n", func, device);
 
     if (func == 6) {               /* skip if room for a character */
-      timeout.tv_sec = 0;
+      if (crs[MODALS] & 010)       /* PX enabled? */
+	timeout.tv_sec = 0;        /* yes, can't delay */
+      else
+	timeout.tv_sec = 1;        /* single user: okay to delay */
       timeout.tv_usec = 0;
       FD_SET(ttydev, &fds);
       n = select(ttydev+1, NULL, &fds, NULL, &timeout);
@@ -358,7 +364,8 @@ int devasr (int class, int func, int device) {
 
   case 2:
     TRACE(T_INST, " INA '%02o%02o\n", func, device);
-    if (func == 0 || func == 010) {
+    TRACE(T_INST, "INA, RPH=%o, RPL=%o, [RP]=%o, [RP+1]=%o, BLOCKIO=%d\n", RPH, RPL, iget16(RP), iget16(RP+1),BLOCKIO);
+    if (func == 0 || func == 010) {         /* read a character */
       if (BLOCKIO)
 	newflags = ttyflags & ~O_NONBLOCK;
       else
@@ -377,7 +384,12 @@ int devasr (int class, int func, int device) {
       }
 readasr:
       n = read(ttydev, &ch, 1);
-      if (n < 0) {
+      if (n == 0) {
+	if (doblock) {
+	  usleep(500000);
+	  goto readasr;
+	}
+      } else if (n < 0) {
 	if (errno != EAGAIN && errno != EIO) {
 	  perror(" error reading from tty");
 	  fatal(NULL);
@@ -405,7 +417,7 @@ readasr:
 	  fflush(conslog);       /* immediately flush typing echos */
 	}
 	IOSKIP;
-      } else  if (n != 0) {
+      } else {
 	printf("Unexpected error reading from tty, n=%d\n", n);
 	fatal(NULL);
       }
@@ -455,22 +467,9 @@ readasr:
       if (!n)
 	return;
 #endif
-#if 0
-      if (atbol && atnewl)
-	printf("%10d| ", instcount);
-#endif
       putchar(ch);
-      if (ch == 015)
-	atbol = 1;
-      else {
+      if (ch != 015)
 	putc(ch, conslog);
-	if (ch == 012)
-	  atnewl = 1;
-	else {
-	  atbol = 0;
-	  atnewl = 0;
-	}
-      }
       needflush = 1;
       if (devpoll[device] == 0)
 	devpoll[device] = instpermsec*100;
@@ -935,7 +934,9 @@ int devmt (int class, int func, int device) {
 
       /* write file mark
 	 NOTE: the tape file should probably be truncated on the first
-	 write, not on each file mark */
+	 write, not on each file mark, although this does let us
+	 create garbage tape images for testing by doing a Magsav,
+	 rewind, starting another Magsav, and aborting it. */
 
       if ((crs[A] & 0x4010) == 0x0010) {
 	TRACE(T_TIO, " write file mark\n");
@@ -995,7 +996,7 @@ int devmt (int class, int func, int device) {
       while (1) {
 	dmxreg = dmxchan & 0x7FF;
 	if (dmxchan & 0x0800) {         /* DMC */
-	  dmcpair = get32r(dmxreg, 0); /* fetch begin/end pair */
+	  dmcpair = get32r0(dmxreg);    /* fetch begin/end pair */
 	  dmxaddr = dmcpair>>16;
 	  dmxnw = (dmcpair & 0xffff) - dmxaddr + 1;
 	  TRACE(T_INST|T_TIO,  " DMC channels: ['%o]='%o, ['%o]='%o, nwords=%d\n", dmxreg, dmxaddr, dmxreg+1, (dmcpair & 0xffff), dmxnw);
@@ -1017,20 +1018,20 @@ int devmt (int class, int func, int device) {
 	  if (dmxtotnw+dmxnw > MAXTAPEWORDS)
 	    fatal("Tape write is too big");
 	  for (n=dmxnw; n > 0; n--) {
-	    *iobufp++ = get16r(dmxaddr+i, 0);
+	    *iobufp++ = get16r0(dmxaddr+i);
 	  }
 	  dmxtotnw = dmxtotnw + dmxnw;
 	} else {
 	  if (dmxnw > dmxtotnw)
 	    dmxnw = dmxtotnw;
 	  for (n=dmxnw; n > 0; n--) {
-	    put16r(*iobufp++, dmxaddr+i, 0);
+	    put16r0(*iobufp++, dmxaddr+i);
 	  }
 	  dmxtotnw = dmxtotnw - dmxnw;
 	}
 	TRACE(T_TIO, " read/wrote %d words\n", dmxnw);
 	if (dmxchan & 0x0800) {         /* DMC */
-	  put16r(dmxaddr+dmxnw, dmxreg, 0);        /* update starting address */
+	  put16r0(dmxaddr+dmxnw, dmxreg);          /* update starting address */
 	} else {
 	  regs.sym.regdmx[dmxreg] += dmxnw<<4;     /* increment # words */
 	  regs.sym.regdmx[dmxreg+1] += dmxnw;      /* increment address */
@@ -1180,7 +1181,7 @@ initclock(datnowea) {
   unixtime = time(NULL);
   tms = localtime(&unixtime);
   datnow = tms->tm_year<<25 | (tms->tm_mon+1)<<21 | tms->tm_mday<<16 | ((tms->tm_hour*3600 + tms->tm_min*60 + tms->tm_sec)/4);
-  put32r(datnow, datnowea, 0);
+  put32r0(datnow, datnowea);
 }
 
 
@@ -1552,9 +1553,9 @@ int devdisk (int class, int func, int device) {
   case 4:   /* poll (run channel program) */
 
     while (dc[device].state == S_RUN) {
-      m = get16r(dc[device].oar, 0);
-      m1 = get16r(dc[device].oar+1, 0);
-      TRACE(T_INST|T_DIO, "\nDIOC %o: %o %o %o\n", dc[device].oar, m, m1, get16r(dc[device].oar+2, 0));
+      m = get16r0(dc[device].oar);
+      m1 = get16r0(dc[device].oar+1);
+      TRACE(T_INST|T_DIO, "\nDIOC %o: %o %o %o\n", dc[device].oar, m, m1, get16r0(dc[device].oar+2));
       dc[device].oar += 2;
       order = m>>12;
 
@@ -1578,7 +1579,7 @@ int devdisk (int class, int func, int device) {
       case 5: /* SREAD = Read */
       case 6: /* SWRITE = Write */
 	dc[device].status &= ~076000;             /* clear bits 2-6 */
-	m2 = get16r(dc[device].oar++, 0);
+	m2 = get16r0(dc[device].oar++);
 	recsize = m & 017;
 	track = m1 & 01777;
 	rec = m2 >> 8;   /* # records for format, rec # for R/W */
@@ -1661,8 +1662,8 @@ int devdisk (int class, int func, int device) {
 	    dmanw = regs.sym.regdmx[dmareg];
 	    dmanw = -(dmanw>>4);
 	    dmaaddr = regs.sym.regdmx[dmareg+1];
-	    phyra2 = get16r(dmaaddr+0, 0);
-	    phyra2 = phyra2<<16 | get16r(dmaaddr+1, 0);
+	    phyra2 = get16r0(dmaaddr+0);
+	    phyra2 = phyra2<<16 | get16r0(dmaaddr+1);
 	    if (phyra2 != phyra)
 	      fprintf(stderr,"devdisk: phyra=%d, phyra2=%d; CRA mismatch (dmanw = %d)!\n", phyra, phyra2, dmanw);
 	  }
@@ -1693,12 +1694,12 @@ int devdisk (int class, int func, int device) {
 	      }
 	      if (iobufp == iobuf)
 		for (i=0; i<dmanw; i++)
-		  put16r(iobuf[i], dmaaddr+i, 0);
+		  put16r0(iobuf[i], dmaaddr+i);
 	    } else {
 	      if (crs[MODALS] & 020) {
 		iobufp = iobuf;
 		for (i=0; i<dmanw; i++)
-		  iobuf[i] = get16r(dmaaddr+i, 0);
+		  iobuf[i] = get16r0(dmaaddr+i);
 	      } else
 		iobufp = mem+dmaaddr;
 	      if (hashp != NULL) {
@@ -1761,8 +1762,13 @@ int devdisk (int class, int func, int device) {
 	    dc[device].status = 0100001;    /* not ready */
 	  } else {
 #ifdef DISKSAFE
+	    if (flock(dc[device].unit[u].devfd, LOCK_SH+LOCK_NB) == -1)
+	      fatal("Disk drive file is in use");
 	    dc[device].unit[u].modrecs = calloc(HASHMAX, sizeof(void *));
 	    //fprintf(stderr," Device '%o, unit %d, modrecs=%p\n", device, u, dc[device].unit[u].modrecs);
+#else
+	    if (flock(dc[device].unit[u].devfd, LOCK_EX+LOCK_NB) == -1)
+	      fatal("Disk drive file is in use");
 #endif
 	  }
 	}
@@ -1786,12 +1792,12 @@ int devdisk (int class, int func, int device) {
 
       case 9: /* DSTAT = Store status to memory */
 	TRACE(T_INST|T_DIO,  " store status='%o to '%o\n", dc[device].status, m1);
-	put16r(dc[device].status,m1,0);
+	put16r0(dc[device].status,m1);
 	break;
 
       case 11: /* DOAR = Store OAR to memory (2 words) */
 	TRACE(T_INST|T_DIO,  " store OAR='%o to '%o\n", dc[device].oar, m1);
-	put16r(dc[device].oar,m1,0);
+	put16r0(dc[device].oar,m1);
 	break;
 
       case 13: /* SDMA = select DMA channel(s) to use */
@@ -1952,8 +1958,10 @@ int devamlc (int class, int func, int device) {
   struct sockaddr_in addr;
   int fd;
   unsigned int addrlen;
-  unsigned char buf[1024];
+  unsigned char buf[1024];      /* max size of DMQ buffer */
   int i, n, nw, newdevice;
+  fd_set fds;
+  struct timeval timeout;
 
   switch (class) {
 
@@ -1997,13 +2005,13 @@ int devamlc (int class, int func, int device) {
 	  fatal(NULL);
 	}
       } else
-	printf("-tport is zero, can't start AMLC devices");
+	fprintf(stderr, "-tport is zero, can't start AMLC devices\n");
       inited = 1;
     }
 
     /* this part of initialization occurs for every AMLC board */
 
-    if (!inited)
+    if (!inited || tport == 0)
       return -1;
 
     /* add this device to the devices array, in the proper slot
@@ -2164,152 +2172,198 @@ int devamlc (int class, int func, int device) {
   case 4:
     //printf("poll device '%o, cti=%x, xmit=%x, recv=%x, dss=%x\n", device, dc[device].ctinterrupt, dc[device].xmitenabled, dc[device].recvenabled, dc[device].dss);
     
-    /* check for new connections */
-
-conloop:
+    /* check for 1 new terminal connection on each AMLC poll */
 
     while ((fd = accept(tsfd, (struct sockaddr *)&addr, &addrlen)) == -1 && errno == EINTR)
       ;
     if (fd == -1) {
       if (errno != EWOULDBLOCK) {
 	perror("accept error for AMLC");
-	fatal("accept error for AMLC");
       }
     } else {
       if (fd >= MAXFD)
 	fatal("New connection fd is too big");
       newdevice = 0;
-      for (i=0; !newdevice && i<MAXBOARDS; i++)
-	if (devices[i])
-	  for (lx=0; lx<16; lx++)
-	    if (!(dc[devices[i]].dss & bitmask16[lx+1])) {
-	      newdevice = devices[i];
-	      socktoline[fd].device = newdevice;
-	      socktoline[fd].line = lx;
-	      dc[newdevice].dss |= bitmask16[lx+1];
-	      dc[newdevice].sockfd[lx] = fd;
-	      printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
-	      break;
-	    }
+      for (i=0; devices[i] && !newdevice && i<MAXBOARDS; i++)
+	for (lx=0; lx<16; lx++)
+	  if (!(dc[devices[i]].dss & bitmask16[lx+1])) {
+	    newdevice = devices[i];
+	    socktoline[fd].device = newdevice;
+	    socktoline[fd].line = lx;
+	    dc[newdevice].dss |= bitmask16[lx+1];
+	    dc[newdevice].sockfd[lx] = fd;
+	    printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
+	    break;
+	  }
       if (!newdevice) {
 	warn("No free AMLC connection");
 	write(fd, "\rAll AMLC lines are in use!\r\n", 29);
 	close(fd);
       }
-      goto conloop;
     }
 
-    /* do a receive/transmit scan loop for every line 
-       NOTE: should probably do a read & write select to find lines to
-       process */
+    /* do a receive/transmit scan loop for every line.  This loop is
+       fairly efficient because Primos turns off xmitenable on DMQ
+       lines after a short time w/o any output. */
 
-    for (lx = 0; lx < 16; lx++) {
+    if (dc[device].xmitenabled != 0 || dc[device].dss != 0) {
+      for (lx = 0; lx < 16; lx++) {
 
-      /* Transmit is first.  Lots of opportunity to optimize this
-	 by doing one or two mapva calls,  directly examining the queue,
-	 doing the write (which may be partial), then updating the queue
-	 for however many characters were actually sent. */
+	/* Transmit is first.  Lots of opportunity to optimize this:
+	   rather than using the rtq instruction, do a mapva call to
+	   access the qcb directly, pack the queue data to a buffer,
+	   attempt to write the buffer to the socket, and then update
+	   the qcb to reflect how many bytes were actually written.
+	   This would avoid lots of get16/mapva calls and the write
+	   select could be removed. 
 
-      if (dc[device].xmitenabled & bitmask16[lx+1]) {
-	n = 0;
-	if (dc[device].dmqmode) {
-	  qcbea = dc[device].baseaddr + lx*4;
-	  if (dc[device].dss & bitmask16[lx+1]) {
-	    while (n < sizeof(buf) && rtq(qcbea, &utempa, 0)) {
-	      if (utempa & 0x8000) {           /* valid character */
+	   NOTE: it's important to do xmit processing even if a line
+	   is not currently connected, to drain the tty output buffer.
+	   Otherwise, the DMQ buffer fills, this stalls the tty output
+	   buffer, and when the next connection occurs on this line,
+	   the output buffer from the previous terminal session will
+	   then be displayed to the new user. */
+
+	if (dc[device].xmitenabled & bitmask16[lx+1]) {
+	  n = 0;
+	  if (dc[device].dmqmode) {
+	    qcbea = dc[device].baseaddr + lx*4;
+	    if (dc[device].dss & bitmask16[lx+1]) {
+
+	      /* ensure there's room in the socket buffer */
+
+	      timeout.tv_sec = 0;
+	      timeout.tv_usec = 0;
+	      FD_ZERO(&fds);
+	      FD_SET(dc[device].sockfd[lx], &fds);
+	      if (select(dc[device].sockfd[lx]+1, NULL, &fds, NULL, &timeout) <= 0)
+		continue;                /* no room at the inn */
+
+	      /* pack DMQ characters into a buffer & fix parity */
+
+	      n = 0;
+	      while (n < sizeof(buf) && rtq(qcbea, &utempa, 0)) {
+		if (utempa & 0x8000) {           /* valid character */
+		  //printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
+		  buf[n++] = utempa & 0x7F;
+		}
+	      }
+	    } else {         /* no line connected, just drain queue */
+	      //printf("Draining output queue on line %d\n", lx);
+	      put16r0(get16r0(qcbea), qcbea+1);
+	    }
+	  } else {  /* DMT */
+	    utempa = get16r0(dc[device].baseaddr + lx);
+	    if (utempa != 0) {
+	      if ((utempa & 0x8000) && (dc[device].dss & bitmask16[lx+1])) {
 		//printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
 		buf[n++] = utempa & 0x7F;
 	      }
+	      put16r0(0, dc[device].baseaddr + lx);
 	    }
-	  } else {         /* no line connected, just drain queue */
-	    //printf("Draining output queue on line %d\n", lx);
-	    put16r(get16r(qcbea, 0), qcbea+1, 0);
+	    /* would need to setup DMT xmit poll here, and/or look for
+	       char time interrupt.  In practice, DMT isn't used when
+	       the AMLC device is configured as a QAMLC */
 	  }
-	} else {  /* DMT */
-	  utempa = get16r(dc[device].baseaddr + lx, 0);
-	  if (utempa != 0) {
-	    if ((utempa & 0x8000) && (dc[device].dss & bitmask16[lx+1])) {
-	      //printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
-	      buf[n++] = utempa & 0x7F;
+
+	  /* NOTE: on a partial write, terminal data is lost.  The best
+	     option would be to find out how much room is left in the
+	     socket buffer and only remove that many characters from the
+	     queue in the loop above.
+
+	     Mac OSX write selects on sockets will only return true if
+	     there are SO_SNDLOWAT (defaults to 1024) bytes available in
+	     the write buffer.  Since the max DMQ buffer size is also
+	     1024, the write below should never fail because of the
+	     write select above.  On other OS's, it may be necessary to
+	     limit the number of characters dequeued in the loop above.
+	  */
+
+	  if (n > 0)
+	    if ((nw = write(dc[device].sockfd[lx], buf, n)) != n) {
+	      perror("Writing to AMLC");
+	      fprintf(stderr," %d bytes written, but %d bytes sent\n", n, nw);
 	    }
-	    put16r(0, dc[device].baseaddr + lx, 0);
-	  }
-	  /* need to setup DMT xmit poll here, and/or look for char
-	     time interrupt */
 	}
-	
-	/* NOTE: probably need to check for partial writes here, or put the
-	   socket in blocking mode.  Would be best to know how many characters
-	   to remove from the queue in the loop above. */
 
-	if (n > 0)
-	  if ((nw = write(dc[device].sockfd[lx], buf, n)) != n) {
-	    perror("Writing to AMLC");
-	    fatal("Writing to AMLC");
-	  }
-      }
+	/* process input, but only as much as will fit into the DMC buffer. */
 
-      /* process input, but only as much as will fit into the DMC buffer */
-
-      if ((dc[device].dss & dc[device].recvenabled & bitmask16[lx+1]) && !dc[device].eor) {
-	if (dc[device].bufnum)
-	  dmcea = dc[device].dmcchan ^ 2;
-	else
-	  dmcea = dc[device].dmcchan;
-	dmcpair = get32r(dmcea, 0);
-	dmcbufbegea = dmcpair>>16;
-	dmcbufendea = dmcpair & 0xffff;
-	dmcnw = dmcbufendea - dmcbufbegea + 1;
-	if (dmcnw <= 0)
-	  continue;
-	if (dmcnw > sizeof(buf))
-	  dmcnw = sizeof(buf);
-	while ((n = read(dc[device].sockfd[lx], buf, dmcnw)) == -1 && errno == EINTR)
-	  ;
-	//printf("processing recv on device %o, line %d, b#=%d, dmcnw=%d, n=%d\n", device, lx, dc[device].bufnum, dmcnw, n);
-	
-	/* zero length read means the socket has been closed */
-
-	if (n == 0) {
-	  n = -1;
-	  errno = EPIPE;
-	}
-	if (n == -1) {
-	  n = 0;
-	  if (errno == EAGAIN || errno == EWOULDBLOCK)
+	if ((dc[device].dss & dc[device].recvenabled & bitmask16[lx+1]) && !dc[device].eor) {
+	  if (dc[device].bufnum)
+	    dmcea = dc[device].dmcchan ^ 2;
+	  else
+	    dmcea = dc[device].dmcchan;
+	  dmcpair = get32r0(dmcea);
+	  dmcbufbegea = dmcpair>>16;
+	  dmcbufendea = dmcpair & 0xffff;
+	  dmcnw = dmcbufendea - dmcbufbegea + 1;
+	  if (dmcnw <= 0)
+	    continue;
+	  if (dmcnw > sizeof(buf))
+	    dmcnw = sizeof(buf);
+	  while ((n = read(dc[device].sockfd[lx], buf, dmcnw)) == -1 && errno == EINTR)
 	    ;
-	  else if (errno == EPIPE) {
-	    /* see similar code above */
-	    close(dc[device].sockfd[lx]);
-	    dc[device].dss &= ~bitmask16[lx+1];
-	    printf("Closing AMLC line %d on device '%o\n", lx, device);
-	  } else {
-	    perror("Reading AMLC");
-	    fatal("Reading AMLC");
-	  }
-	}
+	  //printf("processing recv on device %o, line %d, b#=%d, dmcnw=%d, n=%d\n", device, lx, dc[device].bufnum, dmcnw, n);
 
-	if (n > 0) {
-	  for (i=0; i<n; i++) {
-	    utempa = lx<<12 | 0x0200 | buf[i];
-	    put16r(utempa, dmcbufbegea, 0);
-	    //printf("******* stored character %o (%c) at %o\n", utempa, utempa&0x7f, dmcbufbegea);
-	    dmcbufbegea = INCVA(dmcbufbegea, 1);
+	  /* zero length read means the socket has been closed */
+
+	  if (n == 0) {
+	    n = -1;
+	    errno = EPIPE;
 	  }
-	  put16r(dmcbufbegea, dmcea, 0);
-	  if (dmcbufbegea > dmcbufendea) {          /* end of range has occurred */
-	    dc[device].bufnum = 1-dc[device].bufnum;
-	    dc[device].eor = 1;
+	  if (n == -1) {
+	    n = 0;
+	    if (errno == EAGAIN || errno == EWOULDBLOCK)
+	      ;
+	    else if (errno == EPIPE || errno == ECONNRESET) {
+
+	      /* see similar code above */
+	      close(dc[device].sockfd[lx]);
+	      dc[device].dss &= ~bitmask16[lx+1];
+	      printf("Closing AMLC line %d on device '%o\n", lx, device);
+	    } else {
+	      perror("Reading AMLC");
+	    }
+	  }
+
+	  if (n > 0) {
+	    for (i=0; i<n; i++) {
+	      utempa = lx<<12 | 0x0200 | buf[i];
+	      put16r0(utempa, dmcbufbegea);
+	      //printf("******* stored character %o (%c) at %o\n", utempa, utempa&0x7f, dmcbufbegea);
+	      dmcbufbegea = INCVA(dmcbufbegea, 1);
+	    }
+	    put16r0(dmcbufbegea, dmcea);
+	    if (dmcbufbegea > dmcbufendea) {          /* end of range has occurred */
+	      dc[device].bufnum = 1-dc[device].bufnum;
+	      dc[device].eor = 1;
+	    }
 	  }
 	}
       }
     }
-    if (intvec == -1 && dc[device].intenable && (dc[device].ctinterrupt || dc[device].eor)) {
-      intvec = dc[device].intvector;
-      dc[device].interrupting = 1;
+
+    /* time to interrupt? */
+
+    if (dc[device].intenable && (dc[device].ctinterrupt || dc[device].eor)) {
+      if (intvec == -1) {
+	intvec = dc[device].intvector;
+	dc[device].interrupting = 1;
+      } else
+	devpoll[device] = 100;         /* come back soon! */
     }
 
-    if ((dc[device].ctinterrupt || dc[device].xmitenabled || dc[device].recvenabled) && devpoll[device] == 0)
+    /* conditions to setup another poll:
+       - any board with ctinterrupt set on any line is polled
+       - any board with xmitenabled on any line is polled (to drain output)
+       - any board with recvenabled on a connected line is polled
+       - the device must not already be set for a poll
+
+       NOTE: there is always at least one board with ctinterrupt set
+       (the last board), so it will always be polling and checking
+       for new incoming connections */
+
+    if ((dc[device].ctinterrupt || dc[device].xmitenabled || (dc[device].recvenabled & dc[device].dss)) && devpoll[device] == 0)
       devpoll[device] = AMLCPOLL*instpermsec;  /* setup another poll */
     break;
   }
@@ -2319,16 +2373,45 @@ conloop:
 
 /* PNC (ring net) device handler
 
-  PNC ring buffers are 256 words (later version appear to support 256,
-  512, and 1024 word packets).  "nbkini" (rev 18) allocates 12 ring
-  buffers + 1 for every 2 nodes in the ring.  Both the 1-to-2 queue
-  for received packets, and 2-to-1 queue for xmit packets have 63
-  entries.  PNC ring buffers are wired and do not cross page
+  On a real Prime ring network, each node has a unique node id from 1
+  to 254.  The node id is configured with software and stored into the
+  PNC during network initialization.  In practice, CONFIG_NET limits
+  the node id to 247.  When a node starts, it sends a message to
+  itself.  If any system acknowledges this packet, it means the node
+  id is already in use.  If this occcurs, the new node will disconnect
+  from the ring.  Since all systems in a ring have to be physically
+  cabled together, there was usually a common network administration
+  to ensure that no two nodes had the same node id.
+
+  Node id 255 is the broadcast id - all nodes receive these messages.
+  Beginning with 19.3, An "I'm alive" broadcast message is sent every
+  10 seconds to let all nodes know that a machine is still up.
+
+  For use with the emulator, the unique node id concept doesn't make a
+  lot of sense.  If a couple of guys running the emulator wanted to
+  have a 2-node network with nodes 1 and 2 (network A), and another
+  couple of guys had a 2-node network with nodes 1 and 2 (network B),
+  then it wouldn't be possible for a node in one network to add a node
+  in the other network without other people redoing their node ids to
+  ensure uniqueness.  To get around this, the emulator has a config
+  file RING.CFG that lets you say "Here are the guys in *my* ring
+  (with all unique node ids), here is each one's IP address and port,
+  my node id on their ring is *blah*, their node id on their ring is
+  *blah2*"".  This allows the node id to be a per-host number that
+  only needs to be coordinated with two people that want to talk to
+  each other, and effectively allows one emulator to be in multiple
+  rings simulataneously.  Cool, eh?
+
+  PNC ring buffers are 256 words, with later versions of Primos also
+  supporting 512, and 1024 word packets.  "nbkini" (rev 18) allocates
+  12 ring buffers + 1 for every 2 nodes in the ring.  Both the 1-to-2
+  queue for received packets, and 2-to-1 queue for xmit packets have
+  63 entries.  PNC ring buffers are wired and never cross page
   boundaries.
 
-  The actual xmit/recv buffers for PNC are 256 words, and each buffer
-  has an associated "block header", stored in a different location in
-  system memory, that is 8 words.  
+  The actual xmit/recv buffers for PNC are 256-1024 words, and each
+  buffer has an associated "block header", stored in a different
+  location in system memory, that is 8 words.
 
   The BH fields are (16-bit words):
        0: type field (1)
@@ -2337,17 +2420,17 @@ conloop:
 
        4-7 are available for use by the drivers.  For PNC:
        4: number of words received (calculated by pncdim based on DMA regs)
-          or number of 
        5: receive status word
        6: data 1
        7: data 2
 
-  The PNC data buffer has a 2-word header:
-       0: To (left) and From (right) bytes containing node-id
+  The PNC data buffer has a 2-word header, followed by the data:
+       0: To (left) and From (right) bytes containing node-ids
        1: "Type" word. 
-          Bit 1 set = odd number of bytes
-          Bit 8 set = normal data messages (otherwise, a timer message)
-
+          Bit 1 set = odd number of bytes (if set, last word is only 1 byte)
+          Bit 7 set = normal data messages (otherwise, a timer message)
+	  Bit 16 set = broadcast timer message
+  PNC data buffers never cross page boundaries.
 
   Primos PNC usage:
 
@@ -2388,9 +2471,11 @@ conloop:
       bit 8 ACK byte check error (parity on bits 1-6)
       bit 9 recv buffer parity error
       bit 10 recv busy
-      bit 11 end of range before end of message
-      
-  INA '1407
+      bit 11 end of range before end of message (received msg was too big
+             for the receive buffer)
+      bits 12-16 unused
+
+  INA '1307
   - read xmit status word
       bit 1 set for ACK
       bit 2 set for multiple ACK (more than 1 node accepted packet)
@@ -2442,76 +2527,302 @@ conloop:
 
 int devpnc (int class, int func, int device) {
 
+#define PNCPOLL 100
+
   /* PNC controller status bits */
 #define PNCRCVINT  0x8000    /* bit 1 rcv interrupt (rcv complete) */
 #define PNCXMITINT 0x4000    /* bit 2 xmit interrupt (xmit complete) */
-#define PNCBOOSTER 0x2000    /* bit 3 */
-#define PNCINTENAB 0x1000    /* bit 4 (JW usage) */
+#define PNCBOOSTER 0x2000    /* bit 3 PNC booster = 1 */
 
 #define PNCCONNECTED 0x400   /* bit 6 */
 #define PNCTWOTOKENS 0x200   /* bit 7, only set after xmit EOR */
 #define PNCTOKDETECT 0x100   /* bit 8, only set after xmit EOR */
 
-  static short pncstat;    /* controller status word */
-  static short recvstat;   /* receive status word */
-  static short xmitstat;   /* xmit status word */
-  static short intvec;     /* PNC interrupt vector */
+  static short configured = 0; /* true if PNC configured */
+  static unsigned short pncstat;    /* controller status word */
+  static unsigned short recvstat;   /* receive status word */
+  static unsigned short xmitstat;   /* xmit status word */
+  static unsigned short pncvec;     /* PNC interrupt vector */
+  static unsigned short myid;       /* my PNC node id */
+  static unsigned short enabled;    /* interrupts enabled flag */
+  static int pncfd;        /* socket fd for all PNC network connections */
 
-  unsigned short dmachan, dmareg, dmaaddr, dmaword;
-  short i, dmanw;
+  /* the ni structure contains the important information for each node
+     in the network and is indexed by the local node id */
+
+  static struct {          /* node info for each node in my network */
+    short cfg;             /* true if seen in ring.cfg */
+    short fd;              /* socket fd for this node, -1 if unconnected */
+    char  ip[16];          /* IP address of the remote node */
+    short port;            /* emulator network port on the remote node */
+    short myremid;         /* my node ID on the remote node's ring network */
+    short yourremid;       /* remote node's id on its own network */
+  } ni[256];
+
+  /* array to map socket fd's to local node id's for accessing the ni
+     structure.  Not great programming, because the host OS could
+     choose to use large fd's, which will cause a runtime error */
+
+#define FDMAPSIZE 1024
+  static short fdnimap[FDMAPSIZE];
+
+  typedef struct {
+    unsigned short dmachan, dmareg, dmaaddr;
+    short dmanw, toid, fromid, remtoid, remfromid;
+    unsigned short *iobufp;
+  } t_dma;
+  static t_dma recv, xmit;
+
+  short i;
+  unsigned short access, dmaword, dmaword1, dmaword2;
+
+  struct sockaddr_in addr;
+  int fd, optval, fdflags;
+  unsigned int addrlen;
+
+  FILE *ringfile;
+  char *tok, buf[128], *p;
+  int n, linenum;
+  int tempid, tempmyremid, tempyourremid, tempport, cfgerrs;
+  char tempip[22];       /* xxx.xxx.xxx.xxx:ppppp */
+#define DELIM " \t\n"
+#define PDELIM ":"
 
   //traceflags = ~TB_MAP;
+
+  if (nport <= 0) {
+    if (class == -1)
+      fprintf(stderr, "-nport is zero, PNC not started\n");
+    else
+      TRACE(T_INST|T_RIO, "nport <= 0, PIO to PNC ignored, class=%d, func='%02o, device=%02o\n", class, func, device);
+    return -1;
+  }
 
   switch (class) {
 
   case -1:
+    for (i=0; i<FDMAPSIZE; i++)
+      fdnimap[i] = -1;
+    for (i=0; i<256; i++) {
+      ni[i].cfg = 0;
+      ni[i].fd = -1;
+      strcpy(ni[i].ip, "               ");
+      ni[i].port = 0;
+      ni[i].myremid = 0;
+      ni[i].yourremid = 0;
+    }
+    myid = 0;                 /* set an invalid node id */
+
+    /* read the ring.cfg config file.  Each line contains:
+          localid  ip:port  [myremoteid yourremoteid]
+       where:
+          localid = the remote node's id (1-247) on my ring
+          ip = the remote emulator's TCP/IP address (or later, name)
+	  port = the remote emulator's TCP/IP PNC port
+          myremoteid = my node's id (1-247) on the remote ring
+	  yourremoteid = the remote node's id on its own ring
+
+       The two remote id fields are optional, and allow the emulator
+       to be in multiple rings with different administration.  If
+       these are not specified, myremoteid = my local id, and
+       yourremoteid = localid (the remote host's local id).
+
+       There cannot be duplicates among the localid field, but there
+       can be duplicates in the remoteid fields */
+
+    linenum = 0;
+    if ((ringfile=fopen("ring.cfg", "r")) != NULL) {
+      while (fgets(buf, sizeof(buf), ringfile) != NULL) {
+	linenum++;
+	if (strcmp(buf,"") == 0 || buf[0] == ';')
+	  continue;
+	if ((p=strtok(buf, DELIM)) == NULL) {
+	  fprintf(stderr,"Line %d of ring.cfg: node id missing\n", linenum);
+	  continue;
+	}
+	tempid = atoi(p);
+	if (tempid < 1 || tempid > 247) {
+	  fprintf(stderr,"Line %d of ring.cfg: node id is out of range 1-247\n", linenum);
+	  continue;
+	}
+	if (ni[tempid].cfg) {
+	  fprintf(stderr,"Line %d of ring.cfg: node id occurs twice\n", linenum);
+	  continue;
+	}
+	if ((p=strtok(NULL, DELIM)) == NULL) {
+	  fprintf(stderr,"Line %d of ring.cfg: IP address missing\n", linenum);
+	  continue;
+	}
+	if (strlen(p) > 21) {
+	  fprintf(stderr,"Line %d of ring.cfg: IP address is too long\n", linenum);
+	  continue;
+	}
+	strcpy(tempip, p);
+	if ((p=strtok(NULL, DELIM)) != NULL) {
+	  tempmyremid = atoi(p);
+	  if (tempmyremid < 1 || tempmyremid > 247) {
+	    fprintf(stderr,"Line %d of ring.cfg: my remote node id out of range 1-247\n", linenum);
+	    continue;
+	  }
+	} else 
+	  tempmyremid = -1;
+	if ((p=strtok(NULL, DELIM)) != NULL) {
+	  tempyourremid = atoi(p);
+	  if (tempyourremid < 1 || tempyourremid > 247) {
+	    fprintf(stderr,"Line %d of ring.cfg: your remote node id out of range 1-247\n", linenum);
+	    continue;
+	  }
+	} else 
+	  tempyourremid = tempid;
+	if (tempyourremid == tempmyremid) {
+	    fprintf(stderr,"Line %d of ring.cfg: my remote node id and your remote node id can't be equal\n", linenum);
+	    continue;
+	  }
+	/* parse the port number from the IP address */
+	tempport = -1;
+	if ((p=strtok(tempip, PDELIM)) != NULL) {
+	  strcpy(ni[tempid].ip, p);
+	  if ((p=strtok(NULL, PDELIM)) != NULL) {
+	    tempport = atoi(p);
+	    if (tempport < 1 || tempport > 32000)
+	      fprintf(stderr,"Line %d of ring.cfg: port number is out of range 1-32000\n", linenum);
+	  }
+	}
+	if (tempport == -1) {
+	  fprintf(stderr, "Line %d of ring.cfg: IP should be xxx.xxx.xxx.xxx:pppp\n", linenum);
+	  continue;
+	}
+	ni[tempid].cfg = 1;
+	ni[tempid].myremid = tempmyremid;
+	ni[tempid].yourremid = tempyourremid;
+	ni[tempid].port = tempport;
+	TRACE(T_RIO, "Line %d: id=%d, ip=\"%s\", port=%d, myremid=%d, yourremid=%d\n", linenum, tempid, tempip, tempport, tempmyremid, tempyourremid);
+	configured = 1;
+      }
+      if (!feof(ringfile)) {
+	perror(" error reading ring.cfg");
+	fatal(NULL);
+      }
+      fclose(ringfile);
+    }
+    if (!configured) {
+      fprintf(stderr, "PNC not configured because ring.cfg missing or errors occurred.\n");
+      return -1;
+    }
     return 0;
 
   case 0:
-    TRACE(T_INST, " OCP '%02o%02o\n", func, device);
-    if (func == 00) {           /* disconnect from ring */
+
+    /* OCP '0700 - disconnect */
+
+    if (func == 00) {
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - disconnect\n", func, device);
+      if (pncfd >= 0) {
+	close(pncfd);
+	pncfd = -1;
+      }
+      for (i=0; i<256; i++) {
+	if (ni[i].fd >= 0) {
+	  fdnimap[ni[i].fd] = -1;
+	  close(ni[i].fd);
+	  ni[i].fd = -1;
+	}
+      }
       pncstat &= ~PNCCONNECTED;
 
+    /* OCP '0701 - connect 
+       If any errors occur while trying to setup the listening socket,
+       it seems reasonable to leave the PNC unconnected and continue,
+       but this will cause Primos (rev 19) to hang in a spin loop. So
+       for now, bomb.  Later, we could put the PNC in a disabled state,
+       where INA/OTA don't skip, since Primos handles this better.
+    */
+
     } else if (func == 01) {    /* connect to the ring */
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - connect\n", func, device);
+
+      /* start listening on the network port */
+
+      pncfd = socket(AF_INET, SOCK_STREAM, 0);
+      if (pncfd == -1) {
+	perror("socket failed for PNC");
+	fatal(NULL);
+      }
+      if (fcntl(pncfd, F_GETFL, fdflags) == -1) {
+	perror("unable to get ts flags for PNC");
+	fatal(NULL);
+      }
+      fdflags |= O_NONBLOCK;
+      if (fcntl(pncfd, F_SETFL, fdflags) == -1) {
+	perror("unable to set ts flags for PNC");
+	fatal(NULL);
+      }
+      optval = 1;
+      if (setsockopt(pncfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval))) {
+	perror("setsockopt failed for PNC");
+	fatal(NULL);
+      }
+      addr.sin_family = AF_INET;
+      addr.sin_port = htons(nport);
+      addr.sin_addr.s_addr = INADDR_ANY;
+      if(bind(pncfd, (struct sockaddr *)&addr, sizeof(addr))) {
+	perror("bind: unable to bind for PNC");
+	fatal(NULL);
+      }
+      if(listen(pncfd, 10)) {
+	perror("listen failed for PNC");
+	fatal(NULL);
+      }
       pncstat |= PNCCONNECTED;
 
     } else if (func == 02) {    /* inject a token */
-      ;
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - inject token\n", func, device);
 
     } else if (func == 04) {    /* ack xmit (clear xmit int) */
-      pncstat &= ~PNCXMITINT;
-      xmitstat = 0;             /* right? */
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - ack xmit int\n", func, device);
+      pncstat &= ~PNCXMITINT;   /* clear "xmit interrupting" */
+      pncstat &= ~PNCTOKDETECT; /* clear "token detected" */
+      xmitstat = 0;
 
     } else if (func == 05) {    /* set PNC into "delay" mode */
-      printf("Set PNC to delay mode\n");
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - set delay mode\n", func, device);
 
     } else if (func == 010) {   /* stop xmit in progress */
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - stop xmit\n", func, device);
       xmitstat = 0;
 
     } else if (func == 011) {   /* dunno what this is - rev 20 startup */
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - unknown\n", func, device);
       ;
 
     } else if (func == 012) {   /* set normal mode */
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - set normal mode\n", func, device);
       ;
 
     } else if (func == 013) {   /* set diagnostic mode */
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - set diag mode\n", func, device);
       ;
 
     } else if (func == 014) {   /* ack receive (clear rcv int) */
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - ack recv int\n", func, device);
       pncstat &= ~PNCRCVINT;
-      recvstat = 0;             /* right? */
+      recvstat = 0;
 
     } else if (func == 015) {   /* set interrupt mask (enable int) */
-      pncstat |= PNCINTENAB;
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - enable interrupts\n", func, device);
+      enabled = 1;
 
-    } else if (func == 016) {   /* clear interrupt mask (disenable int) */
-      pncstat &= ~PNCINTENAB;
+    } else if (func == 016) {   /* clear interrupt mask (disable int) */
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - disable interrupts\n", func, device);
+      enabled = 0;
 
     } else if (func == 017) {   /* initialize */
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - initialize\n", func, device);
       pncstat = 0;
       recvstat = 0;
       xmitstat = 0;
-      intvec = 0;
+      pncvec = 0;
+      enabled = 0;
 
     } else {
       printf("Unimplemented OCP device '%02o function '%02o\n", device, func);
@@ -2520,7 +2831,7 @@ int devpnc (int class, int func, int device) {
     break;
 
   case 1:
-    TRACE(T_INST, " SKS '%02o%02o\n", func, device);
+    TRACE(T_INST|T_RIO, " SKS '%02o%02o\n", func, device);
     if (func == 99)
       IOSKIP;                     /* assume it's always ready */
     else {
@@ -2530,20 +2841,27 @@ int devpnc (int class, int func, int device) {
     break;
 
   case 2:
-    TRACE(T_INST, " INA '%02o%02o\n", func, device);
     if (func == 011) {          /* input ID */
+      TRACE(T_INST|T_RIO, " INA '%02o%02o - input ID\n", func, device);
       crs[A] = 07;
       IOSKIP;
 
     } else if (func == 012) {   /* read receive status word */   
+      TRACE(T_INST|T_RIO, " INA '%02o%02o - get recv status '%o\n", func, device, recvstat);
       crs[A] = recvstat;
       IOSKIP;
 
+    } else if (func == 013) {   /* DIAG - read static register; not impl. */
+      crs[A] = 0;
+      IOSKIP;
+
     } else if (func == 014) {   /* read xmit status word */   
+      TRACE(T_INST|T_RIO, " INA '%02o%02o - get xmit status '%o\n", func, device, xmitstat);
       crs[A] = xmitstat;
       IOSKIP;
 
     } else if (func == 017) {   /* read controller status word */   
+      TRACE(T_INST|T_RIO, " INA '%02o%02o - get ctrl status '%o\n", func, device, pncstat);
       crs[A] = pncstat;
       IOSKIP;
 
@@ -2554,35 +2872,145 @@ int devpnc (int class, int func, int device) {
     break;
 
   case 3:
-    TRACE(T_INST, " OTA '%02o%02o\n", func, device);
-    if (func == 014) {          /* initiate recv, dma chan in A */
-      dmachan = crs[A];
-      dmareg = dmachan << 1;
-      dmanw = regs.sym.regdmx[dmareg];
-      dmanw = -(dmanw>>4);
-      dmaaddr = regs.sym.regdmx[dmareg+1];
-      printf("PNC recv: dmachan=%o, dmareg=%o, dmaaddr=%o, dmanw=%d\n", dmachan, dmareg, dmaaddr, dmanw);
+    TRACE(T_INST|T_RIO, " OTA '%02o%02o\n", func, device);
+    if (func == 011) {          /* DIAG - single step; not impl.*/
+      IOSKIP;
+
+    } else if (func == 014) {   /* initiate recv, dma chan in A */
+      recvstat = 0x0040;        /* set receive busy */
+      recv.dmachan = crs[A];
+      recv.dmareg = recv.dmachan << 1;
+      recv.dmanw = regs.sym.regdmx[recv.dmareg];
+      if (recv.dmanw <= 0)
+	recv.dmanw = -(recv.dmanw>>4);
+      else
+	recv.dmanw = -((recv.dmanw>>4) ^ 0xF000);
+      recv.dmaaddr = regs.sym.regdmx[recv.dmareg+1];
+      recv.iobufp = mem + mapva(recv.dmaaddr, WACC, &access, 0);
+      TRACE(T_INST|T_RIO, " recv: dmachan=%o, dmareg=%o, dmaaddr=%o, dmanw=%d\n", recv.dmachan, recv.dmareg, recv.dmaaddr, recv.dmanw);
+      devpoll[device] = 10;
       IOSKIP;
 
     } else if (func == 015) {   /* initiate xmit, dma chan in A */
-      dmachan = crs[A];
-      dmareg = dmachan<<1;
-      dmanw = regs.sym.regdmx[dmareg];
-      dmanw = -(dmanw>>4);
-      dmaaddr = regs.sym.regdmx[dmareg+1];
-      printf("PNC xmit: dmachan=%o, dmareg=%o, dmaaddr=%o, dmanw=%d\n", dmachan, dmareg, dmaaddr, dmanw);
-      for (i=0; i<dmanw; i++) {
-	dmaword = get16(dmaaddr+i);
-	printf("PNC xmit: word %d = '%o/%d [%o %o]\n", i, dmaword, *(short *)&dmaword, dmaword>>8, dmaword&0xff);
+      xmitstat = 0x0040;        /* set xmit busy */
+      xmit.dmachan = crs[A];
+      xmit.dmareg = xmit.dmachan<<1;
+      xmit.dmanw = regs.sym.regdmx[xmit.dmareg];
+      if (xmit.dmanw <= 0)
+	xmit.dmanw = -(xmit.dmanw>>4);
+      else
+	xmit.dmanw = -((xmit.dmanw>>4) ^ 0xF000);
+      xmit.dmaaddr = regs.sym.regdmx[xmit.dmareg+1];
+      TRACE(T_INST|T_RIO, " xmit: dmachan=%o, dmareg=%o, dmaaddr=%o, dmanw=%d\n", xmit.dmachan, xmit.dmareg, xmit.dmaaddr, xmit.dmanw);
+
+      /* PNC transmit:
+
+	 get a physical pointer to the xmit buffer, which can't cross
+	 a page boundary, then xmit the buffer.  Since PNC packets
+	 have a specific size of either 512, 1024, or 2048 bytes, and
+	 we're using a byte-stream for communication, 2 extra header
+	 bytes are sent with the packet length (in words), to let the
+	 other end know how big the packet is.
+      */
+
+      xmit.iobufp = mem + mapva(xmit.dmaaddr, RACC, &access, 0);
+
+      /* read the first word, the to and from node id's, and map them
+	 to the remote hosts' expected to and from node id's */
+
+      dmaword = *xmit.iobufp++;
+      xmit.toid = dmaword >> 8;
+      xmit.fromid = dmaword & 0xFF;
+      TRACE(T_INST|T_RIO, " xmit: dmaword = '%o/%d [%03o %03o]\n", dmaword, *(short *)&dmaword, dmaword>>8, dmaword&0xff);
+
+      /* broadcast packets are "I am up" msgs and are simply "eaten"
+	 here, as this is handled later in the devpnc poll code */
+      
+      if (xmit.toid == 255) {
+	regs.sym.regdmx[xmit.dmareg+1] += xmit.dmanw;   /* bump xmit address */
+	regs.sym.regdmx[xmit.dmareg] += xmit.dmanw;     /* and count */
+	goto xmitdone;
       }
+
+      /* check for errors, then map to and from node id to remote to
+	 and from node id */
+
+      if (xmit.toid == 0)
+	fatal("PNC: xmit.toid is zero");
+      if (xmit.fromid == 0)
+	fatal("PNC: xmit.fromid is zero");
+      if (xmit.fromid != myid) {
+	printf("PNC: xmit fromid=0x%02x != myid=0x%02x\n", xmit.fromid, myid);
+	fatal(NULL);
+      }
+
+      if (ni[xmit.fromid].myremid > 0)
+	xmit.remfromid = ni[xmit.fromid].myremid;
+      else
+	xmit.remfromid = myid;
+      xmit.remtoid = ni[xmit.toid].yourremid;
+
+      dmaword1 = (xmit.remtoid << 8) | xmit.remfromid;
+      for (i=0; i < xmit.dmanw; i++) {
+	if (i == 0)
+	  dmaword = dmaword1;
+	else
+	  dmaword = *xmit.iobufp++;
+	TRACE(T_INST|T_RIO, " xmit: word %d = '%o/%d [%03o %03o]\n", i, dmaword, *(short *)&dmaword, dmaword>>8, dmaword&0xff);
+
+	/* if this xmit is local and there is a receive pending and there is
+	   room left in the receive buffer, put the word directly in my 
+	   receive buffer.  If it's local but we can't receive it, set
+	   NACK xmit and receive status */
+
+	if (xmit.toid == myid) {
+	  if ((recvstat & 0x0040) && regs.sym.regdmx[recv.dmareg]) {
+	    *recv.iobufp++ = dmaword;
+	    regs.sym.regdmx[recv.dmareg]++;     /* bump count */
+	    regs.sym.regdmx[recv.dmareg+1]++;   /* bump address */
+	  } else {
+	    xmitstat |= 0x1000;             /* set xmit NACK status */
+	    recvstat |= 0x20;               /* set recv premature EOR */
+	  }
+	} else {
+	  /* send remote over sockets */
+	}
+	regs.sym.regdmx[xmit.dmareg+1]++;   /* bump xmit address */
+	regs.sym.regdmx[xmit.dmareg]++;     /* and count */
+      }
+
+xmitdone:
+      pncstat |= 0x4100;                    /* set xmit interrupt + token */
+      if (xmit.toid == myid)
+	pncstat |= 0x8000;                  /* set recv interrupt too */
+      if (xmitstat == 0x0040)               /* complete w/o errors? */
+	xmitstat |= 0x8000;                 /* yes, set ACK xmit status */
+
+      devpoll[device] = PNCPOLL*instpermsec;
+      if (enabled && (pncstat & 0xC000))
+	if (intvec == -1)
+	  intvec = pncvec;
+	else
+	  devpoll[device] = 100;
       IOSKIP;
 
     } else if (func == 016) {   /* set interrupt vector */
-      intvec = crs[A];
+      pncvec = crs[A];
+      TRACE(T_INST|T_RIO, " interrupt vector = '%o\n", pncvec);
       IOSKIP;
 
     } else if (func == 017) {   /* set my node ID */
-      pncstat = (pncstat & 0xFF00) | (crs[A] & 0xFF);
+      myid = crs[A] & 0xFF;
+      pncstat = (pncstat & 0xFF00) | myid;
+      TRACE(T_INST|T_RIO, " my node id is %d\n", myid);
+      if (ni[myid].fd != -1) {
+	printf("PNC: my node id of %d is in ring.cfg\n", myid);
+	fatal(NULL);
+      }
+      strcpy(ni[myid].ip, "127.0.0.1");
+      ni[myid].port = nport;
+      ni[myid].myremid = myid;
+      ni[myid].yourremid = myid;
       IOSKIP;
 
     } else {
@@ -2590,5 +3018,43 @@ int devpnc (int class, int func, int device) {
       fatal(NULL);
     }
     break;
+
+  case 4:
+    TRACE(T_INST|T_RIO, " POLL '%02o%02o\n", func, device);
+
+#if 0
+    while ((fd = accept(pncfd, (struct sockaddr *)&addr, &addrlen)) == -1 && errno == EINTR)
+      ;
+    if (fd == -1) {
+      if (errno != EWOULDBLOCK) {
+	perror("accept error for PNC");
+      }
+    } else {
+      if (fd >= MAXFD)
+	fatal("New connection fd is too big");
+      newdevice = 0;
+      for (i=0; devices[i] && !newdevice && i<MAXBOARDS; i++)
+	for (lx=0; lx<16; lx++)
+	  if (!(dc[devices[i]].dss & bitmask16[lx+1])) {
+	    newdevice = devices[i];
+	    socktoline[fd].device = newdevice;
+	    socktoline[fd].line = lx;
+	    dc[newdevice].dss |= bitmask16[lx+1];
+	    dc[newdevice].sockfd[lx] = fd;
+	    printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
+	    break;
+	  }
+      if (!newdevice) {
+	warn("No free AMLC connection");
+	write(fd, "\rAll AMLC lines are in use!\r\n", 29);
+	close(fd);
+      }
+    }
+#endif
+    devpoll[device] = PNCPOLL*instpermsec;
+    break;
+
+  default:
+    fatal("Bad func in devpcn");
   }
 }

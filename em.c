@@ -174,6 +174,28 @@ typedef unsigned int pa_t;            /* physical address */
   if ((onoff)) crs[KEYS] |= 020000; \
   else crs[KEYS] &= ~020000;
 
+
+/* these macros are for the VI-mode branch insructions */
+
+#define BCLT if (crs[KEYS] & 0200) RPL = iget16(RP); else RPL++
+#define BCLE if (crs[KEYS] & 0300) RPL = iget16(RP); else RPL++
+#define BCEQ if (crs[KEYS] & 0100) RPL = iget16(RP); else RPL++
+#define BCNE if (!(crs[KEYS] & 0100)) RPL = iget16(RP); else RPL++
+#define BCGE if (!(crs[KEYS] & 0200)) RPL = iget16(RP); else RPL++
+#define BCGT if (!(crs[KEYS] & 0300)) RPL = iget16(RP); else RPL++
+#define BLS if (crs[KEYS] & 020000) RPL = iget16(RP); else RPL++
+#define BXNE if (crs[X] != 0) RPL = iget16(RP); else RPL++
+#define BYNE if (crs[Y] != 0) RPL = iget16(RP); else RPL++
+
+/* same, but for logicize instructions */
+
+#define LCLT crs[A] = ((crs[KEYS] & 0200) != 0)
+#define LCLE crs[A] = ((crs[KEYS] & 0300) != 0)
+#define LCEQ crs[A] = ((crs[KEYS] & 0100) != 0)
+#define LCNE crs[A] = ((crs[KEYS] & 0100) == 0)
+#define LCGE crs[A] = !(crs[KEYS] & 0200)
+#define LCGT crs[A] = ((crs[KEYS] & 0300) == 0)
+
 /* macro for restricted instructions (uses current program counter) */
 
 #define RESTRICT() if (RP & RINGMASK32) fault(RESTRICTFAULT, 0, 0);
@@ -213,7 +235,7 @@ char gen0nam[][5] = {
   "XVFY"};
 
 
-/* trace flags to control various aspects of emulator tracing:
+/* trace flags to control aspects of emulator tracing:
 
    T_EAR	trace R-mode effective address calculation
    T_EAV	trace V-mode effective address calculation
@@ -224,6 +246,7 @@ char gen0nam[][5] = {
    T_EAAP       AP effective address calculation
    T_DIO        disk I/O
    T_TIO        tape I/O
+   T_RIO        ring network I/O
    T_TERM       terminal output (tnou[a])
    T_MAP        segmentation
    T_PCL        PCL instructions
@@ -245,24 +268,27 @@ char gen0nam[][5] = {
 #define TB_PX    0x00000800
 #define TB_TIO   0x00001000
 #define TB_TERM  0x00002000
+#define TB_RIO   0x00004000
 
-#define T_EAR TB_EAR
-#define T_EAV TB_EAV
-#define T_EAI TB_EAI
-#define T_INST TB_INST
-#define T_FLOW TB_FLOW
-#define T_MODE TB_MODE
-#define T_EAAP TB_EAAP
-#define T_DIO TB_DIO
-#define T_MAP TB_MAP
-#define T_PCL TB_PCL
+#define T_EAR   TB_EAR
+#define T_EAV   TB_EAV
+#define T_EAI   TB_EAI
+#define T_INST  TB_INST
+#define T_FLOW  TB_FLOW
+#define T_MODE  TB_MODE
+#define T_EAAP  TB_EAAP
+#define T_DIO   TB_DIO
+#define T_MAP   TB_MAP
+#define T_PCL   TB_PCL
 #define T_FAULT TB_FAULT
-#define T_PX TB_PX
-#define T_TIO TB_TIO
-#define T_TERM TB_TERM
+#define T_PX    TB_PX
+#define T_TIO   TB_TIO
+#define T_TERM  TB_TERM
+#define T_RIO   TB_RIO
 
-#if defined(NOTRACE)
+#ifdef NOTRACE
   #define TRACE(flags, formatargs...)
+  #define TRACEA(formatargs...)
 #else
   #define TRACE(flags, formatargs...) if (traceflags & (flags)) fprintf(tracefile,formatargs)
   #define TRACEA(formatargs...) fprintf(tracefile,formatargs)
@@ -276,7 +302,7 @@ char gen0nam[][5] = {
    on and off for each instruction
 
    traceprocs is an array of procedure names we're tracing, with flags
-   and various associated data
+   and associated data
 
    numtraceprocs is the number of entries in traceprocs, 0=none
 
@@ -333,8 +359,8 @@ unsigned short mem[MEMSIZE];   /* system's physical memory */
 #define INCVA(ea,n) (((ea) & 0xFFFF0000) | ((ea)+(n)) & 0xFFFF)
 
 /* STLB cache is defined here.  There are several different styles on
-   various Prime models.  This is modeled after the 6350 STLB, but is
-   only 1-way associative and doesn't have slots dedicated to I/O
+   Prime models.  This is modeled after the 6350 STLB, but is only
+   1-way associative and doesn't have slots dedicated to I/O
    segments */
 
 #define STLBENTS 512
@@ -694,8 +720,11 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
 #define get64(ea) (get64r((ea),RP))
 #define get64r0(ea) (get64r((ea),0))
 #define put16(value, ea) (put16r((value),(ea),RP))
+#define put16r0(value, ea) (put16r((value),(ea),0))
 #define put32(value, ea) (put32r((value),(ea),RP))
+#define put32r0(value, ea) (put32r((value),(ea),0))
 #define put64(value, ea) (put64r((value),(ea),RP))
+#define put64r0(value, ea) (put64r((value),(ea),0))
 
 
 unsigned short get16r(ea_t ea, ea_t rpring) {
@@ -765,17 +794,17 @@ double get64r(ea_t ea, ea_t rpring) {
 }
 
 /* Instruction version of get16 (can be replaced by get16 too...)
-   This needs to be checked more... not sure it actually improves performance
-   all that much, and it doesn't work for self-modifying code in R-mode or
-   Ring 0.  I tried using get64 (with appropriate mask changes) and
-   performance was much worse than not prefetching at all on a G4 */
+   This needs to be checked more... not sure it actually improves
+   performance all that much and is potentially dangerous.  I tried
+   using get64 (with appropriate mask changes) and performance was
+   much worse than not prefetching at all on a G4 */
 
 #if 1
 inline unsigned short iget16(ea_t ea) {
   static ea_t eafirst = -1;             /* ea of instruction buffer */
   static unsigned short insts[2];       /* instruction buffer */
 
-  if (ea & 0x80000000) {                /* check for R-mode inst in register */
+  if (!(crs[KEYS] & 010000)) {          /* don't buffer in R-mode */
     eafirst = -1;
     return get16(ea);
   }
@@ -886,9 +915,9 @@ void calf(ea_t ea) {
 
   /* get concealed stack entry address */
 
-  first = get16r(pcbp+PCBCSFIRST, 0);
-  next = get16r(pcbp+PCBCSNEXT, 0);
-  last = get16r(pcbp+PCBCSLAST, 0);
+  first = get16r0(pcbp+PCBCSFIRST);
+  next = get16r0(pcbp+PCBCSNEXT);
+  last = get16r0(pcbp+PCBCSLAST);
   TRACE(T_FAULT, "CALF: first=%o, next=%o, last=%o\n", first, next, last);
   if (next == first)
     this = last;
@@ -903,7 +932,7 @@ void calf(ea_t ea) {
      R-mode I/O instruction occurs under Primos (causing a restricted
      inst fault that is handled in the outer ring). */
 
-  if (get16r(ea+5, 0) != 0) {
+  if (get16r0(ea+5) != 0) {
     printf("CALF ecb at %o/%o has arguments!\n", ea>>16, ea&0xFFFF);
     fatal(NULL);
   }
@@ -912,8 +941,8 @@ void calf(ea_t ea) {
 
   /* get the concealed stack entries and adjust the new stack frame */
 
-  *(unsigned int *)(cs+0) = get32r(csea+0, 0);
-  *(double *)(cs+2) = get64r(csea+2, 0);
+  *(unsigned int *)(cs+0) = get32r0(csea+0);
+  *(double *)(cs+2) = get64r0(csea+2);
 
   TRACE(T_FAULT, "CALF: cs entry: retpb=%o/%o, retkeys=%o, fcode=%o, faddr=%o/%o\n", cs[0], cs[1], cs[2], cs[3], cs[4], cs[5]);
 
@@ -926,7 +955,7 @@ void calf(ea_t ea) {
 
   /* pop the concealed stack */
 
-  put16r(this, pcbp+PCBCSNEXT, 0);
+  put16r0(this, pcbp+PCBCSNEXT);
 }
 
 
@@ -1003,31 +1032,31 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
     ring = (RPH>>13) & 3;                     /* save current ring */
     pcbp = *(ea_t *)(crs+OWNER);
     if (fvec == PROCESSFAULT || fvec == SEMFAULT || fvec == ACCESSFAULT || fvec == STACKFAULT || fvec == SEGFAULT)
-      pxfvec = get32r(pcbp+PCBFVR0,0);        /* use R0 handler */
+      pxfvec = get32r0(pcbp+PCBFVR0);         /* use R0 handler */
     else if (fvec == PAGEFAULT)
-      pxfvec = get32r(pcbp+PCBFVPF,0);        /* use page fault handler, also R0 */
+      pxfvec = get32r0(pcbp+PCBFVPF);         /* use page fault handler, also R0 */
     else {
-      pxfvec = get32r(pcbp+PCBFVEC+2*ring,0); /* use current ring handler */
+      pxfvec = get32r0(pcbp+PCBFVEC+2*ring);  /* use current ring handler */
       pxfvec |= ((int)ring) << 29;            /* weaken */
     }
 
     /* push a concealed stack entry */
 
-    first = get16r(pcbp+PCBCSFIRST, 0);
-    next = get16r(pcbp+PCBCSNEXT, 0);
-    last = get16r(pcbp+PCBCSLAST, 0);
+    first = get16r0(pcbp+PCBCSFIRST);
+    next = get16r0(pcbp+PCBCSNEXT);
+    last = get16r0(pcbp+PCBCSLAST);
     TRACE(T_FAULT, "fault: PX enabled, pcbp=%o/%o, cs first=%o, next=%o, last=%o\n", pcbp>>16, pcbp&0xFFFF, first, next, last);
     if (next > last) {
       TRACE(T_FAULT, "fault: Concealed stack wraparound to first");
       next = first;
     }
     csea = MAKEVA(crs[OWNERH]+csoffset, next);
-    put32r(faultrp, csea, 0);
-    put16r(crs[KEYS], csea+2, 0);
-    put16r(fcode, csea+3, 0);
-    put32r(faddr, csea+4, 0);
-    put16r(next+6, pcbp+PCBCSNEXT, 0);
-    TRACE(T_FAULT, "fault: updated cs next=%o\n", get16r(pcbp+PCBCSNEXT, 0));
+    put32r0(faultrp, csea);
+    put16r0(crs[KEYS], csea+2);
+    put16r0(fcode, csea+3);
+    put32r0(faddr, csea+4);
+    put16r0(next+6, pcbp+PCBCSNEXT);
+    TRACE(T_FAULT, "fault: updated cs next=%o\n", get16r0(pcbp+PCBCSNEXT));
 
     /* update RP to jump to the fault vector in the fault table */
 
@@ -1087,33 +1116,33 @@ int devpoll[64] = {0};
 
 /* this is the "full system" controller configuration */
 
-int (*devmap[64])(short, short, short) = {
-  /* '0x */ 0,0,0,0,devasr,0,0,devpnc,
-  /* '1x */ devnone,devnone,0,devnone,devmt,devamlc, devamlc, devamlc,
-  /* '2x */ devcp,0,devdisk,devdisk,devdisk,devdisk,devdisk,devdisk,
-  /* '3x */ 0,0,devamlc,0,0,devamlc,devnone,devnone,
-  /* '4x */ 0,0,0,0,0,0,0,0,
-  /* '5x */ devnone,devnone,devamlc,devamlc,devamlc,0,devnone,0,
-  /* '6x */ 0,0,0,0,0,0,0,0,
-  /* '7x */ 0,0,0,0,0,devnone,devnone,0};
+int (*devmap[64])(int, int, int) = {
+  /* '0x */ devnone,devnone,devnone,devnone,devasr,devnone,devnone,devpnc,
+  /* '1x */ devnone,devnone,devnone,devnone,devmt,devamlc, devamlc, devamlc,
+  /* '2x */ devcp,devnone,devdisk,devdisk,devdisk,devdisk,devdisk,devdisk,
+  /* '3x */ devnone,devnone,devamlc,devnone,devnone,devamlc,devnone,devnone,
+  /* '4x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '5x */ devnone,devnone,devamlc,devamlc,devamlc,devnone,devnone,devnone,
+  /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
 
 #else
 
 /* this is the "minimum system" controller configuration */
 
 int (*devmap[64])(int, int, int) = {
-  /* '0x */ 0,0,0,0,devasr,0,0,devpnc,
+  /* '0x */ devnone,devnone,devnone,devnone,devasr,devnone,devnone,devpnc,
 #if 1
-  /* '1x */ devnone,devnone,0,devnone,devmt,devnone, devnone, devnone,
+  /* '1x */ devnone,devnone,devnone,devnone,devmt,devnone, devnone, devnone,
 #else
-  /* '1x */ devnone,devnone,0,devnone,devnone,devnone, devnone, devnone,
+  /* '1x */ devnone,devnone,devnone,devnone,devnone,devnone, devnone, devnone,
 #endif
-  /* '2x */ devcp,0,devnone,devnone,devnone,devnone,devdisk,devnone,
-  /* '3x */ 0,0,devnone,0,0,devnone,devnone,devnone,
-  /* '4x */ 0,0,0,0,0,0,0,devnone,
-  /* '5x */ devnone,devnone,devnone,devnone,devamlc,0,devnone,0,
-  /* '6x */ 0,0,0,0,0,0,0,0,
-  /* '7x */ 0,0,0,0,0,devnone,devnone,0};
+  /* '2x */ devcp,devnone,devnone,devnone,devnone,devnone,devdisk,devnone,
+  /* '3x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '4x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '5x */ devnone,devnone,devnone,devnone,devamlc,devnone,devnone,devnone,
+  /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
 #endif
 
 
@@ -1487,7 +1516,7 @@ dumpsegs() {
 }
 
 
-/* NOTE: this needs get16r */
+/* NOTE: this needs get16r0 */
 
 unsigned short dumppcb(unsigned short pcb) {
   short i;
@@ -1798,8 +1827,6 @@ pcl (ea_t ecbea) {
   unsigned short tnlen, tnword;
   unsigned char tnchar;
 
-#define FATAL$ MAKEVA(06,0164600)
-#define INIT$3 MAKEVA(013,0174041)
 #define UNWIND_ MAKEVA(013,0106577)
 
 #if 0
@@ -2108,14 +2135,14 @@ pxregsave(unsigned short wait) {
   for (i=(wait?014:0); i<020; i++) {
     if (crsl[i] != 0) {
       mask |= bitmask16[i+1];
-      put32r(crsl[i], regp, 0);
+      put32r0(crsl[i], regp);
       regp += 2;
     }
   }
-  put16r(mask, pcbp+PCBMASK, 0);
-  put32r(*(unsigned int *)(crs+TIMER), pcbp+PCBIT, 0);  /* save interval timer */
+  put16r0(mask, pcbp+PCBMASK);
+  put32r0(*(unsigned int *)(crs+TIMER), pcbp+PCBIT);  /* save interval timer */
   crs[KEYS] |= 1;                     /* set save done bit */
-  put16r(crs[KEYS], pcbp+PCBKEYS, 0);
+  put16r0(crs[KEYS], pcbp+PCBKEYS);
 }
 
 /* pxregload: load pcbp's registers from their pcb to the current
@@ -2130,19 +2157,19 @@ pxregload (ea_t pcbp) {
 
   TRACE(T_PX, "pxregload loading registers for process %o/%o\n", pcbp>>16, pcbp&0xFFFF);
   regp = pcbp+PCBREGS;
-  mask = get16r(pcbp+PCBMASK, 0);
+  mask = get16r0(pcbp+PCBMASK);
   for (i=0; i<020; i++) {
     if (mask & bitmask16[i+1]) {
-      crsl[i] = get32r(regp, 0);
+      crsl[i] = get32r0(regp);
       regp += 2;
     } else {
       crsl[i] = 0;
     }
   }
-  newkeys(get16r(pcbp+PCBKEYS, 0));
-  *(unsigned int *)(crs+DTAR2) = get32r(pcbp+PCBDTAR2, 0);
-  *(unsigned int *)(crs+DTAR3) = get32r(pcbp+PCBDTAR3, 0);
-  *(unsigned int *)(crs+TIMER) = get32r(pcbp+PCBIT, 0);
+  newkeys(get16r0(pcbp+PCBKEYS));
+  *(unsigned int *)(crs+DTAR2) = get32r0(pcbp+PCBDTAR2);
+  *(unsigned int *)(crs+DTAR3) = get32r0(pcbp+PCBDTAR3);
+  *(unsigned int *)(crs+TIMER) = get32r0(pcbp+PCBIT);
   crs[OWNERL] = pcbp & 0xFFFF;
 
   TRACE(T_PX, "pxregload: registers loaded, ownerl=%o, modals=%o\n", crs[OWNERL], crs[MODALS]);
@@ -2206,15 +2233,11 @@ dispatcher() {
     if (regs.sym.pla != 0)
       rlp = MAKEVA(crs[OWNERH], regs.sym.pla);
     else if (regs.sym.plb != 0)
-#if 0
-      rlp = MAKEVA(crs[OWNERH], regs.sym.plb);
-#else
       fatal("disp: pla is invalid, plb is valid?");
-#endif
     else
       fatal("dispatch: both pla and plb are zero; can't locate ready list");
     while(1) {
-      rlbol = get16r(rlp, 0);
+      rlbol = get16r0(rlp);
       if (rlbol != 0)
 	break;
       rlp += 2;
@@ -2231,7 +2254,7 @@ dispatcher() {
 #if 1
   /* debug tests to verify ready list structure */
   rlp = MAKEVA(crs[OWNERH], regs.sym.pla);
-  rlbol = get16r(rlp, 0);
+  rlbol = get16r0(rlp);
   if (rlbol != pcbw) {
     printf("disp: rl bol=%o, != process dispatched=%o\n", rlbol, pcbw);
     fatal(NULL);
@@ -2239,8 +2262,8 @@ dispatcher() {
 #if 0
   /* NOTE: if a running process has its priority changed (in the pcb), this
      test fails */
-  if (get16r(pcbp+PCBLEV, 0) != regs.sym.pla) {
-    printf("disp: dispatched process level=%o, != pla=%o\n", get16r(pcbp+PCBLEV, 0), regs.sym.pla);
+  if (get16r0(pcbp+PCBLEV) != regs.sym.pla) {
+    printf("disp: dispatched process level=%o, != pla=%o\n", get16r0(pcbp+PCBLEV), regs.sym.pla);
     fatal(NULL);
   }
 #endif
@@ -2250,7 +2273,7 @@ dispatcher() {
      definition, this process should not be on any wait lists,
      so pcb.waitlist(seg) should be zero.  Check it */
 
-  utempa = get16r(pcbp+PCBWAIT, 0);
+  utempa = get16r0(pcbp+PCBWAIT);
   if (utempa != 0) {
     printf("disp: pcb %o/%o selected, but wait segno = %o\n", pcbp>>16, pcbp&0xFFFF, utempa);
     fatal(NULL);
@@ -2330,11 +2353,11 @@ dispatcher() {
 
   /* if this process' abort flags are set, clear them and take process fault */
 
-  utempa = get16r(pcbp+PCBABT, 0);
+  utempa = get16r0(pcbp+PCBABT);
   if (utempa != 0) {
     TRACE(T_PX, "dispatch: abort flags for %o are %o\n", crs[OWNERL], utempa);
     //printf("dispatch: abort flags for %o are %o\n", crs[OWNERL], utempa);
-    put16r(0, pcbp+PCBABT, 0);
+    put16r0(0, pcbp+PCBABT);
     fault(PROCESSFAULT, utempa, 0);
     fatal("fault returned after process fault");    
   }
@@ -2359,7 +2382,7 @@ unready (ea_t waitlist, unsigned short newlink) {
 
   pcbp = *(ea_t *)(crs+OWNER);
   rlp = MAKEVA(crs[OWNERH], regs.sym.pla);
-  rl = get32r(rlp, 0);
+  rl = get32r0(rlp);
   bol = rl >> 16;
   eol = rl & 0xFFFF;
   if (bol != (pcbp & 0xFFFF)) {
@@ -2370,13 +2393,13 @@ unready (ea_t waitlist, unsigned short newlink) {
     bol = 0;
     eol = 0;
   } else {
-    bol = get16r(pcbp+1, 0);
+    bol = get16r0(pcbp+1);
   }
   rl = (bol<<16) | eol;
-  put32r(rl, rlp, 0);          /* update ready list */
+  put32r0(rl, rlp);           /* update ready list */
   TRACE(T_PX, "unready: new rl bol/eol = %o/%o\n", rl>>16, rl&0xFFFF);
-  put16r(newlink, pcbp+1, 0);  /* update my pcb link */
-  put32r(waitlist, pcbp+2, 0); /* update my pcb wait address */
+  put16r0(newlink, pcbp+1);   /* update my pcb link */
+  put32r0(waitlist, pcbp+2);  /* update my pcb wait address */
   *(unsigned int *)(crs+PB) = RP;
   pxregsave(1);
   regs.sym.pcba = 0;
@@ -2402,26 +2425,26 @@ unsigned short ready (ea_t pcbp, unsigned short begend) {
     fatal("I'm running, but not regs.sym.pcba!");
 #endif
 
-  level = get16r(pcbp+PCBLEV, 0);
+  level = get16r0(pcbp+PCBLEV);
   rlp = MAKEVA(crs[OWNERH],level);
-  rl = get32r(rlp, 0);
+  rl = get32r0(rlp);
   TRACE(T_PX, "ready: pcbp=%o/%o\n", pcbp>>16, pcbp&0xFFFF);
   TRACE(T_PX, "ready: old bol/eol for level %o = %o/%o\n", level, rl>>16, rl&0xFFFF);
   pcbw = pcbp;                            /* pcb word number */
   if ((rl>>16) == 0) {                    /* bol=0: this RL level was empty */
-    put32r(0, pcbp+1, 0);                 /* set link and wait SN in pcb */
+    put32r0(0, pcbp+1);                   /* set link and wait SN in pcb */
     rl = (pcbw<<16) | pcbw;               /* set beg=end */
   } else if (begend) {                    /* notify to beginning */
-    put32r(rl & 0xFFFF0000, pcbp+1, 0);   /* set link and wait SN in pcb */
+    put32r0(rl & 0xFFFF0000, pcbp+1);     /* set link and wait SN in pcb */
     rl = (pcbw<<16) | rl&0xFFFF;          /* new is bol, eol is unchanged */
   } else {                                /* notify to end */
-    put32r(0, pcbp+1, 0);                 /* set link and wait SN in pcb */
+    put32r0(0, pcbp+1);                   /* set link and wait SN in pcb */
     xpcbp = MAKEVA(crs[OWNERH],rl&0xFFFF); /* get ptr to last pcb at this level */
-    put16r(pcbw,xpcbp+1, 0);              /* set last pcb's forward link */
+    put16r0(pcbw,xpcbp+1);                /* set last pcb's forward link */
     rl = (rl & 0xFFFF0000) | pcbw;        /* rl bol is unchanged, eol is new */
   }
-  put32r(rl, rlp, 0);
-  TRACE(T_PX, "ready: new bol/eol for level %o = %o/%o, pcb's link is %o\n", level, rl>>16, rl&0xFFFF, get16r(pcbp+1, 0));
+  put32r0(rl, rlp);
+  TRACE(T_PX, "ready: new bol/eol for level %o = %o/%o, pcb's link is %o\n", level, rl>>16, rl&0xFFFF, get16r0(pcbp+1));
 
   /* is this new process higher priority than me?  If so, return 1
      so that the dispatcher is entered.  If not, check for new plb/pcbb */
@@ -2454,7 +2477,7 @@ pwait() {
 
   ea = apea(NULL);
   TRACE(T_PX, "%o/%o: wait on %o/%o, pcb %o, keys=%o, modals=%o\n", RPH, RPL, ea>>16, ea&0xFFFF, crs[OWNERL], crs[KEYS], crs[MODALS]);
-  utempl = get32r(ea, 0);     /* get count and BOL */
+  utempl = get32r0(ea);       /* get count and BOL */
   count = utempl>>16;         /* count (signed) */
   bol = utempl & 0xFFFF;      /* beginning of wait list */
   TRACE(T_PX, " wait list count was %d, bol was %o\n", count, bol);
@@ -2470,18 +2493,18 @@ pwait() {
       printf("WAIT: pcba=%o != ownerl=%o\n", regs.sym.pcba, crs[OWNERL]);
       fatal(NULL);
     }
-    mylev = get16r(*(ea_t *)(crs+OWNER),0);
+    mylev = get16r0(*(ea_t *)(crs+OWNER));
 
     if (bol != 0) {
       pcbp = MAKEVA(crs[OWNERH],bol);
-      pcblevnext = get32r(pcbp, 0);
+      pcblevnext = get32r0(pcbp);
       pcblev = pcblevnext >> 16;
     }
     TRACE(T_PX, " my level=%o, pcblev=%o\n", mylev, pcblev);
 
     if (count == 1 || mylev < pcblev) {   /* add me to the beginning */
       utempl = (count<<16) | crs[OWNERL];
-      put32r(utempl, ea, 0);    /* update semaphore count/bol */
+      put32r0(utempl, ea);    /* update semaphore count/bol */
     } else {
       /* do a priority scan... */
       while (pcblev <= mylev && bol != 0) {
@@ -2489,12 +2512,12 @@ pwait() {
 	bol = pcblevnext & 0xFFFF;
 	if (bol != 0) {
 	  pcbp = MAKEVA(crs[OWNERH],bol);
-	  pcblevnext = get32r(pcbp, 0);
+	  pcblevnext = get32r0(pcbp);
 	  pcblev = pcblevnext >> 16;
 	}
       }
-      put16r(crs[OWNERL], prevpcbp+PCBLINK, 0);
-      put16r(*(unsigned short *)&count, ea, 0);    /* update count */
+      put16r0(crs[OWNERL], prevpcbp+PCBLINK);
+      put16r0(*(unsigned short *)&count, ea);    /* update count */
       TRACE(T_PX, " new count=%d, new link for pcb %o=%o, bol=%o\n", prevpcbp&0xffff, crs[OWNERL], bol);
     }
     unready(ea, bol);
@@ -2526,7 +2549,7 @@ nfy(unsigned short inst) {
     fatal(NULL);
   }
   ea = apea(NULL);
-  utempl = get32r(ea, 0);     /* get count and BOL */
+  utempl = get32r0(ea);       /* get count and BOL */
   scount = utempl>>16;        /* count (signed) */
   bol = utempl & 0xFFFF;      /* beginning of wait list */
   TRACE(T_PX, "%o/%o: opcode %o %s, ea=%o/%o, count=%d, bol=%o, I am %o\n", RPH, RPL, inst, nfyname[inst-01210], ea>>16, ea&0xFFFF, scount, bol, crs[OWNERL]);
@@ -2544,12 +2567,12 @@ nfy(unsigned short inst) {
       fatal(NULL);
     }
     pcbp = MAKEVA(crs[OWNERH], bol);
-    utempl = get32r(pcbp+PCBWAIT, 0);
+    utempl = get32r0(pcbp+PCBWAIT);
     if (utempl != ea) {
       printf("NFY: bol=%o, pcb waiting on %o/%o != ea %o/%o\n", utempl>>16, utempl&0xFFFF, ea>>16, ea&0xFFFF);
       fatal(NULL);
     }
-    bol = get16r(pcbp+PCBLINK, 0);     /* get new beginning of wait list */
+    bol = get16r0(pcbp+PCBLINK);     /* get new beginning of wait list */
     resched = ready(pcbp, begend);     /* put this pcb on the ready list */
   }
 
@@ -2567,7 +2590,7 @@ keys = 14200, modals=137
     bol = 0;
 #endif
   utempl = (scount<<16) | bol;
-  put32r(utempl, ea, 0);         /* update the semaphore */
+  put32r0(utempl, ea);           /* update the semaphore */
 
   if (inst & 4) {                /* interrupt notify */
     if (inst & 2)                /* clear active interrupt */
@@ -2881,8 +2904,8 @@ main (int argc, char **argv) {
   bootfile[0] = 0;
   pmap32bits = 0;
   csoffset = 0;
-  tport = -1;
-  nport = -1;
+  tport = 0;
+  nport = 0;
 
   /* check args */
 
@@ -2951,6 +2974,8 @@ main (int argc, char **argv) {
 	  traceflags |= TB_TIO;
 	else if (strcmp(argv[i],"term") == 0)
 	  traceflags |= TB_TERM;
+	else if (strcmp(argv[i],"rio") == 0)
+	  traceflags |= TB_RIO;
 	else if (strcmp(argv[i],"all") == 0)
 	  traceflags = ~0;
 	else if (isdigit(argv[i][0]) && strlen(argv[i]) < 2 && sscanf(argv[i],"%d", &templ) == 1)
@@ -2994,7 +3019,7 @@ main (int argc, char **argv) {
   if (traceuser != 0)
     TRACEA("Tracing enabled for OWNERL %o\n", traceuser);
   else
-    TRACEA("Tracing enabled for all users");
+    TRACEA("Tracing enabled for all users\n");
   savetraceflags = traceflags;
   for (i=0; i<numtraceprocs; i++) {
     for (j=0; j<numsyms; j++) {
@@ -3015,19 +3040,14 @@ main (int argc, char **argv) {
   pmap32bits = (cpuid == 15 || cpuid == 18 || cpuid == 19 || cpuid == 24 || cpuid >= 26);
   if ((26 <= cpuid && cpuid <= 29) || cpuid >= 35)
     csoffset = 1;
-  if (tport == -1)
-    tport = 8000;
-  if (nport == -1)
-    nport = 8001;
 
   /* initialize all devices */
 
   for (i=0; i<64; i++)
-    if (devmap[i])
-      if (devmap[i](-1, 0, i)) {   /* if initialization fails, */
-	devmap[i] = devnone;       /* remove device */
-	printf("emulator: device '%o failed initialization - device removed\n", i);
-      }
+    if (devmap[i](-1, 0, i)) {   /* if initialization fails, */
+      devmap[i] = devnone;       /* remove device */
+      fprintf(stderr, "emulator: device '%o failed initialization - device removed\n", i);
+    }
 
 
   os_init();
@@ -3220,8 +3240,6 @@ For disk boots, the last 3 digits can be:\n\
 
     for (i=0; i<64; i++)
       if (devpoll[i] && (--devpoll[i] <= 0)) {
-	if (!devmap[i])
-	  fatal("devpoll set but devmap is null");
 	devmap[i](4, 0, i);
       }
 
@@ -3309,8 +3327,8 @@ For disk boots, the last 3 digits can be:\n\
 	if (crs[TIMER] == 0) {
 	  TRACE(T_PX,  "#%d: pcb %o timer overflow\n", instcount, crs[OWNERL]);
 	  ea = *(ea_t *)(crs+OWNER);
-	  m = get16r(ea+4, 0) | 1;       /* set process abort flag */
-	  put16r(m, ea+4, 0);
+	  m = get16r0(ea+4) | 1;       /* set process abort flag */
+	  put16r0(m, ea+4);
 	}
       }
     }
@@ -4231,6 +4249,7 @@ irtn:
 	}
       }
 
+
       if (class == 3) {
 	TRACE(T_INST, " generic class 3\n");
 
@@ -4238,56 +4257,32 @@ irtn:
 
 	case 0141604:
 	  TRACE(T_FLOW, " BCLT\n");
-bclt:
-	  if (crs[KEYS] & 0200)
-	    RPL = iget16(RP);
-	  else
-	    RPL++;
+	  BCLT;
 	  continue;
 
 	case 0141600:
 	  TRACE(T_FLOW, " BCLE\n");
-bcle:
-	  if (crs[KEYS] & 0300)
-	    RPL = iget16(RP);
-	  else
-	    RPL++;
+	  BCLE;
 	  continue;
 
 	case 0141602:
 	  TRACE(T_FLOW, " BCEQ\n");
-bceq:
-	  if (crs[KEYS] & 0100)
-	    RPL = iget16(RP);
-	  else
-	    RPL++;
+	  BCEQ;
 	  continue;
 
 	case 0141603:
 	  TRACE(T_FLOW, " BCNE\n");
-bcne:
-	  if (!(crs[KEYS] & 0100))
-	    RPL = iget16(RP);
-	  else
-	    RPL++;
+	  BCNE;
 	  continue;
 
 	case 0141605:
 	  TRACE(T_FLOW, " BCGE\n");
-bcge:
-	  if (!(crs[KEYS] & 0200))
-	    RPL = iget16(RP);
-	  else
-	    RPL++;
+	  BCGE;
 	  continue;
 
 	case 0141601:
 	  TRACE(T_FLOW, " BCGT\n");
-bcgt:
-	  if (!(crs[KEYS] & 0300))
-	    RPL = iget16(RP);
-	  else
-	    RPL++;
+	  BCGT;
 	  continue;
 
 	case 0141705:
@@ -4316,118 +4311,122 @@ bcgt:
 
 	case 0141706:
 	  TRACE(T_FLOW, " BLS\n");
-bls:
-	  if (crs[KEYS] & 020000)
-	    RPL = iget16(RP);
-	  else
-	    RPL++;
+	  BLS;
 	  continue;
 
 	case 0140614:
 	  TRACE(T_FLOW, " BLT\n");
 	  SETCC_A;
-	  goto bclt;
+	  BCLT;
+	  continue;
 
 	case 0140610:
 	  TRACE(T_FLOW, " BLE\n");
 	  SETCC_A;
-	  goto bcle;
+	  BCLE;
+	  continue;
 
 	case 0140612:
 	  TRACE(T_FLOW, " BEQ\n");
 	  SETCC_A;
-	  goto bceq;
+	  BCEQ;
+	  continue;
 
 	case 0140613:
 	  TRACE(T_FLOW, " BNE\n");
 	  SETCC_A;
-	  goto bcne;
+	  BCNE;
+	  continue;
 
 	case 0140615:
 	  TRACE(T_FLOW, " BGE\n");
 	  SETCC_A;
-	  goto bcge;
+	  BCGE;
+	  continue;
 
 	case 0140611:
 	  TRACE(T_FLOW, " BGT\n");
 	  SETCC_A;
-	  goto bcgt;
+	  BCGT;
 	  continue;
 
 	case 0140700:
 	  TRACE(T_FLOW, " BLLE\n");
 	  SETCC_L;
-	  goto bcle;
+	  BCLE;
+	  continue;
 
 	case 0140702:
 	  TRACE(T_FLOW, " BLEQ\n");
 	  SETCC_L;
-	  goto bceq;
+	  BCEQ;
+	  continue;
 
 	case 0140703:
 	  TRACE(T_FLOW, " BLNE\n");
 	  SETCC_L;
-	  goto bcne;
+	  BCNE;
+	  continue;
 
 	case 0140701:
 	  TRACE(T_FLOW, " BLGT\n");
 	  SETCC_L;
-	  goto bcgt;
+	  BCGT;
+	  continue;
 
 	case 0141614:
 	  TRACE(T_FLOW, " BFLT\n");
 	  SETCC_F;
-	  goto bclt;
+	  BCLT;
+	  continue;
 
 	case 0141610:
 	  TRACE(T_FLOW, " BFLE\n");
 	  SETCC_F;
-	  goto bcle;
+	  BCLE;
+	  continue;
 
 	case 0141612:
 	  TRACE(T_FLOW, " BFEQ\n");
 	  SETCC_F;
-	  goto bceq;
+	  BCEQ;
+	  continue;
 
 	case 0141613:
 	  TRACE(T_FLOW, " BFNE\n");
 	  SETCC_F;
-	  goto bcne;
+	  BCNE;
+	  continue;
 
 	case 0141615:
 	  TRACE(T_FLOW, " BFGE\n");
 	  SETCC_F;
-	  goto bcge;
+	  BCGE;
+	  continue;
 
 	case 0141611:
 	  TRACE(T_FLOW, " BFGT\n");
 	  SETCC_F;
-	  goto bcgt;
+	  BCGT;
+	  continue;
 
 	case 0141334:
 	  TRACE(T_FLOW, " BIX\n");
 	  crs[X]++;
-bidx:
-	  if (crs[X] != 0)
-	    RPL = iget16(RP);
-	  else
-	    RPL++;
+	  BXNE;
 	  continue;
 
 	case 0141324:
 	  TRACE(T_FLOW, " BIY\n");
 	  crs[Y]++;
-bidy:
-	  if (crs[Y] != 0)
-	    RPL = iget16(RP);
-	  else
-	    RPL++;
+	  BYNE;
 	  continue;
 
 	case 0140724:
 	  TRACE(T_FLOW, " BDY\n");
 	  crs[Y]--;
-	  goto bidy;
+	  BYNE;
+	  continue;
 
 	case 0140734:
 	  TRACE(T_FLOW, " BDX\n");
@@ -4447,8 +4446,8 @@ bidy:
 	       value (this is stored as number of instructions left until the
 	       timer expires).
 
-	       NOTE: In practice, the clock device ticks at 330 times a sec,
-	       so we only get to delay about 3ms here.
+	       NOTE: In practice, the clock device ticks at 330 times a sec
+	       under Primos so we only get to delay about 3ms here.
 	    */
 
 	    utempl = instpermsec*10;          /* limit delay to 10 millisecs */
@@ -4482,8 +4481,8 @@ bidy:
 		crs[TIMER] += actualmsec;
 		if (crs[TIMER] < utempa) {
 		  tempea = *(ea_t *)(crs+OWNER);
-		  utempa = get16r(tempea+4, 0) | 1;    /* set process abort flag */
-		  put16r(utempa, tempea+4, 0);
+		  utempa = get16r0(tempea+4) | 1;    /* set process abort flag */
+		  put16r0(utempa, tempea+4);
 		}
 	      } else {
 		crs[TIMERL] += utempl;
@@ -4491,14 +4490,9 @@ bidy:
 	      instcount += actualmsec*instpermsec;
 	    }
 	  }
-	  if (crs[X] != 0)
-	    RPL = m;
-	  else
-	    RPL++;
-	  continue;
-#else
-	  goto bidx;
 #endif
+	  BXNE;
+	  continue;
 
 	case 0141206:
 	  TRACE(T_FLOW, " A1A\n");
@@ -4794,119 +4788,129 @@ a1a:
 
 	case 0141500:
 	  TRACE(T_FLOW, " LCLT\n");
-lclt:
-	  crs[A] = ((crs[KEYS] & 0200) != 0);
+	  LCLT;
 	  continue;
 
 	case 0141501:
 	  TRACE(T_FLOW, " LCLE\n");
-lcle:
-	  crs[A] = ((crs[KEYS] & 0300) != 0);
+	  LCLE;
 	  continue;
 
 	case 0141503:
 	  TRACE(T_FLOW, " LCEQ\n");
-lceq:
-	  crs[A] = ((crs[KEYS] & 0100) != 0);
+	  LCEQ;
 	  continue;
 
 	case 0141502:
 	  TRACE(T_FLOW, " LCNE\n");
-lcne:
-	  crs[A] = ((crs[KEYS] & 0100) == 0);
+	  LCNE;
 	  continue;
 
 	case 0141504:
 	  TRACE(T_FLOW, " LCGE\n");
-lcge:
-	  crs[A] = !(crs[KEYS] & 0200);
+	  LCGE;
 	  continue;
 
 	case 0141505:
 	  TRACE(T_FLOW, " LCGT\n");
-lcgt:
-	  crs[A] = ((crs[KEYS] & 0300) == 0);
+	  LCGT;
 	  continue;
 
 	case 0140410:
 	  TRACE(T_FLOW, " LLT\n");
 	  SETCC_A;
-	  goto lclt;
+	  LCLT;
+	  continue;
 
 	case 0140411:
 	  TRACE(T_FLOW, " LLE\n");
 	  SETCC_A;
-	  goto lcle;
+	  LCLE;
+	  continue;
 
 	case 0140412:
 	  TRACE(T_FLOW, " LNE\n");
 	  SETCC_A;
-	  goto lcne;
+	  LCNE;
+	  continue;
 
 	case 0140413:
 	  TRACE(T_FLOW, " LEQ\n");
 	  SETCC_A;
-	  goto lceq;
+	  LCEQ;
+	  continue;
 
 	case 0140414:
 	  TRACE(T_FLOW, " LGE\n");
 	  SETCC_A;
-	  goto lcge;
+	  LCGE;
+	  continue;
 
 	case 0140415:
 	  TRACE(T_FLOW, " LGT\n");
 	  SETCC_A;
-	  goto lcgt;
+	  LCGT;
+	  continue;
 
 	case 0141511:
 	  TRACE(T_FLOW, " LLLE\n");
 	  SETCC_L;
-	  goto lcle;
+	  LCLE;
+	  continue;
 
 	case 0141513:
 	  TRACE(T_FLOW, " LLEQ\n");
 	  SETCC_L;
-	  goto lceq;
+	  LCEQ;
+	  continue;
 
 	case 0141512:
 	  TRACE(T_FLOW, " LLNE\n");
 	  SETCC_L;
-	  goto lcne;
+	  LCNE;
+	  continue;
 
 	case 0141515:
 	  TRACE(T_FLOW, " LLGT\n");
 	  SETCC_L;
-	  goto lcgt;
+	  LCGT;
+	  continue;
 
 	case 0141110:
 	  TRACE(T_FLOW, " LFLT\n");
 	  SETCC_F;
-	  goto lclt;
+	  LCLT;
+	  continue;
 
 	case 0141111:
 	  TRACE(T_FLOW, " LFLE\n");
 	  SETCC_F;
-	  goto lcle;
+	  LCLE;
+	  continue;
 
 	case 0141113:
 	  TRACE(T_FLOW, " LFEQ\n");
 	  SETCC_F;
-	  goto lceq;
+	  LCEQ;
+	  continue;
 
 	case 0141112:
 	  TRACE(T_FLOW, " LFNE\n");
 	  SETCC_F;
-	  goto lcne;
+	  LCNE;
+	  continue;
 
 	case 0141114:
 	  TRACE(T_FLOW, " LFGE\n");
 	  SETCC_F;
-	  goto lcge;
+	  LCGE;
+	  continue;
 
 	case 0141115:
 	  TRACE(T_FLOW, " LFGT\n");
 	  SETCC_F;
-	  goto lcgt;
+	  LCGT;
+	  continue;
 
 	case 0140550:
 	  TRACE(T_FLOW, " FLOT\n");
@@ -5085,7 +5089,7 @@ lcgt:
 	  if (!(crs[KEYS] & 020000))
 	    RPL = iget16(RP);
 	  else
-	    goto bceq;
+	    BCEQ;
 	  continue;
 
 #if 0
@@ -5108,8 +5112,9 @@ lcgt:
 	case 0141710:
 	  TRACE(T_FLOW, " BMGT\n");
 	  if (crs[KEYS] & 020000)
-	    goto bcne;
-	  RPL++;
+	    BCNE;
+	  else
+	    RPL++;
 	  continue;
 
 	case 0141404:
@@ -6427,8 +6432,6 @@ keys = 14200, modals=100177
 
     case 0301:
       TRACE(T_FLOW, " STLR\n");
-      if (MAKEVA(012,037122) <= ea && ea <= MAKEVA(012,042664))
-	printf("STLR in PNCDIM at %o/%o, ea=%o/%o, L=%o/%o\n", RPH, RPL-2, ea>>16, ea&0xffff, crs[A], crs[B]);
       utempa = ea;                 /* word number portion only */
       if (utempa & 040000) {       /* absolute RF addressing */
 	RESTRICT();
@@ -7130,14 +7133,5 @@ pio(unsigned int inst) {
   func = (inst >> 6) & 017;
   device = inst & 077;
   TRACE(T_INST, " pio, class=%d, func='%o, device='%o\n", class, func, device);
-  if (devmap[device])
-    devmap[device](class, func, device);
-  else {
-#if 1
-    printf("pio: no handler, class=%d, func='%o, device='%o, A='%o\n", class, func, device, crs[A]);
-    fatal(NULL);
-#else
-    TRACEA("pio: no handler, class=%d, func='%o, device='%o, A='%o\n", class, func, device, crs[A]);
-#endif
-  }
+  devmap[device](class, func, device);
 }
