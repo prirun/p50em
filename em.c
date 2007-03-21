@@ -89,8 +89,6 @@ OK:
 #include <errno.h>
 #include <setjmp.h>
 #include <sys/time.h>
-#include "syscom/keys.ins.cc"
-#include "syscom/errd.ins.cc"
 
 /* In SR modes, Prime CPU registers are mapped to memory locations
    0-'37, but only 0-7 are user accessible.  In the post-P300
@@ -141,6 +139,9 @@ typedef unsigned int pa_t;            /* physical address */
   else if (*(int *)(crs+FLTH) == 0) \
     crs[KEYS] |= 0100;
 
+/* this is probably incorrect - needs to test 16 more bits for denomalized
+   doubles */
+
 #define SETCC_D SETCC_F
 
 /* XEXPC is a dummy to indicate that the C-bit may not be set correctly */
@@ -177,13 +178,13 @@ typedef unsigned int pa_t;            /* physical address */
 
 /* these macros are for the VI-mode branch insructions */
 
-#define BCLT if (crs[KEYS] & 0200) RPL = iget16(RP); else RPL++
-#define BCLE if (crs[KEYS] & 0300) RPL = iget16(RP); else RPL++
-#define BCEQ if (crs[KEYS] & 0100) RPL = iget16(RP); else RPL++
+#define BCLT if   (crs[KEYS] & 0200)  RPL = iget16(RP); else RPL++
+#define BCLE if   (crs[KEYS] & 0300)  RPL = iget16(RP); else RPL++
+#define BCEQ if   (crs[KEYS] & 0100)  RPL = iget16(RP); else RPL++
 #define BCNE if (!(crs[KEYS] & 0100)) RPL = iget16(RP); else RPL++
 #define BCGE if (!(crs[KEYS] & 0200)) RPL = iget16(RP); else RPL++
 #define BCGT if (!(crs[KEYS] & 0300)) RPL = iget16(RP); else RPL++
-#define BLS if (crs[KEYS] & 020000) RPL = iget16(RP); else RPL++
+#define BLS  if  (crs[KEYS] & 020000) RPL = iget16(RP); else RPL++
 #define BXNE if (crs[X] != 0) RPL = iget16(RP); else RPL++
 #define BYNE if (crs[Y] != 0) RPL = iget16(RP); else RPL++
 
@@ -310,7 +311,7 @@ char gen0nam[][5] = {
 */
 
 int traceflags=0;                    /* each bit is a trace flag */
-int savetraceflags=0;                /* see ITLB */
+int savetraceflags=0;
 int traceuser=0;                     /* OWNERL to trace */
 int numtraceprocs=0;
 #define MAXTRACEPROCS 2
@@ -335,7 +336,7 @@ unsigned short sswitch = 014114;     /* sense switches, set with -ss & -boot*/
 
 unsigned short cpuid = 27;           /* STPM CPU model, set with -cpuid */
 
-unsigned long instcount=0;      /* global instruction count */
+unsigned long instcount=0;           /* global instruction count */
 
 unsigned short inhcount = 0;         /* number of instructions to stay inhibited */
 
@@ -344,7 +345,7 @@ unsigned int instpermsec = 2000;     /* initial assumption for inst/msec */
 jmp_buf jmpbuf;                      /* for longjumps to the fetch loop */
 
 /* The standard Prime physical memory limit on early machines is 8MB.
-   Later machines have higher memory capacities, up to 1GB, using 
+   Later machines have higher memory capacities, up to 512M, using 
    32-bit page tables. 
    NOTE: rev 20 is limited to 32MB on all machines. */
 
@@ -2128,6 +2129,11 @@ pxregsave(unsigned short wait) {
 
   if (crs[OWNERL] == 0 || (crs[KEYS] & 1))
     return;
+
+  /* NB: I think hardware might save the base registers in a predictable
+     location in the PCB register save area, rather than compressed in a
+     random order, because IIRC, Primos sometimes looks at a waiting
+     process' PB to see where it is waiting */
 
   pcbp = *(unsigned int *)(crs+OWNER);
   regp = pcbp+PCBREGS;
@@ -4085,7 +4091,8 @@ irtn:
 
 	case 000505:                 /* SVC */
 	  TRACE(T_FLOW, " SVC\n");
-	  svc();
+	  fault(SVCFAULT, 0, 0);
+	  fatal("Returned from SVC fault");
 	  continue;
 
 	case 000111:                  /* CEA */
@@ -4438,8 +4445,8 @@ irtn:
 	    long delayusec, actualmsec;
 
 	    /* for BDX *-1 loop (backstop process mainly), we want to change
-	       this to a 10ms sleep so that the emulation host doesn't peg the
-	       CPU.
+	       this to a 10ms sleep so that the emulation host's CPU isn't 
+	       pegged the whole time the emulator is running.
 
 	       So first, check to see if any device times expire sooner than
 	       this, and if so, limit the sleep time to the lowest expiration
@@ -6018,7 +6025,7 @@ keys = 14200, modals=100177
 
     case 01002:
       if (crs[KEYS] & 010000) {          /* V/I mode */
-	//traceflags = ~TB_MAP;
+	TRACE(T_FLOW|T_PCL, " PCL %s\n", searchloadmap(ea, 'e'));
 	//TRACE(T_FLOW|T_PCL, "#%d %o/%o: PCL %o/%o\n", instcount, RPH, RPL-2, ea>>16, ea&0xFFFF);
 	if (numtraceprocs > 0 && TRACEUSER)
 	  for (i=0; i<numtraceprocs; i++)
@@ -6029,7 +6036,6 @@ keys = 14200, modals=100177
 	      printf("Enabled trace for %s at sb '%o/%o\n", traceprocs[i].name, crs[SBH], crs[SBL]);
 	      break;
 	    }
-	TRACE(T_FLOW|T_PCL, " PCL %s\n", searchloadmap(ea, 'e'));
 	pcl(ea);
       } else {
 	TRACE(T_FLOW, " CREP\n");
@@ -6491,7 +6497,27 @@ keys = 14200, modals=100177
   }
 }
     
-  
+
+/* here for PIO instructions: OCP, SKS, INA, OTA.  The instruction
+   word is passed in as an argument to handle EIO (Execute I/O) in
+   V-mode.
+*/
+
+pio(unsigned int inst) {
+  int class;
+  int func;
+  int device;
+
+  RESTRICT();
+  class = inst >> 14;
+  func = (inst >> 6) & 017;
+  device = inst & 077;
+  TRACE(T_INST, " pio, class=%d, func='%o, device='%o\n", class, func, device);
+  devmap[device](class, func, device);
+}
+
+
+#if 0  
 /* Handle SVC instruction.  For real hardware emulation on an R-mode
    such as the P300, SVC would interrupt (JST*) through location '75
    (in vectored mode) or would fault on the P400.  
@@ -7115,23 +7141,4 @@ badsvc:
   printf(" halting on bad svc, class=%o, func=%o\n", class, func);
   fatal(NULL);
 }
-
-
-
-/* here for PIO instructions: OCP, SKS, INA, OTA.  The instruction
-   word is passed in as an argument to handle EIO (Execute I/O) in
-   V-mode.
-*/
-
-pio(unsigned int inst) {
-  int class;
-  int func;
-  int device;
-
-  RESTRICT();
-  class = inst >> 14;
-  func = (inst >> 6) & 017;
-  device = inst & 077;
-  TRACE(T_INST, " pio, class=%d, func='%o, device='%o\n", class, func, device);
-  devmap[device](class, func, device);
-}
+#endif

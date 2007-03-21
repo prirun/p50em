@@ -11,8 +11,6 @@
 #include <sys/times.h>
 
 #include "os.h"
-#include "syscom/keys.ins.cc"
-#include "syscom/errd.ins.cc"
 
 
 os_init() {
@@ -76,7 +74,7 @@ os_exit() {
 
 
 os_erkl$$(short *key, short *erasech, short *killch, short *code) {
-  if (*key == k$read) {
+  if (*key == 1) {     /* k$read */
     *erasech = 0210;
     *killch = 0377;
     *code = 0;

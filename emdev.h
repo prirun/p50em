@@ -260,12 +260,17 @@ int devasr (int class, int func, int device) {
   static int needflush;     /* true if data has been written but not flushed */
   static struct termios terminfo;
   static fd_set fds;
+  static short vcptime[8] = {7*0, 1};
+  static short vcptimeix;
+
   struct timeval timeout;
   unsigned char ch;
   int newflags;
   int n;
   int doblock;
-
+  time_t unixtime;
+  struct tm *tms;
+  
   doblock = BLOCKIO;
 
   switch (class) {
@@ -364,9 +369,9 @@ int devasr (int class, int func, int device) {
 
   case 2:
     TRACE(T_INST, " INA '%02o%02o\n", func, device);
-    TRACE(T_INST, "INA, RPH=%o, RPL=%o, [RP]=%o, [RP+1]=%o, BLOCKIO=%d\n", RPH, RPL, iget16(RP), iget16(RP+1),BLOCKIO);
+    //TRACE(T_INST, "INA, RPH=%o, RPL=%o, [RP]=%o, [RP+1]=%o, BLOCKIO=%d\n", RPH, RPL, iget16(RP), iget16(RP+1),BLOCKIO);
     if (func == 0 || func == 010) {         /* read a character */
-      if (BLOCKIO)
+      if (doblock)
 	newflags = ttyflags & ~O_NONBLOCK;
       else
 	newflags = ttyflags | O_NONBLOCK;
@@ -375,7 +380,7 @@ int devasr (int class, int func, int device) {
 	fatal(NULL);
       }
       ttyflags = newflags;
-      if (needflush) {
+      if (doblock && needflush) {
 	if (fflush(stdout) == 0) {
 	  needflush = 0;
 	  devpoll[device] = 0;
@@ -430,8 +435,10 @@ readasr:
     } else if (func == 012) {    /* read control word */
       crs[A] = 04110;
       IOSKIP;
-    } else if (func == 017) {    /* read xmit interrupt vector */
-      crs[A] = 0;
+    } else if (func == 017) {    /* read xmit interrupt vector -OR- clock */
+      crs[A] = vcptime[vcptimeix++];
+      if (vcptimeix > 7)
+	vcptimeix = 0;
       IOSKIP;
     } else {
       printf("Unimplemented INA '04 function '%02o\n", func);
@@ -481,8 +488,27 @@ readasr:
     } else if (func == 013) {
       /* NOTE: does this in rev 20 on settime command (set clock on VCP?) */
       IOSKIP;
+
     } else if (func == 017) {
-      /* NOTE: 9950 does this in rev 20, others don't */
+      if (crs[A] == 0) {
+
+	/* setup to read VCP battery backup clock (only on certain models);
+	   all words are 2 BCD digits */
+
+#define BCD2(i) ((((i)/10)<<4) | ((i)%10))
+
+	unixtime = time(NULL);
+	tms = localtime(&unixtime);
+	vcptime[0] = BCD2(tms->tm_year);
+	vcptime[1] = BCD2(tms->tm_mon+1);
+	vcptime[2] = BCD2(tms->tm_mday);
+	vcptime[3] = BCD2(tms->tm_wday);
+	vcptime[4] = BCD2(tms->tm_hour);
+	vcptime[5] = BCD2(tms->tm_min);
+	vcptime[6] = BCD2(tms->tm_sec);
+	vcptime[7] = 0;
+	vcptimeix = 0;
+      }
       IOSKIP;
     } else {
       printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
@@ -494,7 +520,8 @@ readasr:
 
     /* tty output is blocking, even under Primos, which means that
        writes and fflush can hang the entire system, eg, if XOFF
-       happens while writing to the console) */
+       happens while writing to the console).  Console output should
+       be changed to non-blocking one of these days... */
 
     if (needflush) {
       if (fflush(stdout) == 0)
@@ -1121,7 +1148,7 @@ int devmt (int class, int func, int device) {
 	TRACE(T_TIO,  " CPU interrupt to vector '%o\n", mtvec);
 	intvec = mtvec;
       }
-      /* HACK: keep interrupting because of Primos race bug */
+      /* HACK: keep interrupting because of Primos/controller race bug */
       devpoll[device] = 100;
     }
   }
@@ -1173,7 +1200,7 @@ int devmt (int class, int func, int device) {
 
 /* initclock sets Primos' real-time clock variable */
 
-initclock(datnowea) {
+initclock(ea_t datnowea) {
   int datnow, i;
   time_t unixtime;
   struct tm *tms;
@@ -1187,8 +1214,9 @@ initclock(datnowea) {
 
 int devcp (int class, int func, int device) {
   static short enabled = 0;
-  static unsigned short clkvec;
-  static short clkpic = 0;
+  static unsigned short clkvec = 0;
+  static short clkpic = 947;
+  static float clkrate = 3.2;
   static unsigned long ticks = -1;
   static unsigned long absticks = -1;
   static struct timeval start_tv;
@@ -1200,7 +1228,7 @@ int devcp (int class, int func, int device) {
   unsigned long elapsedms,targetticks;
   int i;
 
-#define SETCLKPOLL devpoll[device] = instpermsec*(-clkpic*3.2)/1000;
+#define SETCLKPOLL devpoll[device] = instpermsec*(-clkpic*clkrate)/1000;
 
   switch (class) {
 
@@ -1259,7 +1287,6 @@ int devcp (int class, int func, int device) {
     TRACE(T_INST, " INA '%02o%02o\n", func, device);
     if (func == 011) {             /* input ID */
       crs[A] = 020;                /* this is the Option-A board */
-      crs[A] = 0220;               /* VCP board? */
       crs[A] = 0120;               /* this is the SOC board */
       //traceflags = ~TB_MAP;
     } else if (func == 016) {
@@ -1280,6 +1307,11 @@ int devcp (int class, int func, int device) {
       TRACE(T_INST, "Clock PIC interval set to %d\n", clkpic);
     } else if (func == 07) {
       TRACE(T_INST, "Clock control register set to '%o\n", crs[A]);
+      if (crs[A] & 020)
+	clkrate = 100.0;    /* 102.4 on real SOC, but not good for RT clock */
+      else
+	clkrate = 3.2;
+      SETCLKPOLL;
     } else if (func == 013) {
       clkvec = crs[A];
       TRACE(T_INST, "Clock interrupt vector address = '%o\n", clkvec);
@@ -1318,7 +1350,7 @@ int devcp (int class, int func, int device) {
 	    initclock(datnowea);
 	} 
 	elapsedms = (tv.tv_sec-start_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-start_tv.tv_usec)/1000;
-	targetticks = elapsedms/(-clkpic*3.2/1000);
+	targetticks = elapsedms/(-clkpic*clkrate/1000);
 #if 0
 	absticks++;
 	if (absticks%1000 == 0)
@@ -2905,6 +2937,9 @@ int devpnc (int class, int func, int device) {
 
       /* PNC transmit:
 
+         NOTE: most of this stuff needs to be moved to poll, because
+	 it may not be possible to start/complete a transmit here!
+	 
 	 get a physical pointer to the xmit buffer, which can't cross
 	 a page boundary, then xmit the buffer.  Since PNC packets
 	 have a specific size of either 512, 1024, or 2048 bytes, and
@@ -2924,7 +2959,8 @@ int devpnc (int class, int func, int device) {
       TRACE(T_INST|T_RIO, " xmit: dmaword = '%o/%d [%03o %03o]\n", dmaword, *(short *)&dmaword, dmaword>>8, dmaword&0xff);
 
       /* broadcast packets are "I am up" msgs and are simply "eaten"
-	 here, as this is handled later in the devpnc poll code */
+	 here, as this is handled later in the devpnc poll code.
+	 XXX: should check that this really is the "I am up" msg */
       
       if (xmit.toid == 255) {
 	regs.sym.regdmx[xmit.dmareg+1] += xmit.dmanw;   /* bump xmit address */
@@ -3003,10 +3039,8 @@ xmitdone:
       myid = crs[A] & 0xFF;
       pncstat = (pncstat & 0xFF00) | myid;
       TRACE(T_INST|T_RIO, " my node id is %d\n", myid);
-      if (ni[myid].fd != -1) {
-	printf("PNC: my node id of %d is in ring.cfg\n", myid);
-	fatal(NULL);
-      }
+      if (ni[myid].cfg)
+	fprintf(stderr, "Warning: my node id of %d is in ring.cfg\n", myid);
       strcpy(ni[myid].ip, "127.0.0.1");
       ni[myid].port = nport;
       ni[myid].myremid = myid;
