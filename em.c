@@ -36,9 +36,10 @@
    Usage:  to load SAM.SAVE from Unix FS and run diagnostics from pdev 2466
 
 $ time ./em  -cpuid 5 -ss 14114 -boot SAM.SAVE 2>err
-
 [SAM Rev. 16.2, DTS Release: 0004.A, Copyright (c) 1990, Prime Computer, Inc.]
+
 Enter physical device = 2466
+
 QUICK VERIFY MODE Enabled; Enter 'RESET QVFY' for normal operation. 
 Enter 'SET DCM' to display CASE messages. 
 Enter 'LOAD;RUN' for Default Execution
@@ -139,20 +140,18 @@ typedef unsigned int pa_t;            /* physical address */
   else if (*(int *)(crs+FLTH) == 0) \
     crs[KEYS] |= 0100;
 
-/* this is probably incorrect - needs to test 16 more bits for denomalized
+/* this is probably incorrect - needs to test 16 more bits for denormal
    doubles */
 
 #define SETCC_D SETCC_F
 
-/* XEXPC is a dummy to indicate that the C-bit may not be set correctly */
-
-#define XEXPC(onoff) \
-  if ((onoff)) crs[KEYS] |= 0100000; \
-  else crs[KEYS] &= 077777
-
 #define EXPC(onoff) \
   if ((onoff)) crs[KEYS] |= 0100000; \
   else crs[KEYS] &= 077777
+
+/* XEXPC is a dummy to indicate that the C-bit may not be set correctly */
+
+#define XEXPC(onoff) EXPC(onoff)
 
 #define SETC crs[KEYS] |= 0100000
 #define CLEARC crs[KEYS] &= 077777
@@ -165,16 +164,13 @@ typedef unsigned int pa_t;            /* physical address */
 
 #define SETCL crs[KEYS] |= 0120000;
 
-/* XSETL is a dummy to indicate that the L-bit may not be set correctly */
-
-#define XSETL(onoff) \
-  if ((onoff)) crs[KEYS] |= 020000; \
-  else crs[KEYS] &= ~020000;
-
 #define SETL(onoff) \
   if ((onoff)) crs[KEYS] |= 020000; \
   else crs[KEYS] &= ~020000;
 
+/* XSETL is a dummy to indicate that the L-bit may not be set correctly */
+
+#define XSETL(onoff) SETL(onoff)
 
 /* these macros are for the VI-mode branch insructions */
 
@@ -327,8 +323,8 @@ FILE *tracefile;                     /* trace.log file */
 
 int intvec=-1;                       /* currently raised interrupt (if >= zero) */
 
-/* NOTE: Primos II gives "NOT FOUND" on startup 2460 if sense switches
-   are set to 014114.  But DIAGS like this sense switch setting. :( */
+/* NOTE: Primos II gives "NOT FOUND" on STARTUP 2460 command if sense
+   switches are set to 014114.  But DIAGS like this setting. :( */
 
 unsigned short sswitch = 014114;     /* sense switches, set with -ss & -boot*/
 
@@ -709,10 +705,10 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
 
 
 /* these are shorthand macros for get/put that use the current program
-   counter - the typical usage - or Ring 0, the other typical case
+   counter - the typical usage - or Ring 0, the other typical case.
    The other places the ring field is important are PCL (ring may be
-   changing) and queue instructions (user process usescurrent ring, while
-   device controllers use Ring 0 (physical queues) */
+   changing) and queue instructions (user process uses current ring,
+   while device controllers use Ring 0 (physical queues) */
 
 #define get16(ea) (get16r((ea),RP))
 #define get16r0(ea) (get16r((ea),0))
@@ -727,28 +723,33 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
 #define put64(value, ea) (put64r((value),(ea),RP))
 #define put64r0(value, ea) (put64r((value),(ea),0))
 
+/* get16t handles address trap fetches */
 
-unsigned short get16r(ea_t ea, ea_t rpring) {
-  pa_t pa;
+unsigned short get16t(ea_t ea, ea_t rpring) {
+
+  ea = ea & 0xFFFF;
+  if (ea < 7)
+    return crs[memtocrs[ea]];
+  if (ea == 7)                   /* PC */
+    return RPL;
+  RESTRICTR(rpring);
+  if (ea < 020)                 /* CRS */
+    return crs[memtocrs[ea]];
+  if (ea < 040)                 /* DMX */
+    return regs.sym.regdmx[((ea & 036) << 1) | (ea & 1)];
+  printf(" Live register address %o too big!\n", ea);
+  fatal(NULL);
+}
+
+inline unsigned short get16r(ea_t ea, ea_t rpring) {
   unsigned short access;
 
-  /* check for live register access */
+  /* sign bit is set for live register access */
 
-  if (ea & 0x80000000) {
-    ea = ea & 0xFFFF;
-    if (ea < 7)
-      return crs[memtocrs[ea]];
-    if (ea == 7)                   /* PC */
-      return RPL;
-    RESTRICTR(rpring);
-    if (ea < 020)                 /* CRS */
-      return crs[memtocrs[ea]];
-    if (ea < 040)                 /* DMX */
-      return regs.sym.regdmx[((ea & 036) << 1) | (ea & 1)];
-    printf(" Live register address %o too big!\n", ea);
-    fatal(NULL);
-  }
-  return mem[mapva(ea, RACC, &access, rpring)];
+  if (*(int *)&ea >= 0)
+    return mem[mapva(ea, RACC, &access, rpring)];
+  else
+    return get16t(ea, rpring);
 }
 
 unsigned int get32r(ea_t ea, ea_t rpring) {
@@ -798,9 +799,12 @@ double get64r(ea_t ea, ea_t rpring) {
    This needs to be checked more... not sure it actually improves
    performance all that much and is potentially dangerous.  I tried
    using get64 (with appropriate mask changes) and performance was
-   much worse than not prefetching at all on a G4 */
+   much worse than not prefetching at all on a G4
 
-#if 1
+   NOTE: disabled 3/22/07 because an informal test showed instpermsec
+   was lower with iget16 enabled. :( */
+
+#if 0
 inline unsigned short iget16(ea_t ea) {
   static ea_t eafirst = -1;             /* ea of instruction buffer */
   static unsigned short insts[2];       /* instruction buffer */
@@ -819,31 +823,37 @@ inline unsigned short iget16(ea_t ea) {
 #define iget16(ea) get16((ea))
 #endif
 
+/* put16t handles address trap stores */
+
+put16t(unsigned short value, ea_t ea, ea_t rpring) {
+
+  ea = ea & 0xFFFF;
+  if (ea < 7)
+    crs[memtocrs[ea]] = value;
+  else if (ea == 7) {
+    RPL = value;
+  } else {
+    RESTRICTR(rpring);
+    if (ea <= 017)                      /* CRS */
+      crs[memtocrs[ea]] = value;
+    else if (ea <= 037)                 /* DMX */
+      regs.sym.regdmx[((ea & 036) << 1) | (ea & 1)] = value;
+    else {
+      printf(" Live register store address %o too big!\n", ea);
+      fatal(NULL);
+    }
+  }
+}
+
+/* NOTE: inlining this runs slower on G4; no idea why */
+
 put16r(unsigned short value, ea_t ea, ea_t rpring) {
-  pa_t pa;
   unsigned short access;
 
-  if (ea & 0x80000000) {
-    ea = ea & 0xFFFF;
-    if (ea < 7)
-      crs[memtocrs[ea]] = value;
-    else if (ea == 7) {
-      RPL = value;
-    } else {
-      RESTRICTR(rpring);
-      if (ea <= 017)                      /* CRS */
-	crs[memtocrs[ea]] = value;
-      else if (ea <= 037)                 /* DMX */
-	regs.sym.regdmx[((ea & 036) << 1) | (ea & 1)] = value;
-      else {
-	printf(" Live register store address %o too big!\n", ea);
-	fatal(NULL);
-      }
-    }
-  } else {
-    pa = mapva(ea, WACC, &access, rpring);
-    mem[pa] = value;
-  }
+  if (*(int *)&ea >= 0)
+    mem[mapva(ea, WACC, &access, rpring)] = value;
+  else
+    put16t(value, ea, rpring);
 }
 
 put32r(unsigned int value, ea_t ea, ea_t rpring) {
@@ -874,7 +884,7 @@ put64r(double value, ea_t ea, ea_t rpring) {
   /* check for live register access */
 
   if (ea & 0x80000000)
-    warn("address trap in put32");
+    warn("address trap in put64");
 
   pa = mapva(ea, WACC, &access, rpring);
   if ((pa & 01777) <= 01774)
@@ -927,7 +937,8 @@ void calf(ea_t ea) {
   csea = MAKEVA(crs[OWNERH]+csoffset, this);
   TRACE(T_FAULT,"CALF: cs frame is at %o/%o\n", csea>>16, csea&0xFFFF);
 
-  /* make sure ecb specifies zero arguments 
+  /* make sure ecb specifies zero args (not part of the architecture)
+
      NOTE: this check needs get16r too because in Rev 19, segment 5
      only has gate access and this read caused an access fault when an
      R-mode I/O instruction occurs under Primos (causing a restricted
@@ -1065,7 +1076,6 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
     newkeys(014000);      /* V-mode */
     inhcount = 1;         /* supposed to do this only for Ring 0, but shouldn't hurt */
 
-
 #if 0
     if (T_FAULT && fvec == POINTERFAULT) {
       ea = get32(faddr);
@@ -1084,7 +1094,7 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
 
   } else {                   /* process exchange is disabled */
     //TRACE(T_FAULT, "fault '%o occurred at %o/%o, instruction=%o, modals=%o\n", fvec, faultrp>>16, faultrp&0xffff, get16(faultrp), crs[MODALS]);
-    /* need to check for standard/vectored interrupt mode here... */
+    /* XXX: need to check for standard/vectored interrupt mode here... */
     m = get16(fvec);
     if (m != 0) {
       TRACE(T_FLOW, " fault JST* '%o [%o]\n", fvec, m);
@@ -1180,7 +1190,7 @@ ea_t ea16s (unsigned short inst, short x) {
     ea = m & 037777;                             /* go indirect */
   }
   va = MAKEVA(RPH, ea);
-  if (ea < live)                                  /* flag live register ea */
+  if (ea < live)                                 /* flag live register ea */
     return va | 0x80000000;
   return va;
 }
@@ -1221,7 +1231,7 @@ ea_t ea32s (unsigned short inst, short x) {
     ea += crs[X];
   ea &= amask;
   va = MAKEVA(RPH, ea);
-  if (ea < live)                                  /* flag live register ea */
+  if (ea < live)                                 /* flag live register ea */
     return va | 0x80000000;
   return va;
 }
@@ -1284,7 +1294,7 @@ ea_t ea32r64r (ea_t earp, unsigned short inst, short x, unsigned short *opcode) 
   }
   ea &= amask;
   va = MAKEVA(rph, ea);
-  if (ea < live)                                  /* flag live register ea */
+  if (ea < live)                                 /* flag live register ea */
     return va | 0x80000000;
   return va;
 
@@ -1584,6 +1594,8 @@ ea_t stex(unsigned int extsize) {
   return stackfp;
 }
 
+/* for PRTN, load values into temps first so that if any faults occur,
+   PRTN can be restarted */
 
 void prtn() {
   unsigned short stackrootseg;
@@ -3490,45 +3502,18 @@ xec:
 
 	case 001303:
 	  TRACE(T_FLOW, " LFLI 0\n");
-#if 0
-	  for (utempa=0; utempa<256; utempa++) {
-	    PUTFLR(0,utempa);
-	    crsl[FLR0] |= 0x4000;
-	    utempl = GETFLR(0);
-	    if (utempa != utempl) {
-	      printf(" loaded %d, fetched %d\n", utempa, utempl);
-	      fatal(NULL);
-	    }
-	  }
-#endif
 	  utempa = iget16(RP);
 	  RPL++;
 	  PUTFLR(0,utempa);
-	  utempl = GETFLR(0);
-	  TRACE(T_INST, " Load Field length with %d, FLR=%x, actual = %d\n", utempa, crsl[FLR0], utempl);
-	  if (utempa != utempl)
-	    fatal("LFLI 0 error");
+	  TRACE(T_INST, " Load Field length with %d, FLR=%x, actual = %d\n", utempa, crsl[FLR0], GETFLR(0));
 	  continue;
 
 	case 001313:
 	  TRACE(T_FLOW, " LFLI 1\n");
-#if 0
-	  for (utempa=0; utempa<256; utempa++) {
-	    PUTFLR(1,utempa);
-	    utempl = GETFLR(1);
-	    if (utempa != utempl) {
-	      printf(" loaded %d, fetched %d\n", utempa, utempl);
-	      fatal(NULL);
-	    }
-	  }
-#endif
 	  utempa = iget16(RP);
 	  RPL++;
 	  PUTFLR(1,utempa);
-	  utempl = GETFLR(1);
-	  TRACE(T_INST, " Load Field length with %d, FLR=%x, actual = %d\n", utempa, crsl[FLR1], utempl);
-	  if (utempa != utempl)
-	    fatal("LFLI 1 error");
+	  TRACE(T_INST, " Load Field length with %d, FLR=%x, actual = %d\n", utempa, crsl[FLR1], GETFLR(1));
 	  continue;
 
 	case 001320:
@@ -3557,13 +3542,13 @@ stfa:
 	case 001321:
 	  TRACE(T_FLOW, " TLFL 0\n");
 	  PUTFLR(0,*(unsigned int *)(crs+L));
+	  TRACE(T_INST, " Transfer %d to FLR0, FLR=%x, actual = %d\n", *(unsigned int *)(crs+L), crsl[FLR0], GETFLR(0));
 	  continue;
 
 	case 001331:
 	  TRACE(T_FLOW, " TLFL 1\n");
 	  PUTFLR(1,*(unsigned int *)(crs+L));
-	  utempl = GETFLR(1);
-	  TRACE(T_INST, " Transfer %d to FLR1, FLR=%x, actual = %d\n", *(unsigned int *)(crs+L), crsl[FLR1], utempl);
+	  TRACE(T_INST, " Transfer %d to FLR1, FLR=%x, actual = %d\n", *(unsigned int *)(crs+L), crsl[FLR1], GETFLR(1));
 	  continue;
 
 	case 001323:
@@ -3830,7 +3815,6 @@ stfa:
 	  zclen2 = 0;
 	  while (zlen2) {
 	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch2);
-	    //printf(" after put, zlen2=%d, zcp2=%x, zclen2=%d, zch2=%o\n", zlen2, zcp2, zclen2, zch2);
 	  }
 	  continue;
 
@@ -4445,7 +4429,7 @@ irtn:
 	    long delayusec, actualmsec;
 
 	    /* for BDX *-1 loop (backstop process mainly), we want to change
-	       this to a 10ms sleep so that the emulation host's CPU isn't 
+	       this to a long sleep so that the emulation host's CPU isn't 
 	       pegged the whole time the emulator is running.
 
 	       So first, check to see if any device times expire sooner than
@@ -4454,17 +4438,20 @@ irtn:
 	       timer expires).
 
 	       NOTE: In practice, the clock device ticks at 330 times a sec
-	       under Primos so we only get to delay about 3ms here.
+	       under standard Primos so we only get to delay about 3ms here,
+	       but it still keeps CPU usage to 4-5% on a 1.5GHz Mac.  Primos
+	       mods to make the clock tick 20 times per second allows for
+	       much longer sleeps here, ie, CPU overhead is 0.7% while idle.
 	    */
 
-	    utempl = instpermsec*10;          /* limit delay to 10 millisecs */
+	    utempl = instpermsec*100;         /* limit delay to 100 msecs */
 	    for (i=0; i<64; i++)              /* check device timers */
 	      if (devpoll[i])                 /* poll set? */
-		if (devpoll[i] < 0 || devpoll[i] <= 100) {  /* too fast! */
-		utempl = 1;
-		break;
-	      } else if (devpoll[i] < utempl)
-		utempl = devpoll[i];
+		if (devpoll[i] <= 100) {      /* too fast! */
+		  utempl = 1;
+		  break;
+		} else if (devpoll[i] < utempl)
+		  utempl = devpoll[i];
 	    utempl--;                         /* utempl = # instructions */
 	    delayusec = utempl*1000/instpermsec;
 	    if (delayusec > 1000) {
@@ -4637,7 +4624,7 @@ a1a:
 	  TRACE(T_FLOW, " CAZ\n");
 	  /* set keys like CAS =0 would (subtract) */
 	  crs[KEYS] = (crs[KEYS] & ~0100) | 020200;   /* clear EQ, set L, LT */
-	  if (crs[A] == 0) {                  /* if zero, set EQ*/
+	  if (crs[A] == 0) {                  /* if zero, set EQ */
 	    crs[KEYS] |= 0100; 
 	    RPL++;
 	  } else if (*(short *)(crs+A) < 0)
@@ -5220,8 +5207,9 @@ a1a:
 	  TRACE(T_INST, " unrecognized generic class 3 instruction!\n");
 	  printf(" unrecognized generic class 3 instruction %o!\n", inst);
 
-	  /* XXX: these are hacks for CPU.FAULT; not sure how to determine whether
-	     an instruction is illegal or unimplemented... */
+	  /* XXX: hacks for CPU.FAULT; not sure how to determine
+	     whether an instruction is illegal or unimplemented */
+
 	  if (inst == 0141700)
 	    fault(ILLINSTFAULT, RPL, 0);
 	  else

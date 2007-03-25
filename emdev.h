@@ -1188,14 +1188,15 @@ int devmt (int class, int func, int device) {
 
    IMPORTANT NOTE 1: this device ('20) never skips!
 
-   IMPORTANT NOTE 2: if the host system suspends, then when it awakes,
-   devcp will make the clock tick faster until it catches up to where
-   it should be.  Fake clock interrupts are injected every 100 Prime
-   instructions to catch up.  These fast interrupts can't occur too 
-   quickly (like every 10 Prime instructions), because CLKDIM can't
-   execute completely in 10 instructions and the repeated interrupts
-   will eventually cause the clock semaphore to overflow.
-
+   IMPORTANT NOTE 2: when the emulator wakes up after the host system
+   suspends, devcp will either reset the clock (if it knows where
+   Primos' DATNOW variable is), or will make the clock tick faster
+   until it catches up to where it should be.  Fake clock interrupts
+   are injected every 100 Prime instructions to catch up.  These fast
+   interrupts can't occur too quickly (like every 10 Prime
+   instructions), because CLKDIM can't execute completely in 10
+   instructions and the repeated interrupts will eventually cause the
+   clock semaphore to overflow.
 */
 
 /* initclock sets Primos' real-time clock variable */
@@ -1215,7 +1216,7 @@ initclock(ea_t datnowea) {
 int devcp (int class, int func, int device) {
   static short enabled = 0;
   static unsigned short clkvec = 0;
-  static short clkpic = 947;
+  static short clkpic = -947;
   static float clkrate = 3.2;
   static unsigned long ticks = -1;
   static unsigned long absticks = -1;
@@ -1301,21 +1302,47 @@ int devcp (int class, int func, int device) {
 
   case 3:
     TRACE(T_INST, " OTA '%02o%02o\n", func, device);
+
+    /* standard Primos always sets a PIC interval of 947 and uses the
+       hardware clock rate of 3.2 usec.  This causes a software interrupt
+       every 947*3.2 usec, or 3030.4 milliseconds, and this works out
+       to 330 software interrupts per second.  BUT newer machines tick
+       at whatever rate they want and ignore the PIC interval set here.
+
+       To keep emulator overhead low, some versions of Primos have been
+       modified to set the PIC interval to 15625 and send 20 ticks per
+       second to Primos.
+
+       To handle both cases, this code looks at the cpuid to determine
+       the actual # of ticks per second expected by Primos whenever
+       the PIC interval is set to 947.  If PIC is set to something
+       other than 947, that value is used.
+    */
+
     if (func == 02) {            /* set PIC interval */
       clkpic = *(short *)(crs+A);
+      if (clkpic == -947)
+	if (cpuid == 11 || cpuid == 20)
+	  clkpic = -625;         /* P2250: 500 ticks/second */
+	else if (cpuid >= 15)    /* newer machines: 250 ticks/second */
+	  clkpic = -1250;
+      TRACE(T_INST, "Clock PIC %d requested, set to %d\n", *(short *)(crs+A), clkpic);
       SETCLKPOLL;
-      TRACE(T_INST, "Clock PIC interval set to %d\n", clkpic);
+
     } else if (func == 07) {
       TRACE(T_INST, "Clock control register set to '%o\n", crs[A]);
       if (crs[A] & 020)
-	clkrate = 100.0;    /* 102.4 on real SOC, but not good for RT clock */
+	clkrate = 102.4;
       else
 	clkrate = 3.2;
       SETCLKPOLL;
-    } else if (func == 013) {
+
+    } else if (func == 013) {     /* set interrupt vector */
       clkvec = crs[A];
       TRACE(T_INST, "Clock interrupt vector address = '%o\n", clkvec);
-    } else if (func == 017) {           /* write lights */
+
+    } else if (func == 017) {     /* write lights */
+
     } else {
       printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
       fatal(NULL);
@@ -1353,15 +1380,16 @@ int devcp (int class, int func, int device) {
 	targetticks = elapsedms/(-clkpic*clkrate/1000);
 #if 0
 	absticks++;
-	if (absticks%1000 == 0)
-	  printf("Clock check: target=%d, ticks=%d\n", targetticks, ticks);
+	if (absticks%1000 == 0 || abs(ticks-targetticks) > 5)
+	  printf("\nClock check: target=%d, ticks=%d\n", targetticks, ticks);
 #endif
 
 	/* if the clock gets way out of whack (eg, because of a host
-	   suspend or time change (eg, DST), reset it IFF datnowea is
-	   known.  This causes an immediate jump to the correct time.
-	   If datnowea is not available (no Primos maps), then we have
-	   to tick our way to the correct time */
+	   suspend), reset it IFF datnowea is set.  This causes an
+	   immediate jump to the correct time.  If datnowea is not
+	   available (no Primos maps), then we have to tick our way to
+	   the correct time.  In addition to lowering overhead, slower
+	   clock tick rates make catching up much faster. */
 
 	if (abs(ticks-targetticks) > 5000 && datnowea != 0)
 	  ticks = -1;
@@ -1384,7 +1412,7 @@ int devcp (int class, int func, int device) {
 	  instpermsec = (instcount-previnstcount) /
 	    ((tv.tv_sec-prev_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-prev_tv.tv_usec)/1000);
 	  //printf("instcount = %d, previnstcount = %d, diff=%d, instpermsec=%d\n", instcount, previnstcount, instcount-previnstcount, instpermsec);
-	  //printf("instpermsec=%d\n", instpermsec);
+	  //printf("\ninstpermsec=%d\n", instpermsec);
 	  previnstcount = instcount;
 	  prev_tv = tv;
 	}
