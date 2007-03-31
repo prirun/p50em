@@ -1976,13 +1976,20 @@ int devamlc (int class, int func, int device) {
 #define MAXFD MAXLINES+20
 #define MAXBOARDS 8
   /* AMLC poll rate in milliseconds */
-#define AMLCPOLL 50
+#define AMLCPOLL 75
 
 #if 1
   #define QAMLC 020000   /* this is to enable QAMLC/DMQ functionality */
 #else
   #define QAMLC 0
 #endif
+
+  /* terminal states needed to process telnet connections */
+
+#define TS_DATA 0      /* data state, looking for IAC */
+#define TS_IAC 1       /* have seen initial IAC */
+#define TS_SUBOPT 2    /* inside a suboption */
+#define TS_OPTION 3    /* inside an option */
 
   static short inited = 0;
   static short devices[MAXBOARDS];         /* list of AMLC devices initialized */
@@ -1998,13 +2005,14 @@ int devamlc (int class, int func, int device) {
     unsigned short dmcchan;                /* DMC channel (for input) */
     unsigned short baseaddr;               /* DMT/Q base address (for output) */
     unsigned short intvector;              /* interrupt vector */
-    char intenable;                        /* interrupts enabled? */
-    char interrupting;                     /* am I interrupting? */
+    unsigned short intenable;              /* interrupts enabled? */
+    unsigned short interrupting;           /* am I interrupting? */
     unsigned short xmitenabled;            /* 1 bit per line */
     unsigned short recvenabled;            /* 1 bit per line */
     unsigned short ctinterrupt;            /* 1 bit per line */
     unsigned short dss;                    /* 1 bit per line */
     unsigned short sockfd[16];             /* Unix socket fd, 1 per line */
+    unsigned short tstate[16];             /* terminal state (telnet) */
   } dc[64];
 
   int lx;
@@ -2022,6 +2030,8 @@ int devamlc (int class, int func, int device) {
   int i, n, nw, newdevice;
   fd_set fds;
   struct timeval timeout;
+  unsigned char ch;
+  int state;
 
   switch (class) {
 
@@ -2055,7 +2065,7 @@ int devamlc (int class, int func, int device) {
 	  perror("listen failed for AMLC");
 	  fatal(NULL);
 	}
-	if (fcntl(tsfd, F_GETFL, tsflags) == -1) {
+	if ((tsflags = fcntl(tsfd, F_GETFL)) == -1) {
 	  perror("unable to get ts flags for AMLC");
 	  fatal(NULL);
 	}
@@ -2146,7 +2156,7 @@ int devamlc (int class, int func, int device) {
       IOSKIP;
 
     } else if (func == 07) {       /* input AMLC status */
-      crs[A] = 040000 | (dc[device].bufnum<<8) | (dc[device].intenable<<5) || (dc[device].dmqmode<<4);
+      crs[A] = 040000 | (dc[device].bufnum<<8) | (dc[device].intenable<<5) | (dc[device].dmqmode<<4);
       if (dc[device].eor) {
 	crs[A] |= 0100000;
 	dc[device].eor = 0;
@@ -2245,20 +2255,43 @@ int devamlc (int class, int func, int device) {
 	fatal("New connection fd is too big");
       newdevice = 0;
       for (i=0; devices[i] && !newdevice && i<MAXBOARDS; i++)
-	for (lx=0; lx<16; lx++)
+	for (lx=0; lx<16; lx++) {
+	  /* NOTE: don't allow connections on clock line */
+	  if (lx == 15 && (i+1 == MAXBOARDS || !devices[i+1]))
+	      break;
 	  if (!(dc[devices[i]].dss & bitmask16[lx+1])) {
 	    newdevice = devices[i];
 	    socktoline[fd].device = newdevice;
 	    socktoline[fd].line = lx;
 	    dc[newdevice].dss |= bitmask16[lx+1];
 	    dc[newdevice].sockfd[lx] = fd;
+	    dc[newdevice].tstate[lx] = TS_DATA;
 	    printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
 	    break;
 	  }
+	}
       if (!newdevice) {
 	warn("No free AMLC connection");
 	write(fd, "\rAll AMLC lines are in use!\r\n", 29);
 	close(fd);
+      } else {
+
+	/* these Telnet commands put the connecting telnet client
+	   into character-at-a-time mode and binary mode.  Since
+	   these probably display garbage for other connection
+	   methods, this stuff might be better off in a very thin
+	   connection server */
+	
+	buf[0] = 255;   /* IAC */
+	buf[1] = 251;   /* will */
+	buf[2] = 1;     /* echo */
+	buf[3] = 255;   /* IAC */
+	buf[4] = 251;   /* will */
+	buf[5] = 3;     /* supress go ahead */
+	buf[6] = 255;   /* IAC */
+	buf[7] = 251;   /* will */
+	buf[8] = 0;     /* binary mode */
+	write(fd, buf, 9);
       }
     }
 
@@ -2290,7 +2323,7 @@ int devamlc (int class, int func, int device) {
 	    qcbea = dc[device].baseaddr + lx*4;
 	    if (dc[device].dss & bitmask16[lx+1]) {
 
-	      /* ensure there's room in the socket buffer */
+	      /* ensure there's some room in the socket buffer */
 
 	      timeout.tv_sec = 0;
 	      timeout.tv_usec = 0;
@@ -2346,7 +2379,14 @@ int devamlc (int class, int func, int device) {
 	    }
 	}
 
-	/* process input, but only as much as will fit into the DMC buffer. */
+	/* process input, but only as much as will fit into the DMC buffer.
+	   NOTE: because the size of the AMLC tumble tables is limited, this
+	   could pose a denial of service issue.  Input should probably be
+	   processed in a round to be more fair with this limited resource.
+
+	   The AMLC tumble tables should never overflow, because we only
+	   read as many characters from the socket buffers as will fit in 
+	   the tumble tables. */
 
 	if ((dc[device].dss & dc[device].recvenabled & bitmask16[lx+1]) && !dc[device].eor) {
 	  if (dc[device].bufnum)
@@ -2386,13 +2426,57 @@ int devamlc (int class, int func, int device) {
 	    }
 	  }
 
+	  /* very primitive support here for telnet - only enough to
+	     ignore commands sent by the telnet client.  Telnet
+	     commands could be split across reads and AMLC interrupts,
+	     so a small state machine is used for each line */
+
 	  if (n > 0) {
+	    state = dc[device].tstate[lx];
 	    for (i=0; i<n; i++) {
-	      utempa = lx<<12 | 0x0200 | buf[i];
-	      put16r0(utempa, dmcbufbegea);
-	      //printf("******* stored character %o (%c) at %o\n", utempa, utempa&0x7f, dmcbufbegea);
-	      dmcbufbegea = INCVA(dmcbufbegea, 1);
+	      ch = buf[i];
+	      switch (state) {
+	      case TS_DATA:
+		if (ch == 255)
+		  state = TS_IAC;
+		else if (ch != 0) {
+storech:
+		  utempa = lx<<12 | 0x0200 | ch;
+		  put16r0(utempa, dmcbufbegea);
+		  //printf("******* stored character %o (%c) at %o\n", utempa, utempa&0x7f, dmcbufbegea);
+		  dmcbufbegea = INCVA(dmcbufbegea, 1);
+		}
+		break;
+	      case TS_IAC:
+		switch (ch) {
+		case 255:
+		  state = TS_DATA;
+		  goto storech;
+		case 251:   /* will */
+		case 252:   /* won't */
+		case 253:   /* do */
+		case 254:   /* don't */
+		  state = TS_OPTION;
+		  break;
+		case 250:   /* begin suboption */
+		  state = TS_SUBOPT;
+		  break;
+		default:    /* ignore other chars after IAC */
+		  state = TS_DATA;
+		}
+		break;
+	      case TS_SUBOPT:
+		if (ch == 255)
+		  state = TS_IAC;
+		break;
+	      case TS_OPTION:
+	      default:
+		state = TS_DATA;
+	      }
 	    }
+	    dc[device].tstate[lx] = state;
+	    if (dmcbufbegea-1 > dmcbufendea)
+	      fatal("AMLC tumble table overflowed?");
 	    put16r0(dmcbufbegea, dmcea);
 	    if (dmcbufbegea > dmcbufendea) {          /* end of range has occurred */
 	      dc[device].bufnum = 1-dc[device].bufnum;

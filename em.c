@@ -295,11 +295,13 @@ char gen0nam[][5] = {
 
    traceuser is the user number to trace, 0 meaning any user
 
+   traceseg is the procedure segment number to trace, 0 meaning any
+
    savetraceflags hold the real traceflags, while "traceflags" switches
    on and off for each instruction
 
-   traceprocs is an array of procedure names we're tracing, with flags
-   and associated data
+   traceprocs is an array of (operating system) procedure names we're
+   tracing, with flags and associated data
 
    numtraceprocs is the number of entries in traceprocs, 0=none
 
@@ -309,6 +311,7 @@ char gen0nam[][5] = {
 int traceflags=0;                    /* each bit is a trace flag */
 int savetraceflags=0;
 int traceuser=0;                     /* OWNERL to trace */
+int traceseg=0;                      /* RPH segment # to trace */
 int numtraceprocs=0;
 #define MAXTRACEPROCS 2
 struct {
@@ -741,7 +744,10 @@ unsigned short get16t(ea_t ea, ea_t rpring) {
   fatal(NULL);
 }
 
-inline unsigned short get16r(ea_t ea, ea_t rpring) {
+/* NOTE: when get16r was inlined, Magsav worked but Magrst failed,
+   and the tape files created by Magsav were garbage */
+
+unsigned short get16r(ea_t ea, ea_t rpring) {
   unsigned short access;
 
   /* sign bit is set for live register access */
@@ -3000,6 +3006,8 @@ main (int argc, char **argv) {
 	  traceuser = 0100000 | (templ<<6);   /* form OWNERL for user # */
 	else if (strlen(argv[i]) == 6 && sscanf(argv[i],"%o", &templ) == 1)
 	  traceuser = templ;                  /* specify OWNERL directly */
+	else if (strlen(argv[i]) == 4 && sscanf(argv[i],"%o", &templ) == 1)
+	  traceseg = templ;                   /* specify RPH segno */
 	else if (strlen(argv[i]) <= 8 && argv[i][0] != '-') {
 	  if (numtraceprocs >= MAXTRACEPROCS)
 	    fprintf(stderr,"Only %d trace procs are allowed\n", MAXTRACEPROCS);
@@ -3249,7 +3257,7 @@ For disk boots, the last 3 digits can be:\n\
 
     /* is this user being traced? */
 
-    if (TRACEUSER)
+    if (TRACEUSER && ((traceseg == 0) || (traceseg == (RPH & 0xFFF))))
       traceflags = savetraceflags;
     else
       traceflags = 0;
