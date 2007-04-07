@@ -744,10 +744,7 @@ unsigned short get16t(ea_t ea, ea_t rpring) {
   fatal(NULL);
 }
 
-/* NOTE: when get16r was inlined, Magsav worked but Magrst failed,
-   and the tape files created by Magsav were garbage */
-
-unsigned short get16r(ea_t ea, ea_t rpring) {
+inline unsigned short get16r(ea_t ea, ea_t rpring) {
   unsigned short access;
 
   /* sign bit is set for live register access */
@@ -3886,7 +3883,9 @@ stfa:
 
 	case 000510:
 	  TRACE(T_FLOW, " STTM\n", inst);
+#if 0
 	  RESTRICT();
+#endif
 	  fault(UIIFAULT, RPL, RP);
 	  continue;
 
@@ -3996,6 +3995,11 @@ stfa:
 	  put64(*(double *)(stpm+0), ea);
 	  put64(*(double *)(stpm+4), INCVA(ea,4));
 	  continue;
+
+	case 001701:
+	  TRACE(T_FLOW, " DBGILL\n", inst);
+	  fault(ILLINSTFAULT, RPL, 0);
+	  fatal(NULL);
 
 	/* JW: I think this is an invalid opcode that Prime uses when
 	   unexpected things happen, for example:

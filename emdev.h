@@ -310,7 +310,9 @@ int devasr (int class, int func, int device) {
 
     /* ignore SIGTTIN in case the emulator is put in the background */
 
+#ifdef OSX
     signal(SIGTTIN, SIG_IGN);
+#endif
 
     /* open console log file and set to line buffering */
 
@@ -1044,14 +1046,14 @@ int devmt (int class, int func, int device) {
 	if (crs[A] & 0x10) {            /* write record */
 	  if (dmxtotnw+dmxnw > MAXTAPEWORDS)
 	    fatal("Tape write is too big");
-	  for (n=dmxnw; n > 0; n--) {
+	  for (i=0; i < dmxnw; i++) {
 	    *iobufp++ = get16r0(dmxaddr+i);
 	  }
 	  dmxtotnw = dmxtotnw + dmxnw;
 	} else {
 	  if (dmxnw > dmxtotnw)
 	    dmxnw = dmxtotnw;
-	  for (n=dmxnw; n > 0; n--) {
+	  for (i=0; i < dmxnw; i++) {
 	    put16r0(*iobufp++, dmxaddr+i);
 	  }
 	  dmxtotnw = dmxtotnw - dmxnw;
@@ -2192,7 +2194,7 @@ int devamlc (int class, int func, int device) {
 	write(dc[device].sockfd[lx], "\r\nDisconnecting logged out session\r\n", 36);
 	close(dc[device].sockfd[lx]);
 	dc[device].dss &= ~bitmask16[lx+1];
-	printf("em: closing AMLC line %d on device '%o\n", lx, device);
+	//printf("em: closing AMLC line %d on device '%o\n", lx, device);
       }
       IOSKIP;
 
@@ -2244,6 +2246,7 @@ int devamlc (int class, int func, int device) {
     
     /* check for 1 new terminal connection on each AMLC poll */
 
+    addrlen = sizeof(addr);
     while ((fd = accept(tsfd, (struct sockaddr *)&addr, &addrlen)) == -1 && errno == EINTR)
       ;
     if (fd == -1) {
@@ -2266,7 +2269,7 @@ int devamlc (int class, int func, int device) {
 	    dc[newdevice].dss |= bitmask16[lx+1];
 	    dc[newdevice].sockfd[lx] = fd;
 	    dc[newdevice].tstate[lx] = TS_DATA;
-	    printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
+	    //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
 	    break;
 	  }
 	}
@@ -2275,6 +2278,16 @@ int devamlc (int class, int func, int device) {
 	write(fd, "\rAll AMLC lines are in use!\r\n", 29);
 	close(fd);
       } else {
+
+	if ((tsflags = fcntl(fd, F_GETFL)) == -1) {
+	  perror("unable to get ts flags for AMLC line");
+	  fatal(NULL);
+	}
+	tsflags |= O_NONBLOCK;
+	if (fcntl(fd, F_SETFL, tsflags) == -1) {
+	  perror("unable to set ts flags for AMLC line");
+	  fatal(NULL);
+	}
 
 	/* these Telnet commands put the connecting telnet client
 	   into character-at-a-time mode and binary mode.  Since
@@ -2292,6 +2305,17 @@ int devamlc (int class, int func, int device) {
 	buf[7] = 251;   /* will */
 	buf[8] = 0;     /* binary mode */
 	write(fd, buf, 9);
+	strcpy((void *)buf,"\
+\r\n\
+Welcome to the Prime Computer 50-series emulator, running Primos rev 19.2!\r\n\
+After logging in, use the Prime HELP command for assistance.\r\n\
+You are welcome to create a directory under GUEST for your files.\r\n\
+To report bugs or contact the author, send email to prirun@gmail.com\r\n\
+Enjoy your time travels!   -Jim Wilcoxson\r\n\
+\r\n\
+Login please.\r\n\
+OK, ");
+	write(fd, buf, strlen((void *)buf));
       }
     }
 
@@ -2420,7 +2444,7 @@ int devamlc (int class, int func, int device) {
 	      /* see similar code above */
 	      close(dc[device].sockfd[lx]);
 	      dc[device].dss &= ~bitmask16[lx+1];
-	      printf("Closing AMLC line %d on device '%o\n", lx, device);
+	      //printf("em: closing AMLC line %d on device '%o\n", lx, device);
 	    } else {
 	      perror("Reading AMLC");
 	    }
@@ -3187,7 +3211,7 @@ xmitdone:
 	    socktoline[fd].line = lx;
 	    dc[newdevice].dss |= bitmask16[lx+1];
 	    dc[newdevice].sockfd[lx] = fd;
-	    printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
+	    //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
 	    break;
 	  }
       if (!newdevice) {
