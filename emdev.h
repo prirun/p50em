@@ -2015,6 +2015,7 @@ int devamlc (int class, int func, int device) {
     unsigned short dss;                    /* 1 bit per line */
     unsigned short sockfd[16];             /* Unix socket fd, 1 per line */
     unsigned short tstate[16];             /* terminal state (telnet) */
+    unsigned short room[16];               /* room (chars) left in input buffer */
   } dc[64];
 
   int lx;
@@ -2029,7 +2030,7 @@ int devamlc (int class, int func, int device) {
   int fd;
   unsigned int addrlen;
   unsigned char buf[1024];      /* max size of DMQ buffer */
-  int i, n, nw, newdevice;
+  int i, n, n2, nw, newdevice;
   fd_set fds;
   struct timeval timeout;
   unsigned char ch;
@@ -2217,11 +2218,25 @@ int devamlc (int class, int func, int device) {
 	devpoll[device] = AMLCPOLL*instpermsec;  /* setup another poll */
       IOSKIP;
 
+    } else if (func == 03) {      /* set room in input buffer */
+      lx = (crs[A]>>12);
+      dc[device].room[lx] = crs[A] & 0xFFF;
+      //printf("OTA '03%02o: AMLC line %d, room=%d, A=0x%04x\n", device, lx, dc[device].room[lx], crs[A]);
+      IOSKIP;
+
     } else if (func == 014) {      /* set DMA/C channel (for input) */
       dc[device].dmcchan = crs[A] & 0x7ff;
       //printf("OTA '14%02o: AMLC chan = %o\n", device, dc[device].dmcchan);
       if (!(crs[A] & 0x800))
 	fatal("Can't run AMLC in DMA mode!");
+#if 0
+	    dmcea = dc[device].dmcchan;
+	  dmcpair = get32r0(dmcea);
+	  dmcbufbegea = dmcpair>>16;
+	  dmcbufendea = dmcpair & 0xffff;
+	  dmcnw = dmcbufendea - dmcbufbegea + 1;
+	  printf("AMLC: dmcnw=%d\n", dmcnw);
+#endif
       IOSKIP;
 
     } else if (func == 015) {      /* set DMT/DMQ base address (for output) */
@@ -2269,6 +2284,7 @@ int devamlc (int class, int func, int device) {
 	    dc[newdevice].dss |= bitmask16[lx+1];
 	    dc[newdevice].sockfd[lx] = fd;
 	    dc[newdevice].tstate[lx] = TS_DATA;
+	    dc[newdevice].room[lx] = 64;
 	    //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
 	    break;
 	  }
@@ -2302,16 +2318,18 @@ int devamlc (int class, int func, int device) {
 	buf[4] = 251;   /* will */
 	buf[5] = 3;     /* supress go ahead */
 	buf[6] = 255;   /* IAC */
-	buf[7] = 251;   /* will */
+	buf[7] = 253;   /* do */
 	buf[8] = 0;     /* binary mode */
 	write(fd, buf, 9);
 	strcpy((void *)buf,"\
 \r\n\
 Welcome to the Prime Computer 50-series emulator, running Primos rev 19.2!\r\n\
-After logging in, use the Prime HELP command for assistance.\r\n\
-You are welcome to create a directory under GUEST for your files.\r\n\
-To report bugs or contact the author, send email to prirun@gmail.com\r\n\
-Enjoy your time travels!   -Jim Wilcoxson\r\n\
+\n\
+  After logging in, use the Prime HELP command for assistance.\r\n\
+  You are welcome to create a directory under GUEST for your files.\r\n\
+  To report bugs or contact the author, send email to prirun@gmail.com\r\n\
+\n\
+Enjoy your time travels!   -Jim Wilcoxson aka JIMMY\r\n\
 \r\n\
 Login please.\r\n\
 OK, ");
@@ -2319,27 +2337,27 @@ OK, ");
       }
     }
 
-    /* do a receive/transmit scan loop for every line.  This loop is
-       fairly efficient because Primos turns off xmitenable on DMQ
-       lines after a short time w/o any output. */
+    /* do a transmit scan loop for every line.  This loop is fairly
+       efficient because Primos turns off xmitenable on DMQ lines
+       after a short time w/o any output.
 
-    if (dc[device].xmitenabled != 0 || dc[device].dss != 0) {
+       NOTE: it's important to do xmit processing even if a line is
+       not currently connected, to drain the tty output buffer.
+       Otherwise, the DMQ buffer fills, this stalls the tty output
+       buffer, and when the next connection occurs on this line, the
+       output buffer from the previous terminal session will then be
+       displayed to the new user. */
+
+    if (dc[device].dss || dc[device].xmitenabled) {
       for (lx = 0; lx < 16; lx++) {
 
-	/* Transmit is first.  Lots of opportunity to optimize this:
-	   rather than using the rtq instruction, do a mapva call to
-	   access the qcb directly, pack the queue data to a buffer,
-	   attempt to write the buffer to the socket, and then update
-	   the qcb to reflect how many bytes were actually written.
-	   This would avoid lots of get16/mapva calls and the write
-	   select could be removed. 
-
-	   NOTE: it's important to do xmit processing even if a line
-	   is not currently connected, to drain the tty output buffer.
-	   Otherwise, the DMQ buffer fills, this stalls the tty output
-	   buffer, and when the next connection occurs on this line,
-	   the output buffer from the previous terminal session will
-	   then be displayed to the new user. */
+	/* Lots of opportunity to optimize transmits: rather than
+	   using the rtq instruction, do a mapva call to access the
+	   qcb directly, pack the queue data to a buffer, attempt to
+	   write the buffer to the socket, and then update the qcb to
+	   reflect how many bytes were actually written.  This would
+	   avoid lots of get16/mapva calls and the write select could
+	   be removed. */
 
 	if (dc[device].xmitenabled & bitmask16[lx+1]) {
 	  n = 0;
@@ -2383,10 +2401,10 @@ OK, ");
 	       the AMLC device is configured as a QAMLC */
 	  }
 
-	  /* NOTE: on a partial write, terminal data is lost.  The best
-	     option would be to find out how much room is left in the
-	     socket buffer and only remove that many characters from the
-	     queue in the loop above.
+	  /* NOTE: on a partial write, data sent to the terminal is
+	     lost.  The best option would be to find out how much room
+	     is left in the socket buffer and only remove that many
+	     characters from the queue in the loop above.
 
 	     Mac OSX write selects on sockets will only return true if
 	     there are SO_SNDLOWAT (defaults to 1024) bytes available in
@@ -2402,112 +2420,132 @@ OK, ");
 	      fprintf(stderr," %d bytes written, but %d bytes sent\n", n, nw);
 	    }
 	}
+      }
+    }
 
-	/* process input, but only as much as will fit into the DMC buffer.
-	   NOTE: because the size of the AMLC tumble tables is limited, this
-	   could pose a denial of service issue.  Input should probably be
-	   processed in a round to be more fair with this limited resource.
+    /* process input, but only as much as will fit into the DMC
+       buffer.  NOTE: because the size of the AMLC tumble tables is
+       limited, this could pose a denial of service issue.  Input
+       should probably be processed in a round to be more fair with
+       this limited resource, or the tumble table space could be
+       apportioned for each connected line or each line with data
+       waiting to be read.
 
-	   The AMLC tumble tables should never overflow, because we only
-	   read as many characters from the socket buffers as will fit in 
-	   the tumble tables. */
+       The AMLC tumble tables should never overflow, because we only
+       read as many characters from the socket buffers as will fit in
+       the tumble tables. However, the tty line buffers may overflow,
+       causing data from the terminal to be dropped. To help avoid
+       this, a new OTA "set room left" has been implemented.  If there
+       is no room left in the tty input buffer, don't read any more
+       characters from the socket for that line. */
 
-	if ((dc[device].dss & dc[device].recvenabled & bitmask16[lx+1]) && !dc[device].eor) {
-	  if (dc[device].bufnum)
-	    dmcea = dc[device].dmcchan ^ 2;
-	  else
-	    dmcea = dc[device].dmcchan;
-	  dmcpair = get32r0(dmcea);
-	  dmcbufbegea = dmcpair>>16;
-	  dmcbufendea = dmcpair & 0xffff;
-	  dmcnw = dmcbufendea - dmcbufbegea + 1;
-	  if (dmcnw <= 0)
-	    continue;
-	  if (dmcnw > sizeof(buf))
-	    dmcnw = sizeof(buf);
-	  while ((n = read(dc[device].sockfd[lx], buf, dmcnw)) == -1 && errno == EINTR)
+    if (!dc[device].eor) {
+      if (dc[device].bufnum)
+	dmcea = dc[device].dmcchan ^ 2;
+      else
+	dmcea = dc[device].dmcchan;
+      dmcpair = get32r0(dmcea);
+      dmcbufbegea = dmcpair>>16;
+      dmcbufendea = dmcpair & 0xffff;
+      dmcnw = dmcbufendea - dmcbufbegea + 1;
+
+      for (lx = 0; lx < 16 && dmcnw > 0; lx++) {
+	if (!(dc[device].dss & dc[device].recvenabled & bitmask16[lx+1])
+	    || dc[device].room[lx] < 8)
+	  continue;
+
+	/* dmcnw is the # of characters left in the dmc buffer, but
+	   there may be further size/space restrictions for this line */
+
+	n2 = dmcnw;
+	if (n2 > sizeof(buf))
+	  n2 = sizeof(buf);
+	if (n2 > dc[device].room[lx])
+	  n2 = dc[device].room[lx];
+
+	while ((n = read(dc[device].sockfd[lx], buf, n2)) == -1 && errno == EINTR)
+	  ;
+	//printf("processing recv on device %o, line %d, b#=%d, n2=%d, n=%d\n", device, lx, dc[device].bufnum, n2, n);
+
+	/* zero length read means the socket has been closed */
+
+	if (n == 0) {
+	  n = -1;
+	  errno = EPIPE;
+	}
+	if (n == -1) {
+	  n = 0;
+	  if (errno == EAGAIN || errno == EWOULDBLOCK)
 	    ;
-	  //printf("processing recv on device %o, line %d, b#=%d, dmcnw=%d, n=%d\n", device, lx, dc[device].bufnum, dmcnw, n);
+	  else if (errno == EPIPE || errno == ECONNRESET) {
 
-	  /* zero length read means the socket has been closed */
-
-	  if (n == 0) {
-	    n = -1;
-	    errno = EPIPE;
-	  }
-	  if (n == -1) {
-	    n = 0;
-	    if (errno == EAGAIN || errno == EWOULDBLOCK)
-	      ;
-	    else if (errno == EPIPE || errno == ECONNRESET) {
-
-	      /* see similar code above */
-	      close(dc[device].sockfd[lx]);
-	      dc[device].dss &= ~bitmask16[lx+1];
-	      //printf("em: closing AMLC line %d on device '%o\n", lx, device);
-	    } else {
-	      perror("Reading AMLC");
-	    }
-	  }
-
-	  /* very primitive support here for telnet - only enough to
-	     ignore commands sent by the telnet client.  Telnet
-	     commands could be split across reads and AMLC interrupts,
-	     so a small state machine is used for each line */
-
-	  if (n > 0) {
-	    state = dc[device].tstate[lx];
-	    for (i=0; i<n; i++) {
-	      ch = buf[i];
-	      switch (state) {
-	      case TS_DATA:
-		if (ch == 255)
-		  state = TS_IAC;
-		else if (ch != 0) {
-storech:
-		  utempa = lx<<12 | 0x0200 | ch;
-		  put16r0(utempa, dmcbufbegea);
-		  //printf("******* stored character %o (%c) at %o\n", utempa, utempa&0x7f, dmcbufbegea);
-		  dmcbufbegea = INCVA(dmcbufbegea, 1);
-		}
-		break;
-	      case TS_IAC:
-		switch (ch) {
-		case 255:
-		  state = TS_DATA;
-		  goto storech;
-		case 251:   /* will */
-		case 252:   /* won't */
-		case 253:   /* do */
-		case 254:   /* don't */
-		  state = TS_OPTION;
-		  break;
-		case 250:   /* begin suboption */
-		  state = TS_SUBOPT;
-		  break;
-		default:    /* ignore other chars after IAC */
-		  state = TS_DATA;
-		}
-		break;
-	      case TS_SUBOPT:
-		if (ch == 255)
-		  state = TS_IAC;
-		break;
-	      case TS_OPTION:
-	      default:
-		state = TS_DATA;
-	      }
-	    }
-	    dc[device].tstate[lx] = state;
-	    if (dmcbufbegea-1 > dmcbufendea)
-	      fatal("AMLC tumble table overflowed?");
-	    put16r0(dmcbufbegea, dmcea);
-	    if (dmcbufbegea > dmcbufendea) {          /* end of range has occurred */
-	      dc[device].bufnum = 1-dc[device].bufnum;
-	      dc[device].eor = 1;
-	    }
+	    /* see similar code above */
+	    close(dc[device].sockfd[lx]);
+	    dc[device].dss &= ~bitmask16[lx+1];
+	    //printf("em: closing AMLC line %d on device '%o\n", lx, device);
+	  } else {
+	    perror("Reading AMLC");
 	  }
 	}
+
+	/* very primitive support here for telnet - only enough to
+	   ignore commands sent by the telnet client.  Telnet
+	   commands could be split across reads and AMLC interrupts,
+	   so a small state machine is used for each line */
+
+	if (n > 0) {
+	  state = dc[device].tstate[lx];
+	  for (i=0; i<n; i++) {
+	    ch = buf[i];
+	    switch (state) {
+	    case TS_DATA:
+	      if (ch == 255)
+		state = TS_IAC;
+	      else {
+  storech:
+		utempa = lx<<12 | 0x0200 | ch;
+		put16r0(utempa, dmcbufbegea);
+		//printf("******* stored character %o (%c) at %o\n", utempa, utempa&0x7f, dmcbufbegea);
+		dmcbufbegea = INCVA(dmcbufbegea, 1);
+		dmcnw--;
+	      }
+	      break;
+	    case TS_IAC:
+	      switch (ch) {
+	      case 255:
+		state = TS_DATA;
+		goto storech;
+	      case 251:   /* will */
+	      case 252:   /* won't */
+	      case 253:   /* do */
+	      case 254:   /* don't */
+		state = TS_OPTION;
+		break;
+	      case 250:   /* begin suboption */
+		state = TS_SUBOPT;
+		break;
+	      default:    /* ignore other chars after IAC */
+		state = TS_DATA;
+	      }
+	      break;
+	    case TS_SUBOPT:
+	      if (ch == 255)
+		state = TS_IAC;
+	      break;
+	    case TS_OPTION:
+	    default:
+	      state = TS_DATA;
+	    }
+	  }
+	  dc[device].tstate[lx] = state;
+	}
+      }
+      if (dmcbufbegea-1 > dmcbufendea)
+	fatal("AMLC tumble table overflowed?");
+      put16r0(dmcbufbegea, dmcea);
+      if (dmcbufbegea > dmcbufendea) {          /* end of range has occurred */
+	dc[device].bufnum = 1-dc[device].bufnum;
+	dc[device].eor = 1;
       }
     }
 
@@ -2529,7 +2567,7 @@ storech:
 
        NOTE: there is always at least one board with ctinterrupt set
        (the last board), so it will always be polling and checking
-       for new incoming connections */
+       for new incoming connections and incoming data */
 
     if ((dc[device].ctinterrupt || dc[device].xmitenabled || (dc[device].recvenabled & dc[device].dss)) && devpoll[device] == 0)
       devpoll[device] = AMLCPOLL*instpermsec;  /* setup another poll */
@@ -2695,6 +2733,8 @@ storech:
 
 int devpnc (int class, int func, int device) {
 
+#if 0
+
 #define PNCPOLL 100
 
   /* PNC controller status bits */
@@ -2705,6 +2745,15 @@ int devpnc (int class, int func, int device) {
 #define PNCCONNECTED 0x400   /* bit 6 */
 #define PNCTWOTOKENS 0x200   /* bit 7, only set after xmit EOR */
 #define PNCTOKDETECT 0x100   /* bit 8, only set after xmit EOR */
+
+  /* xmit/recv states */
+
+#define XR_IDLE   0          /* initial state: no xmit or recv */
+#define XR_READY  1          /* ready to recv or xmit */
+#define XR_XFER   3          /* transferring data over socket */
+
+#define MINCONNTIME 30       /* wait 30 seconds between connect attempts */
+#define MAXPKTBYTES 2048     /* max of 2048 byte packets */
 
   static short configured = 0; /* true if PNC configured */
   static unsigned short pncstat;    /* controller status word */
@@ -2725,6 +2774,7 @@ int devpnc (int class, int func, int device) {
     short port;            /* emulator network port on the remote node */
     short myremid;         /* my node ID on the remote node's ring network */
     short yourremid;       /* remote node's id on its own network */
+    time_t conntime;       /* time of last connect request */
   } ni[256];
 
   /* array to map socket fd's to local node id's for accessing the ni
@@ -2735,14 +2785,18 @@ int devpnc (int class, int func, int device) {
   static short fdnimap[FDMAPSIZE];
 
   typedef struct {
+    short state, offset;
     unsigned short dmachan, dmareg, dmaaddr;
-    short dmanw, toid, fromid, remtoid, remfromid;
-    unsigned short *iobufp;
+    short dmanw, dmabytesleft, toid, fromid, remtoid, remfromid;
+    unsigned char iobuf[MAXPKTBYTES+2];
   } t_dma;
   static t_dma recv, xmit;
 
   short i;
-  unsigned short access, dmaword, dmaword1, dmaword2;
+  unsigned short access, dmaword;
+  unsigned short *iobufp;
+  time_t timenow;
+  struct hostent* server;
 
   struct sockaddr_in addr;
   int fd, optval, fdflags;
@@ -2779,6 +2833,8 @@ int devpnc (int class, int func, int device) {
       ni[i].myremid = 0;
       ni[i].yourremid = 0;
     }
+    xmit.state = XR_IDLE;
+    recv.state = XR_IDLE;
     myid = 0;                 /* set an invalid node id */
 
     /* read the ring.cfg config file.  Each line contains:
@@ -2896,6 +2952,8 @@ int devpnc (int class, int func, int device) {
 	  ni[i].fd = -1;
 	}
       }
+      xmit.state = XR_IDLE;
+      recv.state = XR_IDLE;
       pncstat &= ~PNCCONNECTED;
 
     /* OCP '0701 - connect 
@@ -2951,6 +3009,7 @@ int devpnc (int class, int func, int device) {
       pncstat &= ~PNCXMITINT;   /* clear "xmit interrupting" */
       pncstat &= ~PNCTOKDETECT; /* clear "token detected" */
       xmitstat = 0;
+      xmit.state = XR_IDLE;
 
     } else if (func == 05) {    /* set PNC into "delay" mode */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - set delay mode\n", func, device);
@@ -2958,6 +3017,7 @@ int devpnc (int class, int func, int device) {
     } else if (func == 010) {   /* stop xmit in progress */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - stop xmit\n", func, device);
       xmitstat = 0;
+      xmit.state = XR_IDLE;
 
     } else if (func == 011) {   /* dunno what this is - rev 20 startup */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - unknown\n", func, device);
@@ -2975,6 +3035,7 @@ int devpnc (int class, int func, int device) {
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - ack recv int\n", func, device);
       pncstat &= ~PNCRCVINT;
       recvstat = 0;
+      recv.active = 0;
 
     } else if (func == 015) {   /* set interrupt mask (enable int) */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - enable interrupts\n", func, device);
@@ -2991,6 +3052,8 @@ int devpnc (int class, int func, int device) {
       xmitstat = 0;
       pncvec = 0;
       enabled = 0;
+      xmit.state = XR_IDLE;
+      recv.state = XR_IDLE;
 
     } else {
       printf("Unimplemented OCP device '%02o function '%02o\n", device, func);
@@ -3055,11 +3118,17 @@ int devpnc (int class, int func, int device) {
 	recv.dmanw = -((recv.dmanw>>4) ^ 0xF000);
       recv.dmaaddr = regs.sym.regdmx[recv.dmareg+1];
       recv.iobufp = mem + mapva(recv.dmaaddr, WACC, &access, 0);
+      recv.state = XR_READY;
+      recv.offset = -1;         /* initialize for new packet */
       TRACE(T_INST|T_RIO, " recv: dmachan=%o, dmareg=%o, dmaaddr=%o, dmanw=%d\n", recv.dmachan, recv.dmareg, recv.dmaaddr, recv.dmanw);
       devpoll[device] = 10;
       IOSKIP;
 
     } else if (func == 015) {   /* initiate xmit, dma chan in A */
+      if (xmitstat & 0x0040) {  /* already busy? */
+	warn("pnc: xmit when already busy!");
+	return;                 /* yes, return and don't skip */
+      }
       xmitstat = 0x0040;        /* set xmit busy */
       xmit.dmachan = crs[A];
       xmit.dmareg = xmit.dmachan<<1;
@@ -3071,41 +3140,53 @@ int devpnc (int class, int func, int device) {
       xmit.dmaaddr = regs.sym.regdmx[xmit.dmareg+1];
       TRACE(T_INST|T_RIO, " xmit: dmachan=%o, dmareg=%o, dmaaddr=%o, dmanw=%d\n", xmit.dmachan, xmit.dmareg, xmit.dmaaddr, xmit.dmanw);
 
-      /* PNC transmit:
-
-         NOTE: most of this stuff needs to be moved to poll, because
-	 it may not be possible to start/complete a transmit here!
-	 
-	 get a physical pointer to the xmit buffer, which can't cross
-	 a page boundary, then xmit the buffer.  Since PNC packets
-	 have a specific size of either 512, 1024, or 2048 bytes, and
-	 we're using a byte-stream for communication, 2 extra header
-	 bytes are sent with the packet length (in words), to let the
-	 other end know how big the packet is.
-      */
-
-      xmit.iobufp = mem + mapva(xmit.dmaaddr, RACC, &access, 0);
-
       /* read the first word, the to and from node id's, and map them
 	 to the remote hosts' expected to and from node id's */
 
+      xmit.iobufp = mem + mapva(xmit.dmaaddr, RACC, &access, 0);
       dmaword = *xmit.iobufp++;
       xmit.toid = dmaword >> 8;
       xmit.fromid = dmaword & 0xFF;
-      TRACE(T_INST|T_RIO, " xmit: dmaword = '%o/%d [%03o %03o]\n", dmaword, *(short *)&dmaword, dmaword>>8, dmaword&0xff);
+      TRACE(T_INST|T_RIO, " xmit: toid=%d, fromid=%d\n", xmit.toid, xmit.fromid);
 
-      /* broadcast packets are "I am up" msgs and are simply "eaten"
-	 here, as this is handled later in the devpnc poll code.
-	 XXX: should check that this really is the "I am up" msg */
+      /* broadcast packets are "I am up" msgs and are simply discarded
+	 here, with a succesful transmit status.  Node up/down is
+	 handled in the devpnc poll code.  
+
+	XXX: should check that this really is the "I am up" msg */
       
       if (xmit.toid == 255) {
-	regs.sym.regdmx[xmit.dmareg+1] += xmit.dmanw;   /* bump xmit address */
-	regs.sym.regdmx[xmit.dmareg] += xmit.dmanw;     /* and count */
-	goto xmitdone;
+	goto xmitdone1;
       }
 
-      /* check for errors, then map to and from node id to remote to
-	 and from node id */
+      /* if this xmit is to me and there is a new receive pending and
+	 there is room left in the receive buffer, put the packet
+	 directly in my receive buffer.  If we can't receive it now,
+	 set NACK xmit and receive status.  If the packet is not to
+	 me, copy it to the xmit.iobuf and add the header */
+
+      if (xmit.toid == myid) {
+	if (recv.state == XR_READY && recv.dmanw >= xmit.dmanw) {
+	  memcpy(recv.iobufp, xmit.iobufp, xmit.dmanw*2);
+	  regs.sym.regdmx[recv.dmareg] += xmit.dmanw;     /* bump recv count */
+	  regs.sym.regdmx[recv.dmareg+1] += xmit.dmanw;   /* and address */
+	  pncstat |= 0x8000;                /* set recv interrupt too */
+	  recv.state = XR_IDLE;             /* no longer ready to recv */
+
+xmitdone1:
+	  regs.sym.regdmx[xmit.dmareg] += xmit.dmanw;     /* and xmit count */
+	  regs.sym.regdmx[xmit.dmareg+1] += xmit.dmanw;   /* and address */
+	  pncstat |= 0x4100;                  /* set xmit interrupt + token */
+	  xmitstat |= 0x8000;                 /* set ACK xmit status */
+	  goto xmitdone;
+
+	} else {
+	  xmitstat |= 0x1000;             /* set xmit NACK status */
+	  recvstat |= 0x20;               /* set recv premature EOR */
+	}
+      }
+
+      /* check for unreasonable situations */
 
       if (xmit.toid == 0)
 	fatal("PNC: xmit.toid is zero");
@@ -3116,49 +3197,18 @@ int devpnc (int class, int func, int device) {
 	fatal(NULL);
       }
 
+      /* map local to and from node id to remote to and from node id */
+
       if (ni[xmit.fromid].myremid > 0)
 	xmit.remfromid = ni[xmit.fromid].myremid;
       else
 	xmit.remfromid = myid;
       xmit.remtoid = ni[xmit.toid].yourremid;
-
-      dmaword1 = (xmit.remtoid << 8) | xmit.remfromid;
-      for (i=0; i < xmit.dmanw; i++) {
-	if (i == 0)
-	  dmaword = dmaword1;
-	else
-	  dmaword = *xmit.iobufp++;
-	TRACE(T_INST|T_RIO, " xmit: word %d = '%o/%d [%03o %03o]\n", i, dmaword, *(short *)&dmaword, dmaword>>8, dmaword&0xff);
-
-	/* if this xmit is local and there is a receive pending and there is
-	   room left in the receive buffer, put the word directly in my 
-	   receive buffer.  If it's local but we can't receive it, set
-	   NACK xmit and receive status */
-
-	if (xmit.toid == myid) {
-	  if ((recvstat & 0x0040) && regs.sym.regdmx[recv.dmareg]) {
-	    *recv.iobufp++ = dmaword;
-	    regs.sym.regdmx[recv.dmareg]++;     /* bump count */
-	    regs.sym.regdmx[recv.dmareg+1]++;   /* bump address */
-	  } else {
-	    xmitstat |= 0x1000;             /* set xmit NACK status */
-	    recvstat |= 0x20;               /* set recv premature EOR */
-	  }
-	} else {
-	  /* send remote over sockets */
-	}
-	regs.sym.regdmx[xmit.dmareg+1]++;   /* bump xmit address */
-	regs.sym.regdmx[xmit.dmareg]++;     /* and count */
-      }
+      xmit.state = XR_READY;      /* xmit pending */
+      xmit.offset = -1;           /* initialize for new xmit */
+      devpoll[device] = 10;
 
 xmitdone:
-      pncstat |= 0x4100;                    /* set xmit interrupt + token */
-      if (xmit.toid == myid)
-	pncstat |= 0x8000;                  /* set recv interrupt too */
-      if (xmitstat == 0x0040)               /* complete w/o errors? */
-	xmitstat |= 0x8000;                 /* yes, set ACK xmit status */
-
-      devpoll[device] = PNCPOLL*instpermsec;
       if (enabled && (pncstat & 0xC000))
 	if (intvec == -1)
 	  intvec = pncvec;
@@ -3192,6 +3242,52 @@ xmitdone:
   case 4:
     TRACE(T_INST|T_RIO, " POLL '%02o%02o\n", func, device);
 
+    /* if a transmit is pending, start/continue it until completes */
+
+    if (xmit.state > XR_IDLE) {
+      if (ni[xmit.toid].fd == -1) {        /* not connected yet */
+	if (time(&timenow) - ni[xmit.toid].conntime < MINCONNTIME) {
+	  printf("em: waiting for connection timeout to node %d\n", xmit.toid);
+	  goto xmiterr;
+	}
+	if ((ni[xmit.toid].fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+	  perror ("Unable to create socket");
+	  exit(1);
+	}
+	server = gethostbyname(ni[xmit.toid].ip);
+	if (server == NULL) {
+	  fprintf(stderr,"pnc: cannot resolve %s\n", ni[xmit.toid].ip);
+	  close(ni[xmit.toid].fd);
+	  ni[xmit.toid].fd = -1;
+	  goto xmiterr;
+	}
+	ni[xmit.toid].conntime = timenow;
+	bzero((char *) &addr, sizeof(addr));
+	addr.sin_family = AF_INET;
+	bcopy((char *)server->h_addr, (char *)&addr.sin_addr.s_addr, server->h_length);
+	addr.sin_port = htons(ni[xmit.toid].port);
+	if (connect(ni[xmit.toid].fd, (void *) &addr,(socklen_t) sizeof(addr)) < 0) {
+	  perror("pnc: error connecting to server\n");
+	  close(ni[xmit.toid].fd);
+	  ni[xmit.toid].fd = -1;
+	  goto xmiterr;
+	}
+	xmit.state = XR_XFER;
+      }
+
+      /* start/continue the transfer */
+
+      if (xmit.state == XR_XFER) {
+	if ((n=write(ni[xmit.toid].fd, xmit.iobuf[offset], xmit.dmabytes-xmit.offset)) < 0) {
+	  perror("pnc: write error");
+	} else {
+	  xmit.offset += n;
+	  xmit.dmabytesleft -= n;
+	  if (xmit.dmabytesleft == 0)
+	    xmit.state = XR_IDLE;
+	}
+      }
+	
 #if 0
     while ((fd = accept(pncfd, (struct sockaddr *)&addr, &addrlen)) == -1 && errno == EINTR)
       ;
@@ -3202,6 +3298,13 @@ xmitdone:
     } else {
       if (fd >= MAXFD)
 	fatal("New connection fd is too big");
+      printf("New PNC connection:\n");
+      /*
+- new connect request came in
+- scan host table to find matching IP
+- how to figure out when one IP has multiple emulators?  port?
+- if already connected, display warning error and ignore
+
       newdevice = 0;
       for (i=0; devices[i] && !newdevice && i<MAXBOARDS; i++)
 	for (lx=0; lx<16; lx++)
@@ -3219,6 +3322,11 @@ xmitdone:
 	write(fd, "\rAll AMLC lines are in use!\r\n", 29);
 	close(fd);
       }
+
+xmitdone:
+if (xmitstat == 0x0040) {             /* complete w/o errors? */
+	pncstat |= 0x4100;                  /* set xmit interrupt + token */
+	xmitstat |= 0x8000;                 /* yes, set ACK xmit status */
     }
 #endif
     devpoll[device] = PNCPOLL*instpermsec;
@@ -3226,5 +3334,7 @@ xmitdone:
 
   default:
     fatal("Bad func in devpcn");
-  }
+#else
+    return -1;
+#endif
 }

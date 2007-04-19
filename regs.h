@@ -80,10 +80,9 @@
 #define FLR0 9
 #define FAR1 10
 #define FLR1 11
-#define FAC0H 8
-#define FAC0L 9
-#define FAC1H 10
-#define FAC1L 11
+#define FAC0 8
+#define FAC1 10
+#define BR 12
 
   union {
     int rs[REGSETS][32];

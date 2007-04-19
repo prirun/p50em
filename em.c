@@ -1390,11 +1390,7 @@ special:
 }
 
 #include "ea64v.h"
-
-unsigned int ea32i (ea_t earp, unsigned short inst, short x) {
-  TRACE(T_EAI, "Mode 32I not implemented\n");
-}
-
+#include "ea32i.h"
 
 ea_t apea(unsigned short *bitarg) {
   unsigned short ibr, ea_s, ea_w, bit, br, a;
@@ -2857,11 +2853,9 @@ main (int argc, char **argv) {
   double tempd,tempd1,tempd2;
   unsigned short tempda[4],tempda1[4];
   ea_t tempea;
-  unsigned int ea32;                   /* full V/I mode eff address */
   ea_t ea;                             /* final MR effective address */
-  ea_t eanext;                         /* ea of lower 16 bits in instl */
-  unsigned long instl;
   ea_t earp;                           /* RP to use for eff address calcs */
+  int dr;
   unsigned short eabit;
   unsigned short opcode;
   short i,j,x;
@@ -2878,6 +2872,8 @@ main (int argc, char **argv) {
   ea_t trapaddr;
   unsigned short stpm[8];
   unsigned short access;
+  unsigned long immu32;
+  unsigned long long immu64;
 
   unsigned short zresult, zclen1, zclen2, zaccess;
   unsigned int zlen1, zlen2;
@@ -2886,7 +2882,6 @@ main (int argc, char **argv) {
 
   struct timeval boot_tv;
   struct timezone tz;
-  float mips;
 
   /* open trace log */
 
@@ -5232,216 +5227,234 @@ a1a:
 
 
       if (class == 1) {
-	TRACE(T_INST, " shift group\n");
-	scount = -inst & 077;
-	if (scount == 0)
-	  scount = 0100;
-	switch (inst & 01700) {
+	if ((crs[KEYS] & 0016000) == 0010000) {      /* I-mode Generic */
+	  switch (inst) {
 
-	case 00000: /* LRL */
-	  TRACE(T_FLOW, " LRL %d\n", scount);
-	  crs[KEYS] &= ~0120000;             /* clear C,L */
-	  if (scount <= 32) {
+	  case 0040300: /* DRN */
+	    break;
+	  case 0040301: /* DRNP */
+	    break;
+	  case 0040302: /* DRNZ */
+	    break;
+	  case 0040310: /* SSSN */
+	    break;
+	  default:
+	    TRACE(T_INST, " unrecognized I-mode generic class 1 instruction!\n");
+	    printf(" unrecognized I-mode generic class 1 instruction %o!\n", inst);
+	    fatal(NULL);
+	  }
+	} else {
+	  TRACE(T_INST, " shift group\n");
+	  scount = -inst & 077;
+	  if (scount == 0)
+	    scount = 0100;
+	  switch (inst & 01700) {
+
+	  case 00000: /* LRL */
+	    TRACE(T_FLOW, " LRL %d\n", scount);
+	    crs[KEYS] &= ~0120000;             /* clear C,L */
+	    if (scount <= 32) {
+	      utempl = *(unsigned int *)(crs+L);
+	      EXPCL(utempl & bitmask32[33-scount]);
+	      *(unsigned int *)(crs+L) = utempl >> scount;
+	    } else {
+	      *(unsigned int *)(crs+L) = 0;
+	    }
+	    break;
+
+	  case 00100: /* LRS (different in R & V modes) */
+	    TRACE(T_FLOW, " LRS %d\n", scount);
+	    crs[KEYS] &= ~0120000;             /* clear C,L */
+	    if (crs[KEYS] & 010000) {          /* V/I mode */
+	      if (scount <= 32) {
+		templ = *(int *)(crs+L);
+		EXPCL(templ & bitmask32[33-scount]);
+		templ = templ >> scount;
+		*(int *)(crs+L) = templ;
+	      } else if (crs[A] & 0x8000) {
+		*(int *)(crs+L) = 0xFFFFFFFF;
+		SETCL;
+	      } else {
+		*(int *)(crs+L) = 0;
+	      }
+	    } else {
+	      utempa = crs[B] & 0x8000;        /* save B bit 1 */
+	      if (scount <= 31) {
+		templ = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
+		EXPCL(templ & bitmask32[32-scount]);
+		templ = templ >> (scount+1);
+		crs[A] = templ >> 15;
+		crs[B] = (templ & 0x7FFF) | utempa;
+	      } else if (crs[A] & 0x8000) {
+		*(int *)(crs+A) = 0xFFFF7FFF | utempa;
+		SETCL;
+	      } else {
+		*(int *)(crs+A) = utempa;
+	      }
+	    }
+	    break;
+
+	  case 00200: /* LRR */
+	    TRACE(T_FLOW, " LRR %d\n", scount);
+	    crs[KEYS] &= ~0120000;              /* clear C,L */
+	    if (scount > 32)
+	      scount = scount - 32;
 	    utempl = *(unsigned int *)(crs+L);
 	    EXPCL(utempl & bitmask32[33-scount]);
-	    *(unsigned int *)(crs+L) = utempl >> scount;
-	  } else {
-	    *(unsigned int *)(crs+L) = 0;
-	  }
-	  break;
-
-	case 00100: /* LRS (different in R & V modes) */
-	  TRACE(T_FLOW, " LRS %d\n", scount);
-	  crs[KEYS] &= ~0120000;             /* clear C,L */
-	  if (crs[KEYS] & 010000) {          /* V/I mode */
-	    if (scount <= 32) {
-	      templ = *(int *)(crs+L);
-	      EXPCL(templ & bitmask32[33-scount]);
-	      templ = templ >> scount;
-	      *(int *)(crs+L) = templ;
-	    } else if (crs[A] & 0x8000) {
-	      *(int *)(crs+L) = 0xFFFFFFFF;
-	      SETCL;
-	    } else {
-	      *(int *)(crs+L) = 0;
-	    }
-	  } else {
-	    utempa = crs[B] & 0x8000;        /* save B bit 1 */
-	    if (scount <= 31) {
-	      templ = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
-	      EXPCL(templ & bitmask32[32-scount]);
-	      templ = templ >> (scount+1);
-	      crs[A] = templ >> 15;
-	      crs[B] = (templ & 0x7FFF) | utempa;
-	    } else if (crs[A] & 0x8000) {
-	      *(int *)(crs+A) = 0xFFFF7FFF | utempa;
-	      SETCL;
-	    } else {
-	      *(int *)(crs+A) = utempa;
-	    }
-	  }
-	  break;
-
-	case 00200: /* LRR */
-	  TRACE(T_FLOW, " LRR %d\n", scount);
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
-	  if (scount > 32)
-	    scount = scount - 32;
-	  utempl = *(unsigned int *)(crs+L);
-	  EXPCL(utempl & bitmask32[33-scount]);
-	  utempl = (utempl >> scount) | (utempl << (32-scount));
-	  *(unsigned int *)(crs+L) = utempl;
-	  break;
-
-	case 00300: 
-	  if (inst == 040310) {
-	    printf("SSSN @ %o/%o\n", RPH, RPL);
-	    TRACE(T_FLOW, " SSSN\n", inst);
-	    fault(UIIFAULT, RPL, RP);
+	    utempl = (utempl >> scount) | (utempl << (32-scount));
+	    *(unsigned int *)(crs+L) = utempl;
 	    break;
-	  }
-	  goto badshift;
 
-	case 00400: /* ARL */
-	  TRACE(T_FLOW, " ARL %d\n", scount);
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
-	  if (scount <= 16) {
+	  case 00300: 
+	    if (inst == 040310) {
+	      printf("SSSN @ %o/%o\n", RPH, RPL);
+	      TRACE(T_FLOW, " SSSN\n", inst);
+	      fault(UIIFAULT, RPL, RP);
+	      break;
+	    }
+	    goto badshift;
+
+	  case 00400: /* ARL */
+	    TRACE(T_FLOW, " ARL %d\n", scount);
+	    crs[KEYS] &= ~0120000;              /* clear C,L */
+	    if (scount <= 16) {
+	      EXPCL(crs[A] & bitmask16[17-scount]);
+	      crs[A] = crs[A] >> scount;
+	    } else {
+	      crs[A] = 0;
+	    }
+	    break;
+
+	  case 00500: /* ARS */
+	    TRACE(T_FLOW, " ARS %d\n", scount);
+	    crs[KEYS] &= ~0120000;              /* clear C,L */
+	    if (scount <= 16) {
+	      tempa = *(short *)(crs+A);
+	      EXPCL(tempa & bitmask16[17-scount]);
+	      tempa = tempa >> scount;
+	      *(short *)(crs+A) = tempa;
+	    } else if (crs[A] & 0x8000) {
+	      *(short *)(crs+A) = 0xFFFF;
+	      SETCL;
+	    } else {
+	      *(short *)(crs+A) = 0;
+	    }
+	    break;
+
+	  case 00600: /* ARR */
+	    TRACE(T_FLOW, " ARR %d\n", scount);
+	    crs[KEYS] &= ~0120000;              /* clear C,L */
+	    scount = ((scount-1)%16)+1;   /* make scount 1-16 */
 	    EXPCL(crs[A] & bitmask16[17-scount]);
-	    crs[A] = crs[A] >> scount;
-	  } else {
-	    crs[A] = 0;
-	  }
-	  break;
+	    crs[A] = (crs[A] >> scount) | (crs[A] << (16-scount));
+	    break;
 
-	case 00500: /* ARS */
-	  TRACE(T_FLOW, " ARS %d\n", scount);
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
-	  if (scount <= 16) {
-	    tempa = *(short *)(crs+A);
-	    EXPCL(tempa & bitmask16[17-scount]);
-	    tempa = tempa >> scount;
-	    *(short *)(crs+A) = tempa;
-	  } else if (crs[A] & 0x8000) {
-	    *(short *)(crs+A) = 0xFFFF;
-	    SETCL;
-	  } else {
-	    *(short *)(crs+A) = 0;
-	  }
-	  break;
+	  case 01000: /* LLL */
+	    TRACE(T_FLOW, " LLL %d\n", scount);
+	    crs[KEYS] &= ~0120000;              /* clear C,L */
+	    if (scount <= 32) {
+	      utempl = *(unsigned int *)(crs+A);
+	      EXPCL(utempl & bitmask32[scount]);
+	      utempl = utempl << scount;
+	      *(unsigned int *)(crs+A) = utempl;
+	    } else {
+	      *(unsigned int *)(crs+A) = 0;
+	    }
+	    break;
 
-	case 00600: /* ARR */
-	  TRACE(T_FLOW, " ARR %d\n", scount);
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
-	  scount = ((scount-1)%16)+1;   /* make scount 1-16 */
-	  EXPCL(crs[A] & bitmask16[17-scount]);
-	  crs[A] = (crs[A] >> scount) | (crs[A] << (16-scount));
-	  break;
+	  case 01100: /* LLS (different in R/V modes) */
+	    TRACE(T_FLOW, " LLS %d\n", scount);
+	    crs[KEYS] &= ~0120000;              /* clear C,L */
+	    if (crs[KEYS] & 010000) {          /* V/I mode */
+	      if (scount < 32) {
+		templ = 0x80000000;
+		templ = templ >> scount;         /* create mask */
+		templ = templ & *(int *)(crs+A); /* grab bits */
+		templ = templ >> (31-scount);    /* extend them */
+		EXPCL(!(templ == -1 || templ == 0));
+		*(int *)(crs+A) = *(int *)(crs+A) << scount;
+	      } else {
+		EXPCL(*(int *)(crs+A) != 0);
+		*(int *)(crs+A) = 0;
+	      }
+	    } else {
+	      utempa = crs[B] & 0x8000;            /* save B bit 1 */
+	      if (scount < 31) {
+		utempl = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
+		templ2 = 0x80000000;
+		templ2 = templ2 >> scount;         /* create mask */
+		templ2 = templ2 & utempl;          /* grab bits */
+		templ2 = templ2 >> (31-scount);    /* sign extend them */
+		EXPCL(!(templ2 == -1 || templ2 == 0));
+		//printf(" before: A=%x, B=%x, utempl=%x, ", crs[A], crs[B], utempl);
+		utempl = utempl << scount;
+		crs[A] = utempl >> 16;
+		crs[B] = ((utempl >> 1) & 0x7FFF) | utempa;
+		//printf(" after: A=%x, B=%x, utempl=%x\n", crs[A], crs[B], utempl);
+	      } else {
+		EXPCL(*(unsigned int *)(crs+A) != 0);
+		*(unsigned int *)(crs+A) = utempa;
+	      }
+	    }
+	    if (crs[KEYS] & 0100000)
+	      mathexception('i', FC_INT_OFLOW, 0);
+	    break;
 
-	case 01000: /* LLL */
-	  TRACE(T_FLOW, " LLL %d\n", scount);
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
-	  if (scount <= 32) {
+	  case 01200: /* LLR */
+	    TRACE(T_FLOW, " LLR %d\n", scount);
+	    crs[KEYS] &= ~0120000;              /* clear C,L */
+	    if (scount > 32)
+	      scount = scount - 32;
 	    utempl = *(unsigned int *)(crs+A);
 	    EXPCL(utempl & bitmask32[scount]);
-	    utempl = utempl << scount;
+	    utempl = (utempl << scount) | (utempl >> (32-scount));
 	    *(unsigned int *)(crs+A) = utempl;
-	  } else {
-	    *(unsigned int *)(crs+A) = 0;
-	  }
-	  break;
+	    break;
 
-	case 01100: /* LLS (different in R/V modes) */
-	  TRACE(T_FLOW, " LLS %d\n", scount);
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
-	  if (crs[KEYS] & 010000) {          /* V/I mode */
-	    if (scount < 32) {
-	      templ = 0x80000000;
-	      templ = templ >> scount;         /* create mask */
-	      templ = templ & *(int *)(crs+A); /* grab bits */
-	      templ = templ >> (31-scount);    /* extend them */
-	      EXPCL(!(templ == -1 || templ == 0));
-	      *(int *)(crs+A) = *(int *)(crs+A) << scount;
+	  case 01400: /* ALL */
+	    TRACE(T_FLOW, " ALL %d\n", scount);
+	    crs[KEYS] &= ~0120000;              /* clear C,L */
+	    if (scount <= 16) {
+	      EXPCL(crs[A] & bitmask16[scount]);
+	      crs[A] = crs[A] << scount;
 	    } else {
-	      EXPCL(*(int *)(crs+A) != 0);
-	      *(int *)(crs+A) = 0;
+	      crs[A] = 0;
 	    }
-	  } else {
-	    utempa = crs[B] & 0x8000;            /* save B bit 1 */
-	    if (scount < 31) {
-	      utempl = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
-	      templ2 = 0x80000000;
-	      templ2 = templ2 >> scount;         /* create mask */
-	      templ2 = templ2 & utempl;          /* grab bits */
-	      templ2 = templ2 >> (31-scount);    /* sign extend them */
-	      EXPCL(!(templ2 == -1 || templ2 == 0));
-	      //printf(" before: A=%x, B=%x, utempl=%x, ", crs[A], crs[B], utempl);
-	      utempl = utempl << scount;
-	      crs[A] = utempl >> 16;
-	      crs[B] = ((utempl >> 1) & 0x7FFF) | utempa;
-	      //printf(" after: A=%x, B=%x, utempl=%x\n", crs[A], crs[B], utempl);
-	    } else {
-	      EXPCL(*(unsigned int *)(crs+A) != 0);
-	      *(unsigned int *)(crs+A) = utempa;
+	    break;
+
+	  case 01500: /* ALS */
+	    TRACE(T_FLOW, " ALS %d\n", scount);
+	    crs[KEYS] &= ~0120000;              /* clear C,L */
+	    if (scount <= 15) {
+	      tempa = 0100000;
+	      tempa = tempa >> scount;         /* create mask */
+	      tempa = tempa & crs[A];          /* grab bits */
+	      tempa = tempa >> (15-scount);    /* extend them */
+	      crs[A] = crs[A] << scount;
+	      EXPCL(!(tempa == -1 || tempa == 0));
+	    } else if (crs[A] != 0) {
+	      crs[A] = 0;
+	      SETCL;
 	    }
-	  }
-	  if (crs[KEYS] & 0100000)
-	    mathexception('i', FC_INT_OFLOW, 0);
-	  break;
+	    if (crs[KEYS] & 0100000)
+	      mathexception('i', FC_INT_OFLOW, 0);
+	    break;
 
-	case 01200: /* LLR */
-	  TRACE(T_FLOW, " LLR %d\n", scount);
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
-	  if (scount > 32)
-	    scount = scount - 32;
-	  utempl = *(unsigned int *)(crs+A);
-	  EXPCL(utempl & bitmask32[scount]);
-	  utempl = (utempl << scount) | (utempl >> (32-scount));
-	  *(unsigned int *)(crs+A) = utempl;
-	  break;
-
-	case 01400: /* ALL */
-	  TRACE(T_FLOW, " ALL %d\n", scount);
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
-	  if (scount <= 16) {
+	  case 01600: /* ALR */
+	    TRACE(T_FLOW, " ALR %d\n", scount);
+	    crs[KEYS] &= ~0120000;              /* clear C,L */
+	    scount = ((scount-1)%16)+1;   /* make scount 1-16 */
 	    EXPCL(crs[A] & bitmask16[scount]);
-	    crs[A] = crs[A] << scount;
-	  } else {
-	    crs[A] = 0;
+	    crs[A] = (crs[A] << scount) | (crs[A] >> (16-scount));
+	    break;
+
+	  default:
+  badshift:
+	    printf("emulator warning: unrecognized shift instruction %o at %o/%o\n", inst, RPH, RPL);
+	    TRACE(T_INST, " unrecognized shift instruction!: %o\n", inst);
 	  }
-	  break;
-
-	case 01500: /* ALS */
-	  TRACE(T_FLOW, " ALS %d\n", scount);
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
-	  if (scount <= 15) {
-	    tempa = 0100000;
-	    tempa = tempa >> scount;         /* create mask */
-	    tempa = tempa & crs[A];          /* grab bits */
-	    tempa = tempa >> (15-scount);    /* extend them */
-	    crs[A] = crs[A] << scount;
-	    EXPCL(!(tempa == -1 || tempa == 0));
-	  } else if (crs[A] != 0) {
-	    crs[A] = 0;
-	    SETCL;
-	  }
-	  if (crs[KEYS] & 0100000)
-	    mathexception('i', FC_INT_OFLOW, 0);
-	  break;
-
-	case 01600: /* ALR */
-	  TRACE(T_FLOW, " ALR %d\n", scount);
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
-	  scount = ((scount-1)%16)+1;   /* make scount 1-16 */
-	  EXPCL(crs[A] & bitmask16[scount]);
-	  crs[A] = (crs[A] << scount) | (crs[A] >> (16-scount));
-	  break;
-
-	default:
-badshift:
-	  printf("emulator warning: unrecognized shift instruction %o at %o/%o\n", inst, RPH, RPL);
-	  TRACE(T_INST, " unrecognized shift instruction!: %o\n", inst);
+	  continue;
 	}
-	continue;
       }
 
       if (class == 2) {
@@ -5599,6 +5612,372 @@ keys = 14200, modals=100177
 	fatal("Coding error: bad generic class");
     }
 
+    if ((crs[KEYS] & 0016000) != 0010000) goto nonimode;
+#ifndef OSX
+    RESTRICT();
+#endif
+    ea = ea32i(earp, inst, &immu32, &immu64);
+    dr = (inst >> 7) & 7;
+
+    switch (inst >> 10) {
+
+    case 000:
+      fatal("I-mode generic class 0?");
+
+    case 001:
+      TRACE(T_INST, " L\n");
+      if (*(int *)&ea < 0)
+	crsl[dr] = immu32;
+      else
+	crsl[dr] = get32(ea);
+      continue;
+
+    case 002:
+      TRACE(T_INST, " A\n");
+      if (*(int *)&ea < 0)
+	utempl2 = immu32;
+      else
+        utempl2 = get32(ea);
+      crs[KEYS] &= ~0120300;           /* clear C, L, LT, EQ */
+      utempl = crsl[dr];               /* save orig L for sign check */
+      utempll = utempl;                /* expand to 64 bits */
+      utempll += utempl2;              /* 64-bit add */
+      crsl[dr] = utempll;              /* truncate results */
+      if (utempll & 0x100000000LL)     /* set L-bit if carry */
+	crs[KEYS] |= 020000;  
+      if (crsl[dr] == 0)               /* set EQ? */
+	crs[KEYS] |= 0100; 
+      if ((~utempl ^ utempl2) & (utempl ^ crsl[dr]) & 0x80000000) {
+	if (*(int *)(crsl+dr) >= 0)
+	  crs[KEYS] |= 0200;
+	mathexception('i', FC_INT_OFLOW, 0);
+      } else if (*(int *)(crsl+dr) < 0)
+	crs[KEYS] |= 0200;
+      continue;
+
+    case 003:
+      TRACE(T_INST, " N\n");
+      if (*(int *)&ea < 0)
+	crsl[dr] &= immu32;
+      else
+        crsl[dr] &= get32(ea);
+      continue;
+
+    case 004:
+      TRACE(T_INST, " LHL1\n");
+      if (*(int *)&ea < 0)
+	crs[dr*2] = immu32 << 1;
+      else
+	crs[dr*2] = get16(ea) << 1;
+      continue;
+
+    case 005:
+      TRACE(T_INST, " SHL\n");
+      fatal("SHL not implemented");
+      continue;
+
+    case 006:  /* Special MR FP format */
+      /* DFC, DFL, FC, FL */
+      continue;
+
+    case 007:
+      fatal("I-mode opcode 007");
+
+    case 010:
+      /* register generic branch */
+      continue;
+
+    case 011:
+      TRACE(T_INST, " LH\n");
+      if (*(int *)&ea < 0)
+	crs[dr*2] = immu32;
+      else
+	crs[dr*2] = get16(ea);
+      continue;
+
+    case 012:
+      TRACE(T_INST, " AH\n");
+      continue;
+
+    case 013:
+      TRACE(T_INST, " NH\n");
+      if (*(int *)&ea < 0)
+	crs[dr*2] &= immu32;
+      else
+        crs[dr*2] &= get16(ea);
+      continue;
+
+    case 014:
+      TRACE(T_INST, " LHL2\n");
+      if (*(int *)&ea < 0)
+	crs[dr*2] = immu32 << 2;
+      else
+	crs[dr*2] = get16(ea) << 2;
+      continue;
+
+    case 015:
+      TRACE(T_INST, " SHA\n");
+      fatal("SHA not impl");
+      continue;
+
+    case 016:  /* Special MR FP format */
+      /* DFA, DFST, FA, FST, PCL */
+      continue;
+
+    case 017:
+      fatal("I-mode opcode 017");
+
+    case 020:
+      fatal("I-mode generic class 1?");
+
+    case 021:
+      TRACE(T_INST, " ST\n");
+      if (*(int *)&ea < 0)
+	fatal("ST imm");
+      put32(crsl[dr],ea);
+      continue;
+
+    case 022:
+      TRACE(T_INST, " S\n");
+      fatal("S not impl");
+      continue;
+
+    case 023:
+      TRACE(T_INST, " O\n");
+      if (*(int *)&ea < 0)
+	crsl[dr] |= immu32;
+      else
+        crsl[dr] |= get32(ea);
+      continue;
+
+    case 024:
+      TRACE(T_INST, " ROT\n");
+      fatal("ROT not impl");
+      continue;
+
+    case 025:
+      fatal("I-mode opcode 025");
+
+    case 026:  /* Special MR FP format */
+      /* DFM, DFS, FM, FS */
+      continue;
+
+    case 027:
+      fatal("I-mode opcode 027");
+
+    case 030:  /* register generic */
+      switch (inst) {
+      }
+      continue;
+
+    case 031:
+      fatal("I-mode opcode 031");
+
+    case 032:
+      TRACE(T_INST, " SH\n");
+      continue;
+
+    case 033:
+      TRACE(T_INST, " OH\n");
+      if (*(int *)&ea < 0)
+	crs[dr*2] |= immu32;
+      else
+        crs[dr*2] |= get16(ea);
+      continue;
+
+    case 034:
+      TRACE(T_INST, " EIO\n");
+      pio(ea & 0xFFFF);
+      continue;
+
+    case 035:
+      TRACE(T_INST, " LHL3\n");
+      if (*(int *)&ea < 0)
+	crs[dr*2] = immu32 << 3;
+      else
+	crs[dr*2] = get16(ea) << 3;
+      continue;
+
+    case 036:  /* Special MR FP format */
+      /* DFD, FD, QFAD, QFLD, QFSB, QFST */
+      continue;
+
+    case 037:
+      fatal("I-mode opcode 031");
+
+    case 040:  /* generic class 2, overlays skip group */
+      fatal("I-mode generic class 2?");
+
+    case 041:
+      TRACE(T_INST, " I\n");
+      utempl = crsl[dr];
+      if (*(int *)&ea < 0) {
+	crsl[dr] = immu32;
+	crsl[(inst >> 2) & 7] = utempl;
+      } else {
+	crsl[dr] = get32(ea);
+	put32(utempl, ea);
+      }
+      continue;
+
+    case 042:
+      TRACE(T_INST, " M\n");
+      continue;
+
+    case 043:
+      TRACE(T_INST, " X\n");
+      if (*(int *)&ea < 0)
+	crsl[dr] ^= immu32;
+      else
+        crsl[dr] ^= get32(ea);
+      continue;
+
+    case 044:
+      TRACE(T_INST, " LDAR\n");
+      utempa = ea;                 /* word number portion only */
+      if (utempa & 040000) {       /* absolute RF addressing */
+	RESTRICT();
+	utempa &= 0377;
+	if (utempa == 020)
+	  crsl[dr] = 1;
+	else if (utempa == 024)
+	  crsl[dr] = -1;
+	else
+	  crsl[dr] = regs.u32[utempa];
+      } else {
+	utempa &= 037;
+	if (utempa > 017) RESTRICT();
+	crsl[dr] = *(((unsigned int *)crs)+utempa);
+      }
+      continue;
+
+    case 045:
+      TRACE(T_INST, " CCP/LCP\n");
+      continue;
+
+    case 046:  /* I-mode special MR, GR format */
+      /* EALB, IM, QFC, QFDV, QFMP, TM */
+      continue;
+
+    case 047:
+      fatal("I-mode opcode 047");
+
+    case 050:
+      fatal("I-mode opcode 050");
+
+    case 051:
+      /* IH, STH */
+      continue;
+
+    case 052:
+      TRACE(T_INST, " MH\n");
+      continue;
+
+    case 053:
+      TRACE(T_INST, " XH\n");
+      if (*(int *)&ea < 0)
+	crs[dr*2] ^= immu32;
+      else
+        crs[dr*2] ^= get16(ea);
+      continue;
+
+    case 054:
+      TRACE(T_INST, " STAR\n");
+      utempa = ea;                 /* word number portion only */
+      if (utempa & 040000) {       /* absolute RF addressing */
+	RESTRICT();
+	regs.u32[utempa & 0377] = crsl[dr];
+      } else {
+	utempa &= 037;
+	if (utempa > 017) RESTRICT();
+	*(((unsigned int *)crs)+utempa) = crsl[dr];
+      }
+      continue;
+
+    case 055:
+      /* ACP, SCC */
+      continue;
+
+    case 056:  /* I-mode special MR, GR format */
+      /* EAXB, IMH, JMP, TMH */
+      continue;
+
+    case 057:
+      fatal("I-mode opcode 057");
+
+    case 060:
+      fatal("I-mode generic class 3?");
+
+    case 061:
+      TRACE(T_INST, " C\n");
+      continue;
+
+    case 062:
+      TRACE(T_INST, " D\n");
+      continue;
+
+    case 063:
+      TRACE(T_INST, " EAR\n");
+      crsl[dr] = ea;
+      continue;
+
+    case 064:
+      fatal("I-mode opcode 064");
+
+    case 065:
+      TRACE(T_INST, " LIP\n");
+      crsl[dr] = get32(ea);
+      if (crsl[dr] & 0x80000000)
+	fault(POINTERFAULT, crsl[dr]>>16, ea);
+      continue;
+
+    case 066:  /* I-mode special MR */
+      /* DM, JSXB */
+      continue;
+
+    case 067:
+      fatal("I-mode opcode 067");
+
+    case 070:
+      fatal("I-mode opcode 067");
+
+    case 071:
+      TRACE(T_INST, " CH\n");
+      continue;
+
+    case 072:
+      TRACE(T_INST, " DH\n");
+      continue;
+
+    case 073:
+      TRACE(T_INST, " JSR\n");
+      crs[dr*2] = RPH;
+      RPH = ea;
+      continue;
+
+    case 074:
+      fatal("I-mode opcode 074");
+
+    case 075:
+      TRACE(T_INST, " AIP\n");
+      crsl[dr] += get32(ea);
+      if (crsl[dr] & 0x80000000)
+	fault(POINTERFAULT, crsl[dr]>>16, ea);
+      /* NOTE: ISG says C & L need to be set, ring needs to be weakened */
+      continue;
+
+    case 076:
+      /* DMH, TCNP */
+      continue;
+
+    case 077:
+      fatal("I-mode opcode 077");
+    }
+    fatal("I-mode fall-through?");
+
+
+nonimode:
+
     /* here for non-generic instructions: memory references or pio */
     /* pio can only occur in S/R modes */
 
@@ -5657,12 +6036,9 @@ keys = 14200, modals=100177
       ea = ea32r64r(earp, inst, x, &opcode);
       break;
     case 4<<10:  /* 32I */
-      ea = ea32i(earp, inst, x);
-      warn("32I mode not supported");
-      fault(RESTRICTFAULT, 0, 0);
-      break;
+      fatal("32I mode invalid here");
     case 6<<10:  /* 64V */
-      ea = ea64v(earp, inst, x, &opcode, &eabit);
+      ea = ea64v(earp, inst, x, &opcode);
       break;
     default:
       printf("Bad CPU mode in EA calculation, keys = %o\n", crs[KEYS]);

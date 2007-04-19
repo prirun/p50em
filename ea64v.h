@@ -1,7 +1,7 @@
 /* this version is derived from the flowchart in the preliminary P400
    release notes */
 
-inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned short *opcode, unsigned short *bit) {
+inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned short *opcode) {
 
   ea_t ea;                                       /* full seg/word va */
   unsigned short ea_s;                           /* eff address segno */
@@ -17,7 +17,6 @@ inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned short *opco
   unsigned short m;
   unsigned short rph,rpl;
 
-  *bit = 0;
   i = inst & 0100000;           /* indirect is bit 1 (left/MS bit) */
 
   /* rph/rpl (and earp) are usually = RPH/RPL in the register file,
@@ -131,9 +130,11 @@ labB:
       fault(POINTERFAULT, m, ea);
     ea_s = m | (ea_s & RINGMASK16);
     ea_w = get16(INCVA(ea,1));
+#if 0
     if (ea_s & EXTMASK16)
-      *bit = get16(INCVA(ea,2)) >> 12;
-    TRACE(T_EAV, " After indirect, ea_s=%o, ea_w=%o, bit=%d\n", ea_s, ea_w, *bit);
+      warn("em: extension bit set in ea64v");
+#endif
+    TRACE(T_EAV, " After indirect, ea_s=%o, ea_w=%o\n", ea_s, ea_w);
   }
   if (xok)
     if (ixy == 5)
