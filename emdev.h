@@ -349,8 +349,12 @@ int devasr (int class, int func, int device) {
     } else if (func == 7) {        /* skip if received a char */
       if (crs[MODALS] & 010)       /* PX enabled? */
 	timeout.tv_sec = 0;        /* yes, can't delay */
-      else
+      else {
 	timeout.tv_sec = 1;        /* single user: okay to delay */
+#if 1
+	fflush(tracefile);         /* hack to flush for 32i testing */
+#endif
+      }
       timeout.tv_usec = 0;
       FD_SET(ttydev, &fds);
       n = select(ttydev+1, &fds, NULL, NULL, &timeout);
@@ -382,6 +386,11 @@ int devasr (int class, int func, int device) {
 	fatal(NULL);
       }
       ttyflags = newflags;
+#if 1
+      if (doblock)
+	fflush(tracefile);         /* hack to flush for 32i testing */
+#endif
+
       if (doblock && needflush) {
 	if (fflush(stdout) == 0) {
 	  needflush = 0;
@@ -2001,24 +2010,25 @@ int devamlc (int class, int func, int device) {
     int line;
   } socktoline[MAXLINES];
   static struct {
-    char dmqmode;                          /* 0=DMT, 1=DMQ */
-    char bufnum;                           /* 0=1st input buffer, 1=2nd */
-    char eor;                              /* 1=End of Range on input */
-    unsigned short dmcchan;                /* DMC channel (for input) */
-    unsigned short baseaddr;               /* DMT/Q base address (for output) */
-    unsigned short intvector;              /* interrupt vector */
-    unsigned short intenable;              /* interrupts enabled? */
-    unsigned short interrupting;           /* am I interrupting? */
-    unsigned short xmitenabled;            /* 1 bit per line */
-    unsigned short recvenabled;            /* 1 bit per line */
-    unsigned short ctinterrupt;            /* 1 bit per line */
-    unsigned short dss;                    /* 1 bit per line */
-    unsigned short sockfd[16];             /* Unix socket fd, 1 per line */
-    unsigned short tstate[16];             /* terminal state (telnet) */
-    unsigned short room[16];               /* room (chars) left in input buffer */
+    char dmqmode;                       /* 0=DMT, 1=DMQ */
+    char bufnum;                        /* 0=1st input buffer, 1=2nd */
+    char eor;                           /* 1=End of Range on input */
+    unsigned short dmcchan;             /* DMC channel (for input) */
+    unsigned short baseaddr;            /* DMT/Q base address (for output) */
+    unsigned short intvector;           /* interrupt vector */
+    unsigned short intenable;           /* interrupts enabled? */
+    unsigned short interrupting;        /* am I interrupting? */
+    unsigned short xmitenabled;         /* 1 bit per line */
+    unsigned short recvenabled;         /* 1 bit per line */
+    unsigned short ctinterrupt;         /* 1 bit per line */
+    unsigned short dss;                 /* 1 bit per line */
+    unsigned short sockfd[16];          /* Unix socket fd, 1 per line */
+    unsigned short tstate[16];          /* terminal state (telnet) */
+    unsigned short room[16];            /* room (chars) left in input buffer */
+    unsigned short recvlx;              /* next line to check for recv data */
   } dc[64];
 
-  int lx;
+  int lx, lcount;
   unsigned short utempa;
   unsigned int utempl;
   ea_t qcbea, dmcea, dmcbufbegea, dmcbufendea;
@@ -2129,8 +2139,9 @@ int devamlc (int class, int func, int device) {
       dc[device].xmitenabled = 0;
       dc[device].recvenabled = 0;
       dc[device].ctinterrupt = 0;
-      dc[device].dss = 0;         /* NOTE: this is stored inverted: 1=connected */
+      dc[device].dss = 0;      /* NOTE: this is stored inverted: 1=connected */
       dc[device].eor = 0;
+      dc[device].recvlx = 0;
 
     } else {
       printf("Unimplemented OCP device '%02o function '%02o\n", device, func);
@@ -2424,12 +2435,13 @@ OK, ");
     }
 
     /* process input, but only as much as will fit into the DMC
-       buffer.  NOTE: because the size of the AMLC tumble tables is
-       limited, this could pose a denial of service issue.  Input
-       should probably be processed in a round to be more fair with
-       this limited resource, or the tumble table space could be
-       apportioned for each connected line or each line with data
-       waiting to be read.
+       buffer.  
+
+       Because the size of the AMLC tumble tables is limited, this
+       could pose a denial of service issue.  Input is processed in a
+       round to be more fair with this limited resource.  Better yet,
+       the tumble table space could be apportioned for each line with
+       data waiting to be read.
 
        The AMLC tumble tables should never overflow, because we only
        read as many characters from the socket buffers as will fit in
@@ -2437,7 +2449,12 @@ OK, ");
        causing data from the terminal to be dropped. To help avoid
        this, a new OTA "set room left" has been implemented.  If there
        is no room left in the tty input buffer, don't read any more
-       characters from the socket for that line. */
+       characters from the socket for that line.  In case Primos has
+       not been modified to use the room left feature, it is
+       initialized to 64 for each line, so that at most 64 characters
+       are read from a line during a poll.  This also makes overflow
+       less likely if the line input buffer is set to '200 or so with
+       AMLBUF. */
 
     if (!dc[device].eor) {
       if (dc[device].bufnum)
@@ -2448,98 +2465,102 @@ OK, ");
       dmcbufbegea = dmcpair>>16;
       dmcbufendea = dmcpair & 0xffff;
       dmcnw = dmcbufendea - dmcbufbegea + 1;
+      lx = dc[device].recvlx;
+      for (lcount = 0; lcount < 16 && dmcnw > 0; lcount++) {
+	if ((dc[device].dss & dc[device].recvenabled & bitmask16[lx+1])
+	    && dc[device].room[lx] >= 8) {
 
-      for (lx = 0; lx < 16 && dmcnw > 0; lx++) {
-	if (!(dc[device].dss & dc[device].recvenabled & bitmask16[lx+1])
-	    || dc[device].room[lx] < 8)
-	  continue;
+	  /* dmcnw is the # of characters left in the dmc buffer, but
+	     there may be further size/space restrictions for this line */
 
-	/* dmcnw is the # of characters left in the dmc buffer, but
-	   there may be further size/space restrictions for this line */
+	  n2 = dmcnw;
+	  if (n2 > sizeof(buf))
+	    n2 = sizeof(buf);
+	  if (n2 > dc[device].room[lx])
+	    n2 = dc[device].room[lx];
+          if (n2 > 64)        /* don't let 1 line hog the resource */
+	    n2 = 64;
 
-	n2 = dmcnw;
-	if (n2 > sizeof(buf))
-	  n2 = sizeof(buf);
-	if (n2 > dc[device].room[lx])
-	  n2 = dc[device].room[lx];
-
-	while ((n = read(dc[device].sockfd[lx], buf, n2)) == -1 && errno == EINTR)
-	  ;
-	//printf("processing recv on device %o, line %d, b#=%d, n2=%d, n=%d\n", device, lx, dc[device].bufnum, n2, n);
-
-	/* zero length read means the socket has been closed */
-
-	if (n == 0) {
-	  n = -1;
-	  errno = EPIPE;
-	}
-	if (n == -1) {
-	  n = 0;
-	  if (errno == EAGAIN || errno == EWOULDBLOCK)
+	  while ((n = read(dc[device].sockfd[lx], buf, n2)) == -1 && errno == EINTR)
 	    ;
-	  else if (errno == EPIPE || errno == ECONNRESET) {
+	  //printf("processing recv on device %o, line %d, b#=%d, n2=%d, n=%d\n", device, lx, dc[device].bufnum, n2, n);
 
-	    /* see similar code above */
-	    close(dc[device].sockfd[lx]);
-	    dc[device].dss &= ~bitmask16[lx+1];
-	    //printf("em: closing AMLC line %d on device '%o\n", lx, device);
-	  } else {
-	    perror("Reading AMLC");
+	  /* zero length read means the socket has been closed */
+
+	  if (n == 0) {
+	    n = -1;
+	    errno = EPIPE;
 	  }
-	}
+	  if (n == -1) {
+	    n = 0;
+	    if (errno == EAGAIN || errno == EWOULDBLOCK)
+	      ;
+	    else if (errno == EPIPE || errno == ECONNRESET) {
 
-	/* very primitive support here for telnet - only enough to
-	   ignore commands sent by the telnet client.  Telnet
-	   commands could be split across reads and AMLC interrupts,
-	   so a small state machine is used for each line */
-
-	if (n > 0) {
-	  state = dc[device].tstate[lx];
-	  for (i=0; i<n; i++) {
-	    ch = buf[i];
-	    switch (state) {
-	    case TS_DATA:
-	      if (ch == 255)
-		state = TS_IAC;
-	      else {
-  storech:
-		utempa = lx<<12 | 0x0200 | ch;
-		put16r0(utempa, dmcbufbegea);
-		//printf("******* stored character %o (%c) at %o\n", utempa, utempa&0x7f, dmcbufbegea);
-		dmcbufbegea = INCVA(dmcbufbegea, 1);
-		dmcnw--;
-	      }
-	      break;
-	    case TS_IAC:
-	      switch (ch) {
-	      case 255:
-		state = TS_DATA;
-		goto storech;
-	      case 251:   /* will */
-	      case 252:   /* won't */
-	      case 253:   /* do */
-	      case 254:   /* don't */
-		state = TS_OPTION;
-		break;
-	      case 250:   /* begin suboption */
-		state = TS_SUBOPT;
-		break;
-	      default:    /* ignore other chars after IAC */
-		state = TS_DATA;
-	      }
-	      break;
-	    case TS_SUBOPT:
-	      if (ch == 255)
-		state = TS_IAC;
-	      break;
-	    case TS_OPTION:
-	    default:
-	      state = TS_DATA;
+	      /* see similar code above */
+	      close(dc[device].sockfd[lx]);
+	      dc[device].dss &= ~bitmask16[lx+1];
+	      //printf("em: closing AMLC line %d on device '%o\n", lx, device);
+	    } else {
+	      perror("Reading AMLC");
 	    }
 	  }
-	  dc[device].tstate[lx] = state;
+
+	  /* very primitive support here for telnet - only enough to
+	     ignore commands sent by the telnet client.  Telnet
+	     commands could be split across reads and AMLC interrupts,
+	     so a small state machine is used for each line */
+
+	  if (n > 0) {
+	    state = dc[device].tstate[lx];
+	    for (i=0; i<n; i++) {
+	      ch = buf[i];
+	      switch (state) {
+	      case TS_DATA:
+		if (ch == 255)
+		  state = TS_IAC;
+		else {
+    storech:
+		  utempa = lx<<12 | 0x0200 | ch;
+		  put16r0(utempa, dmcbufbegea);
+		  //printf("******* stored character %o (%c) at %o\n", utempa, utempa&0x7f, dmcbufbegea);
+		  dmcbufbegea = INCVA(dmcbufbegea, 1);
+		  dmcnw--;
+		}
+		break;
+	      case TS_IAC:
+		switch (ch) {
+		case 255:
+		  state = TS_DATA;
+		  goto storech;
+		case 251:   /* will */
+		case 252:   /* won't */
+		case 253:   /* do */
+		case 254:   /* don't */
+		  state = TS_OPTION;
+		  break;
+		case 250:   /* begin suboption */
+		  state = TS_SUBOPT;
+		  break;
+		default:    /* ignore other chars after IAC */
+		  state = TS_DATA;
+		}
+		break;
+	      case TS_SUBOPT:
+		if (ch == 255)
+		  state = TS_IAC;
+		break;
+	      case TS_OPTION:
+	      default:
+		state = TS_DATA;
+	      }
+	    }
+	    dc[device].tstate[lx] = state;
+	  }
 	}
+	lx = (lx+1) & 0xF;
       }
+      dc[device].recvlx = lx;
       if (dmcbufbegea-1 > dmcbufendea)
 	fatal("AMLC tumble table overflowed?");
       put16r0(dmcbufbegea, dmcea);
@@ -2567,7 +2588,7 @@ OK, ");
 
        NOTE: there is always at least one board with ctinterrupt set
        (the last board), so it will always be polling and checking
-       for new incoming connections and incoming data */
+       for new incoming connections */
 
     if ((dc[device].ctinterrupt || dc[device].xmitenabled || (dc[device].recvenabled & dc[device].dss)) && devpoll[device] == 0)
       devpoll[device] = AMLCPOLL*instpermsec;  /* setup another poll */

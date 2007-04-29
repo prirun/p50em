@@ -83,6 +83,10 @@ OK:
    IMPORTANT NOTE: this only runs on a big-endian machine, like the Prime.
 */
 
+#ifdef __APPLE__
+  #define OSX 1
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -638,7 +642,14 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
   seg = SEGNO32(ea);
   ring = ((rp | ea) >> 29) & 3;  /* current ring | ea ring = access ring */
 
+#if 0
+  /* NOTE: cpu.amgrr expects code executing in seg 0 and data references to
+     seg 0 to go through mapping.  Probably need to check the mapped I/O bit
+     only for DMX I/O requests */
   if ((seg > 0 && (crs[MODALS] & 4)) || (seg == 0 && (crs[MODALS] & 020))) {
+#else
+  if (crs[MODALS] & 4) {
+#endif
     stlbix = STLBIX(ea);
     stlbp = stlb+stlbix;
     if (stlbix >= STLBENTS) {
@@ -2903,7 +2914,7 @@ main (int argc, char **argv) {
 
   for (i=0; i < 32*REGSETS; i++)
     regs.u32[i] = 0;
-  crs = (void *)regs.rs[2];           /* boot w/register set 2 */
+  crs = (void *)regs.rs[2];           /* boot w/register set 3 */
   crsl = (void *)crs;
   /* NOTE: interrupts should be disabled (0100000 in modals) */
   crs[MODALS] = 0100;
@@ -3253,6 +3264,15 @@ For disk boots, the last 3 digits can be:\n\
       traceflags = savetraceflags;
     else
       traceflags = 0;
+
+    /* hack to trace all 32I mode */
+
+#if 0
+    if ((crs[KEYS] & 0016000) == 0010000)
+      traceflags = savetraceflags;
+    else
+      traceflags = 0;
+#endif
 
     /* poll any devices that requested a poll */
 
@@ -3991,13 +4011,14 @@ stfa:
 	  put64(*(double *)(stpm+4), INCVA(ea,4));
 	  continue;
 
+	case 001700:
 	case 001701:
 	  TRACE(T_FLOW, " DBGILL\n", inst);
 	  fault(ILLINSTFAULT, RPL, 0);
 	  fatal(NULL);
 
-	/* JW: I think this is an invalid opcode that Prime uses when
-	   unexpected things happen, for example:
+	/* JW: I think 1702 is an invalid opcode that Prime uses as
+	   an assertion when unexpected things happen, for example:
 
 	   LDA modals        get modals
 	   SAS 1             interrupts enabled?
@@ -5666,7 +5687,7 @@ keys = 14200, modals=100177
     case 004:
       TRACE(T_INST, " LHL1\n");
       if (*(int *)&ea < 0)
-	crs[dr*2] = immu32 << 1;
+	crs[dr*2] = (immu32 >> 16) << 1;
       else
 	crs[dr*2] = get16(ea) << 1;
       continue;
@@ -5678,31 +5699,36 @@ keys = 14200, modals=100177
 
     case 006:  /* Special MR FP format */
       /* DFC, DFL, FC, FL */
+      fatal("I opcode 006");
       continue;
 
     case 007:
-      fatal("I-mode opcode 007");
+      fatal("I-mode opcode 007?");
 
     case 010:
       /* register generic branch */
+      fatal("I 010");
       continue;
 
     case 011:
       TRACE(T_INST, " LH\n");
-      if (*(int *)&ea < 0)
-	crs[dr*2] = immu32;
-      else
+      if (*(int *)&ea < 0) {
+	TRACE(T_INST, " ea=%x, immu32=%x, crsl[%d]=%x\n", ea, immu32, dr, crsl[dr]);
+	crs[dr*2] = immu32 >> 16;
+      } else
 	crs[dr*2] = get16(ea);
+      TRACE(T_INST, " after load, crsl[%d]=%x\n", dr, crsl[dr]);
       continue;
 
     case 012:
       TRACE(T_INST, " AH\n");
+      fatal("I 012");
       continue;
 
     case 013:
       TRACE(T_INST, " NH\n");
       if (*(int *)&ea < 0)
-	crs[dr*2] &= immu32;
+	crs[dr*2] &= (immu32 >> 16);
       else
         crs[dr*2] &= get16(ea);
       continue;
@@ -5710,22 +5736,23 @@ keys = 14200, modals=100177
     case 014:
       TRACE(T_INST, " LHL2\n");
       if (*(int *)&ea < 0)
-	crs[dr*2] = immu32 << 2;
+	crs[dr*2] = (immu32 >> 16) << 2;
       else
 	crs[dr*2] = get16(ea) << 2;
       continue;
 
     case 015:
       TRACE(T_INST, " SHA\n");
-      fatal("SHA not impl");
+      fatal("I 015");
       continue;
 
     case 016:  /* Special MR FP format */
       /* DFA, DFST, FA, FST, PCL */
+      fatal("I 016");
       continue;
 
     case 017:
-      fatal("I-mode opcode 017");
+      fatal("I-mode opcode 017?");
 
     case 020:
       fatal("I-mode generic class 1?");
@@ -5739,7 +5766,7 @@ keys = 14200, modals=100177
 
     case 022:
       TRACE(T_INST, " S\n");
-      fatal("S not impl");
+      fatal("I 022");
       continue;
 
     case 023:
@@ -5752,18 +5779,19 @@ keys = 14200, modals=100177
 
     case 024:
       TRACE(T_INST, " ROT\n");
-      fatal("ROT not impl");
+      fatal("I 024");
       continue;
 
     case 025:
-      fatal("I-mode opcode 025");
+      fatal("I-mode opcode 025?");
 
     case 026:  /* Special MR FP format */
       /* DFM, DFS, FM, FS */
+      fatal("I 026");
       continue;
 
     case 027:
-      fatal("I-mode opcode 027");
+      fatal("I-mode opcode 027?");
 
     case 030:  /* register generic */
       switch (inst) {
@@ -5771,16 +5799,17 @@ keys = 14200, modals=100177
       continue;
 
     case 031:
-      fatal("I-mode opcode 031");
+      fatal("I-mode opcode 031?");
 
     case 032:
       TRACE(T_INST, " SH\n");
+      fatal("I 032");
       continue;
 
     case 033:
       TRACE(T_INST, " OH\n");
       if (*(int *)&ea < 0)
-	crs[dr*2] |= immu32;
+	crs[dr*2] |= (immu32 >> 16);
       else
         crs[dr*2] |= get16(ea);
       continue;
@@ -5793,17 +5822,18 @@ keys = 14200, modals=100177
     case 035:
       TRACE(T_INST, " LHL3\n");
       if (*(int *)&ea < 0)
-	crs[dr*2] = immu32 << 3;
+	crs[dr*2] = (immu32 >> 16) << 3;
       else
 	crs[dr*2] = get16(ea) << 3;
       continue;
 
     case 036:  /* Special MR FP format */
       /* DFD, FD, QFAD, QFLD, QFSB, QFST */
+      fatal("I 036");
       continue;
 
     case 037:
-      fatal("I-mode opcode 031");
+      fatal("I-mode opcode 037?");
 
     case 040:  /* generic class 2, overlays skip group */
       fatal("I-mode generic class 2?");
@@ -5822,6 +5852,7 @@ keys = 14200, modals=100177
 
     case 042:
       TRACE(T_INST, " M\n");
+      fatal("I 042");
       continue;
 
     case 043:
@@ -5853,30 +5884,34 @@ keys = 14200, modals=100177
 
     case 045:
       TRACE(T_INST, " CCP/LCP\n");
+      fatal("I 045");
       continue;
 
     case 046:  /* I-mode special MR, GR format */
       /* EALB, IM, QFC, QFDV, QFMP, TM */
+      fatal("I 046");
       continue;
 
     case 047:
-      fatal("I-mode opcode 047");
+      fatal("I-mode opcode 047?");
 
     case 050:
-      fatal("I-mode opcode 050");
+      fatal("I-mode opcode 050?");
 
     case 051:
       /* IH, STH */
+      fatal("I 051");
       continue;
 
     case 052:
       TRACE(T_INST, " MH\n");
+      fatal("I 052");
       continue;
 
     case 053:
       TRACE(T_INST, " XH\n");
       if (*(int *)&ea < 0)
-	crs[dr*2] ^= immu32;
+	crs[dr*2] ^= (immu32 >> 16);
       else
         crs[dr*2] ^= get16(ea);
       continue;
@@ -5896,33 +5931,39 @@ keys = 14200, modals=100177
 
     case 055:
       /* ACP, SCC */
+      fatal("I 055");
       continue;
 
     case 056:  /* I-mode special MR, GR format */
       /* EAXB, IMH, JMP, TMH */
+      fatal("I 056");
       continue;
 
     case 057:
-      fatal("I-mode opcode 057");
+      fatal("I-mode opcode 057?");
 
     case 060:
       fatal("I-mode generic class 3?");
 
     case 061:
       TRACE(T_INST, " C\n");
+      fatal("I 061");
       continue;
 
     case 062:
       TRACE(T_INST, " D\n");
+      fatal("I 062");
       continue;
 
     case 063:
       TRACE(T_INST, " EAR\n");
+      if (*(int *)&ea < 0)
+	fatal("Immediate mode EAR?");
       crsl[dr] = ea;
       continue;
 
     case 064:
-      fatal("I-mode opcode 064");
+      fatal("I-mode opcode 064?");
 
     case 065:
       TRACE(T_INST, " LIP\n");
@@ -5933,20 +5974,23 @@ keys = 14200, modals=100177
 
     case 066:  /* I-mode special MR */
       /* DM, JSXB */
+      fatal("I 066");
       continue;
 
     case 067:
-      fatal("I-mode opcode 067");
+      fatal("I-mode opcode 067?");
 
     case 070:
-      fatal("I-mode opcode 067");
+      fatal("I-mode opcode 070?");
 
     case 071:
       TRACE(T_INST, " CH\n");
+      fatal("I 071");
       continue;
 
     case 072:
       TRACE(T_INST, " DH\n");
+      fatal("I 072");
       continue;
 
     case 073:
@@ -5956,7 +6000,7 @@ keys = 14200, modals=100177
       continue;
 
     case 074:
-      fatal("I-mode opcode 074");
+      fatal("I-mode opcode 074?");
 
     case 075:
       TRACE(T_INST, " AIP\n");
@@ -5968,6 +6012,7 @@ keys = 14200, modals=100177
 
     case 076:
       /* DMH, TCNP */
+      fatal("I 076");
       continue;
 
     case 077:
@@ -6813,7 +6858,7 @@ nonimode:
     */
 
     case 0301:
-      TRACE(T_FLOW, " STLR\n");
+      TRACE(T_FLOW, " STLR '%06o\n", ea & 0xFFFF);
       utempa = ea;                 /* word number portion only */
       if (utempa & 040000) {       /* absolute RF addressing */
 	RESTRICT();
@@ -6821,12 +6866,12 @@ nonimode:
       } else {
 	utempa &= 037;
 	if (utempa > 017) RESTRICT();
-	*(((int *)crs)+utempa) = *(int *)(crs+L);
+	*(int *)(crsl+utempa) = *(int *)(crs+L);
       }
       continue;
 
     case 0501:
-      TRACE(T_FLOW, " LDLR\n");
+      TRACE(T_FLOW, " LDLR '%06o\n", ea & 0xFFFF);
       utempa = ea;                 /* word number portion only */
       if (utempa & 040000) {       /* absolute RF addressing */
 	RESTRICT();
@@ -6840,7 +6885,7 @@ nonimode:
       } else {
 	utempa &= 037;
 	if (utempa > 017) RESTRICT();
-	*(int *)(crs+L) = *(((int *)crs)+utempa);
+	*(int *)(crs+L) = *(int *)(crsl+utempa);
       }
       continue;
 

@@ -62,6 +62,7 @@ inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32, unsign
       d = iget16(RP);
       RPL++;
       ea = (crsl[sr] & 0xFFFF0000) | ((crsl[sr] + d) & 0xFFFF);
+      TRACE(T_EAI, " GRR, d=%x, crsl[sr]=%o/%o, ea=%o/%o\n", d, crsl[sr]>>16, crsl[sr]&0xFFFF, ea>>16, ea&0xFFFF);
       if (ea & 0x80000000)
 	fault(POINTERFAULT, ea>>16, ea);
       return ea | ring;
