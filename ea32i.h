@@ -94,14 +94,19 @@ inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32, unsign
     return ip | ring;
 
   case 3:  /* TM=3: Indirect and Indirect Postindexed */
+    TRACE(T_EAI, " TM=3: Indirect [Postindexed]");
     d = iget16(RP);
     RPL++;
     ea = (crsl[BR+br] & 0xFFFF0000) | ((crsl[BR+br] + d) & 0xFFFF);
+    TRACE(T_EAI, " BR[%d]=%o/%o, d=%o, ip ea=%o/%o\n", br, crsl[BR+br]>>16, crsl[BR+br]&0xFFFF, d, ea>>16, ea&0xFFFF);
     ip = get32(ea | ring);
+    TRACE(T_EAI, " after indirect, ea=%o/%o\n", ip>>16, ip&0xFFFF);
     if (ip & 0x80000000)
       fault(POINTERFAULT, ip>>16, ea);
-    if (sr > 0)
+    if (sr > 0) {
       ip = (ip & 0xFFFF0000) | ((ip + crs[sr*2]) & 0xFFFF);
+      TRACE(T_EAI, " index by crs[%d]='%o/%d, ea=%o/%o\n", sr, crs[sr*2], crs[sr*2], ea>>16, ea&0xFFFF);
+    }
     return ip | ring;
 
   default:

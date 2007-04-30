@@ -119,19 +119,23 @@ typedef unsigned int pa_t;            /* physical address */
 #define RPH regs.u16[14]
 #define RPL regs.u16[15]
 
-#define SETCC_A \
+#define SETCC_16(val16) \
   crs[KEYS] &= ~0300; \
-  if (crs[A] == 0) \
+  if ((val16) == 0) \
     crs[KEYS] |= 0100; \
-  else if (*(short *)(crs+A) < 0) \
+  else if (*(short *)(&(val16)) < 0) \
     crs[KEYS] |= 0200;
 
-#define SETCC_L \
+#define SETCC_A SETCC_16(crs[A])
+
+#define SETCC_32(val32) \
   crs[KEYS] &= ~0300; \
-  if (*(int *)(crs+L) == 0) \
+  if ((val32) == 0) \
     crs[KEYS] |= 0100; \
-  else if (*(int *)(crs+L) < 0) \
+  else if (*(int *)(&(val32)) < 0) \
     crs[KEYS] |= 0200;
+
+#define SETCC_L SETCC_32(crsl[2])
 
 /* NOTE: in previous versions, exponent must be zero for 0.0, but DIAG
    test CPU.FLOAT.V considers a zero fraction and non-zero exponent to
@@ -164,13 +168,13 @@ typedef unsigned int pa_t;            /* physical address */
    NOTE: unlike EXPC, this doesn't clear anything! */
 
 #define EXPCL(onoff) \
-  if ((onoff)) crs[KEYS] |= 0120000;
+  if ((onoff)) crs[KEYS] |= 0120000
 
-#define SETCL crs[KEYS] |= 0120000;
+#define SETCL crs[KEYS] |= 0120000
 
 #define SETL(onoff) \
   if ((onoff)) crs[KEYS] |= 020000; \
-  else crs[KEYS] &= ~020000;
+  else crs[KEYS] &= ~020000
 
 /* XSETL is a dummy to indicate that the L-bit may not be set correctly */
 
@@ -188,14 +192,14 @@ typedef unsigned int pa_t;            /* physical address */
 #define BXNE if (crs[X] != 0) RPL = iget16(RP); else RPL++
 #define BYNE if (crs[Y] != 0) RPL = iget16(RP); else RPL++
 
-/* same, but for logicize instructions */
+/* expressions for logicize instructions */
 
-#define LCLT crs[A] = ((crs[KEYS] & 0200) != 0)
-#define LCLE crs[A] = ((crs[KEYS] & 0300) != 0)
-#define LCEQ crs[A] = ((crs[KEYS] & 0100) != 0)
-#define LCNE crs[A] = ((crs[KEYS] & 0100) == 0)
-#define LCGE crs[A] = !(crs[KEYS] & 0200)
-#define LCGT crs[A] = ((crs[KEYS] & 0300) == 0)
+#define LCLT ((crs[KEYS] & 0200) != 0)
+#define LCLE ((crs[KEYS] & 0300) != 0)
+#define LCEQ ((crs[KEYS] & 0100) != 0)
+#define LCNE ((crs[KEYS] & 0100) == 0)
+#define LCGE !(crs[KEYS] & 0200)
+#define LCGT ((crs[KEYS] & 0300) == 0)
 
 /* macro for restricted instructions (uses current program counter) */
 
@@ -642,14 +646,10 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
   seg = SEGNO32(ea);
   ring = ((rp | ea) >> 29) & 3;  /* current ring | ea ring = access ring */
 
-#if 0
   /* NOTE: cpu.amgrr expects code executing in seg 0 and data references to
      seg 0 to go through mapping.  Probably need to check the mapped I/O bit
      only for DMX I/O requests */
-  if ((seg > 0 && (crs[MODALS] & 4)) || (seg == 0 && (crs[MODALS] & 020))) {
-#else
   if (crs[MODALS] & 4) {
-#endif
     stlbix = STLBIX(ea);
     stlbp = stlb+stlbix;
     if (stlbix >= STLBENTS) {
@@ -919,6 +919,7 @@ fatal(char *msg) {
   if (msg)
     printf("%s\n", msg);
   /* should do a register dump, RL dump, PCB dump, etc. here... */
+  close(tracefile);
   exit(1);
 }
 
@@ -2705,12 +2706,12 @@ lpsw() {
 /* Character instructions */
 
 #define GETFLR(n) (((crsl[FLR0+2*(n)] >> 11) & 0x1FFFE0) | (crsl[FLR0+2*(n)] & 0x1F))
-#define PUTFLR(n,v) crsl[FLR0+2*(n)] = (((v) << 11) & 0xFFFF0000) | (crsl[FLR0+2*(n)] & 0xF000) | ((v) & 0x1F);
+#define PUTFLR(n,v) crsl[FLR0+2*(n)] = (((v) << 11) & 0xFFFF0000) | (crsl[FLR0+2*(n)] & 0xF000) | ((v) & 0x1F)
 
-ldc(n) {
+unsigned short ldc(int n, unsigned short result) {
   unsigned int utempl;
   unsigned short m;
-  unsigned short far, flr;
+  unsigned int far, flr;
   ea_t ea;
 
   far = FAR0;
@@ -2725,16 +2726,16 @@ ldc(n) {
     ea = crsl[far];
     m = get16(crsl[far]);
     if (crsl[flr] & 0x8000) {
-      crs[A] = m & 0xFF;
+      result = m & 0xFF;
       crsl[flr] &= 0xFFFF0FFF;
       crsl[far] = (crsl[far] & 0x6FFF0000) | ((crsl[far]+1) & 0xFFFF); \
-      TRACE(T_INST, " ldc %d = '%o (%c) from %o/%o right\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
-      //printf(" ldc %d = '%o (%c) from %o/%o right\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
+      TRACE(T_INST, " ldc %d = '%o (%c) from %o/%o right\n", n, result, result&0x7f, ea>>16, ea&0xffff);
+      //printf(" ldc %d = '%o (%c) from %o/%o right\n", n, result, result&0x7f, ea>>16, ea&0xffff);
     } else {
-      crs[A] = m >> 8;
+      result = m >> 8;
       crsl[flr] |= 0x8000;      /* set bit offset */
-      TRACE(T_INST, " ldc %d = '%o (%c) from %o/%o left\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
-      //printf(" ldc %d = '%o (%c) from %o/%o left\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
+      TRACE(T_INST, " ldc %d = '%o (%c) from %o/%o left\n", n, result, result&0x7f, ea>>16, ea&0xffff);
+      //printf(" ldc %d = '%o (%c) from %o/%o left\n", n, result, result&0x7f, ea>>16, ea&0xffff);
     }
     utempl--;
     PUTFLR(n,utempl);
@@ -2742,16 +2743,16 @@ ldc(n) {
   } else {                  /* utempl == 0 */
     TRACE(T_INST, " LDC %d limit\n", n);
     //printf(" LDC %d limit\n", n);
-    crs[A] = 0;
     crs[KEYS] |= 0100;      /* set EQ */
   }
+  return result;
 }
 
 
-stc(n) {
+stc(int n, unsigned short ch) {
   unsigned int utempl;
   unsigned short m;
-  unsigned short far, flr;
+  unsigned int far, flr;
   ea_t ea;
 
   far = FAR0;
@@ -2766,16 +2767,16 @@ stc(n) {
     ea = crsl[far];
     m = get16(crsl[far]);
     if (crsl[flr] & 0x8000) {
-      TRACE(T_INST, " stc %d =  '%o (%c) to %o/%o right\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
-      //printf(" stc %d =  '%o (%c) to %o/%o right\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
-      m = (m & 0xFF00) | (crs[A] & 0xFF);
+      TRACE(T_INST, " stc %d =  '%o (%c) to %o/%o right\n", n, ch, ch&0x7f, ea>>16, ea&0xffff);
+      //printf(" stc %d =  '%o (%c) to %o/%o right\n", n, ch, ch&0x7f, ea>>16, ea&0xffff);
+      m = (m & 0xFF00) | (ch & 0xFF);
       put16(m,crsl[far]);
       crsl[flr] &= 0xFFFF0FFF;
       crsl[far] = (crsl[far] & 0x6FFF0000) | ((crsl[far]+1) & 0xFFFF);
     } else {
-      TRACE(T_INST, " stc %d = '%o (%c) to %o/%o left\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
-      //printf(" stc %d = '%o (%c) to %o/%o left\n", n, crs[A], crs[A]&0x7f, ea>>16, ea&0xffff);
-      m = (crs[A] << 8) | (m & 0xFF);
+      TRACE(T_INST, " stc %d = '%o (%c) to %o/%o left\n", n, ch, ch&0x7f, ea>>16, ea&0xffff);
+      //printf(" stc %d = '%o (%c) to %o/%o left\n", n, ch, ch&0x7f, ea>>16, ea&0xffff);
+      m = (ch << 8) | (m & 0xFF);
       put16(m,crsl[far]);
       crsl[flr] |= 0x8000;      /* set bit offset */
     }
@@ -2789,8 +2790,33 @@ stc(n) {
   }
 }
 
+/* add a bit offset, passed in "val", to field address register n */
 
-/* queue instructions where physical queues may be involved */
+arfa(int n, int val) {
+  int utempl;
+
+  TRACE(T_INST, " before add, FAR=%o/%o, FLR=%o\n", crsl[FAR0+2*n]>>16, crsl[FAR0+2*n]&0xFFFF, crsl[FLR0+2*n]);
+  utempl = ((crsl[FAR0+2*n] & 0xFFFF) << 4) | ((crsl[FLR0+2*n] >> 12) & 0xF);
+  utempl += val;
+  crsl[FAR0+2*n] = (crsl[FAR0+2*n] & 0xFFFF0000) | ((utempl >> 4) & 0xFFFF);
+  crsl[FLR0+2*n] = (crsl[FLR0+2*n] & 0xFFFF0FFF) | ((utempl & 0xF) << 12);
+  TRACE(T_INST, " after add, FAR0=%o/%o, FLR=%o\n", crsl[FAR0+2*n]>>16, crsl[FAR0+2*n]&0xFFFF, crsl[FLR0+2*n]);
+}
+
+
+/* queue instructions 
+
+   NOTE: ABQ is typically used in software to add an item to a
+   hardware (physical) queue and RTQ is used by DMQ hardware to fetch
+   items from the queue.  All of the queue instructions _should_
+   support physical queues, but only ABQ and RTQ currently support
+   them (they're needed for AMLC boards).  If ICS support is added,
+   the other queue instructions will probably need to support physical
+   queues. 
+
+   The CPU KEYS are not set here because this would not happen on a
+   DMQ request - only when the instruction is executed by software.
+*/
 
 int rtq(ea_t qcbea, unsigned short *qent, ea_t rp) {
 
@@ -2800,9 +2826,10 @@ int rtq(ea_t qcbea, unsigned short *qent, ea_t rp) {
 
   qtop = get16r(qcbea, rp);
   qbot = get16r(qcbea+1, rp);
-
-  if (qtop == qbot)
+  if (qtop == qbot) {
+    *qent = 0;
     return 0;               /* queue is empty */
+  }
   qseg = get16r(qcbea+2, rp);
   qmask = get16r(qcbea+3, rp);
   qentea = MAKEVA(qseg & 0xfff, qtop);
@@ -2833,13 +2860,99 @@ int abq(ea_t qcbea, unsigned short qent, ea_t rp) {
     return 0;
   qentea = MAKEVA(qseg & 0xfff,qbot);
   if (qseg & 0x8000)         /* virtual queue */
-    put16r(crs[A], qentea, rp);
+    put16r(qent, qentea, rp);
   else {
     RESTRICTR(rp);
     mem[qentea] = qent;
   }
   put16r(qtemp, qcbea+1, rp);
   return 1;
+}
+
+
+int rbq(ea_t qcbea, unsigned short *qent, ea_t rp) {
+
+  unsigned int qtop, qbot, qtemp;
+  unsigned short qseg, qmask;
+  ea_t qentea;
+
+  qtop = get16(qcbea);
+  qbot = get16(qcbea+1);
+  if (qtop == qbot) {  /* queue empty */
+    *qent = 0;
+    return 0;
+  }
+  qseg = get16(qcbea+2) & 0x7FFF;
+  qmask = get16(qcbea+3);
+  qbot = (qbot & ~qmask) | ((qbot-1) & qmask);
+  qentea = MAKEVA(qseg,qbot);
+  *qent = get16(qentea);
+  put16(qbot, qcbea+1);
+  return 1;
+}
+
+int atq(ea_t qcbea, unsigned short qent, ea_t rp) {
+
+  unsigned int qtop, qbot, qtemp;
+  unsigned short qseg, qmask;
+  ea_t qentea;
+
+  qtop = get16(qcbea);
+  qbot = get16(qcbea+1);
+  qseg = get16(qcbea+2) & 0x7FFF;
+  qmask = get16(qcbea+3);
+  qtemp = (qtop & ~qmask) | ((qtop-1) & qmask);
+  if (qtemp == qbot)   /* queue full */
+    return 0;
+  qentea = MAKEVA(qseg,qtemp);
+  put16(qent,qentea);
+  put16(qtemp, qcbea);
+  return 1;
+}
+
+unsigned short tstq(ea_t qcbea) {
+
+  unsigned int qtop, qbot, qmask;
+
+  qtop = get16(qcbea);
+  qbot = get16(qcbea+1);
+  qmask = get16(qcbea+3);
+  return (qbot-qtop) & qmask;
+}
+
+
+int ldar(ea_t ea) {
+  unsigned short utempa;
+  unsigned int result;
+
+  if (ea & 040000) {       /* absolute RF addressing */
+    RESTRICT();
+    ea &= 0377;
+    if (ea == 020)
+      result = 1;
+    else if (ea == 024)
+      result = -1;
+    else
+      result = regs.u32[ea];
+  } else {
+    ea &= 037;
+    if (ea > 017) RESTRICT();
+    result = crsl[ea];
+  }
+  return result;
+}
+
+
+star(unsigned int val32, ea_t ea) {
+
+  if (ea & 040000) {       /* absolute RF addressing */
+    RESTRICT();
+    regs.u32[ea & 0377] = val32;
+  } else {
+    ea &= 037;
+    if (ea > 017) RESTRICT();
+    crsl[ea] = val32;
+  }
 }
 
 
@@ -2850,7 +2963,7 @@ main (int argc, char **argv) {
   int boot;                            /* true if reading a boot record */
   char *bootarg;                       /* argument to -boot, if any */
   char bootfile[8];                    /* boot file to load (optional) */
-  int bootfd;                          /* initial boot file fd */
+  int bootfd=-1;                       /* initial boot file fd */
   int bootctrl, bootunit;              /* boot device controller and unit */
   int bootskip=0;                      /* skip this many bytes on boot dev */
 
@@ -2859,13 +2972,14 @@ main (int argc, char **argv) {
   int templ,templ1,templ2;
   long long templl,templl1, templl2;
   unsigned long long utempll, utempll1, utempll2;
-  unsigned int utempl,utempl1,utempl2;
+  unsigned int utempl,utempl1,utempl2,utempl3,utempl4;
   float tempf,tempf1,tempf2;
   double tempd,tempd1,tempd2;
   unsigned short tempda[4],tempda1[4];
   ea_t tempea;
   ea_t ea;                             /* final MR effective address */
   ea_t earp;                           /* RP to use for eff address calcs */
+  int brop;
   int dr;
   unsigned short eabit;
   unsigned short opcode;
@@ -3177,6 +3291,7 @@ For disk boots, the last 3 digits can be:\n\
     perror("Error reading memory image");
     fatal(NULL);
   }
+  close(bootfd);
 
   /* check we got it all, except for tape boots; the boot program size
      is unpredictable on tape */
@@ -3210,6 +3325,12 @@ For disk boots, the last 3 digits can be:\n\
     ;
 
   while (1) {
+
+#if 0
+      /* NOTE: doing something like this causes Primos to do a controlled
+	 shutdown, flushing disk buffers, etc. */
+      RPH = 07777;
+#endif
 
 #if 0
     /* trace AC$SET call not working
@@ -3265,9 +3386,9 @@ For disk boots, the last 3 digits can be:\n\
     else
       traceflags = 0;
 
-    /* hack to trace all 32I mode */
+    /* hack to activate trace in 32I mode */
 
-#if 0
+#if 1
     if ((crs[KEYS] & 0016000) == 0010000)
       traceflags = savetraceflags;
     else
@@ -3466,22 +3587,22 @@ xec:
 
 	case 001302:
 	  TRACE(T_FLOW, " LDC 0\n");
-	  ldc(0);
+	  crs[A] = ldc(0, crs[A]);
 	  continue;
 
 	case 001312:
 	  TRACE(T_FLOW, " LDC 1\n");
-	  ldc(1);
+	  crs[A] = ldc(1, crs[A]);
 	  continue;
 
 	case 001322:
 	  TRACE(T_FLOW, " STC 0\n");
-	  stc(0);
+	  stc(0, crs[A]);
 	  continue;
 	    
 	case 001332:
 	  TRACE(T_FLOW, " STC 1\n");
-	  stc(1);
+	  stc(1, crs[A]);
 	  continue;
 
 	case 001300:
@@ -3502,22 +3623,12 @@ xec:
 
 	case 001301:
 	  TRACE(T_FLOW, " ALFA 0\n");
-	  TRACE(T_INST, " before add, FAR0=%o/%o, FLR=%o\n", crsl[FAR0]>>16, crsl[FAR0]&0xFFFF, crsl[FLR0]);
-	  utempl = ((crsl[FAR0] & 0xFFFF) << 4) | ((crsl[FLR0] >> 12) & 0xF);
-	  utempl += *(int *)(crs+L);
-	  crsl[FAR0] = (crsl[FAR0] & 0xFFFF0000) | ((utempl >> 4) & 0xFFFF);
-	  crsl[FLR0] = (crsl[FLR0] & 0xFFFF0FFF) | ((utempl & 0xF) << 12);
-	  TRACE(T_INST, " after add, FAR0=%o/%o, FLR=%o\n", crsl[FAR0]>>16, crsl[FAR0]&0xFFFF, crsl[FLR0]);
+	  arfa(0, *(int *)(crs+L));
 	  continue;
 
 	case 001311:
 	  TRACE(T_FLOW, " ALFA 1\n");
-	  TRACE(T_INST, " before add, FAR1=%o/%o, FLR=%o\n", crsl[FAR1]>>16, crsl[FAR1]&0xFFFF, crsl[FLR1]);
-	  utempl = ((crsl[FAR1] & 0xFFFF) << 4) | ((crsl[FLR1] >> 12) & 0xF);
-	  utempl += *(int *)(crs+L);
-	  crsl[FAR1] = (crsl[FAR1] & 0xFFFF0000) | ((utempl >> 4) & 0xFFFF);
-	  crsl[FLR1] = (crsl[FLR1] & 0xFFFF0FFF) | ((utempl & 0xF) << 12);
-	  TRACE(T_INST, " after add, FAR1=%o/%o, FLR=%o\n", crsl[FAR1]>>16, crsl[FAR1]&0xFFFF, crsl[FLR1]);
+	  arfa(1, *(int *)(crs+L));
 	  continue;
 
 	case 001303:
@@ -3784,15 +3895,14 @@ stfa:
 	  }
 #else
 	  /* this should work, but emacs explore "dive" (P) breaks :( */
-	  utempa = crs[A];
+
 	  utempa1 = crs[KEYS];   /* UII does this because of fault */
 	  do {
-	    ldc(0);
+	    utempa = ldc(0,0);
 	    if (crs[KEYS] & 0100)
-	      crs[A] = zspace;
-	    stc(1);
+	      utempa = zspace;
+	    stc(1, utempa);
 	  } while (!(crs[KEYS] & 0100));
-	  crs[A] = utempa;
 	  crs[KEYS] = utempa1;
 #endif
 	  continue;
@@ -4810,128 +4920,128 @@ a1a:
 
 	case 0141500:
 	  TRACE(T_FLOW, " LCLT\n");
-	  LCLT;
+	  crs[A] = LCLT;
 	  continue;
 
 	case 0141501:
 	  TRACE(T_FLOW, " LCLE\n");
-	  LCLE;
+	  crs[A] = LCLE;
 	  continue;
 
 	case 0141503:
 	  TRACE(T_FLOW, " LCEQ\n");
-	  LCEQ;
+	  crs[A] = LCEQ;
 	  continue;
 
 	case 0141502:
 	  TRACE(T_FLOW, " LCNE\n");
-	  LCNE;
+	  crs[A] = LCNE;
 	  continue;
 
 	case 0141504:
 	  TRACE(T_FLOW, " LCGE\n");
-	  LCGE;
+	  crs[A] = LCGE;
 	  continue;
 
 	case 0141505:
 	  TRACE(T_FLOW, " LCGT\n");
-	  LCGT;
+	  crs[A] = LCGT;
 	  continue;
 
 	case 0140410:
 	  TRACE(T_FLOW, " LLT\n");
 	  SETCC_A;
-	  LCLT;
+	  crs[A] = LCLT;
 	  continue;
 
 	case 0140411:
 	  TRACE(T_FLOW, " LLE\n");
 	  SETCC_A;
-	  LCLE;
+	  crs[A] = LCLE;
 	  continue;
 
 	case 0140412:
 	  TRACE(T_FLOW, " LNE\n");
 	  SETCC_A;
-	  LCNE;
+	  crs[A] = LCNE;
 	  continue;
 
 	case 0140413:
 	  TRACE(T_FLOW, " LEQ\n");
 	  SETCC_A;
-	  LCEQ;
+	  crs[A] = LCEQ;
 	  continue;
 
 	case 0140414:
 	  TRACE(T_FLOW, " LGE\n");
 	  SETCC_A;
-	  LCGE;
+	  crs[A] = LCGE;
 	  continue;
 
 	case 0140415:
 	  TRACE(T_FLOW, " LGT\n");
 	  SETCC_A;
-	  LCGT;
+	  crs[A] = LCGT;
 	  continue;
 
 	case 0141511:
 	  TRACE(T_FLOW, " LLLE\n");
 	  SETCC_L;
-	  LCLE;
+	  crs[A] = LCLE;
 	  continue;
 
 	case 0141513:
 	  TRACE(T_FLOW, " LLEQ\n");
 	  SETCC_L;
-	  LCEQ;
+	  crs[A] = LCEQ;
 	  continue;
 
 	case 0141512:
 	  TRACE(T_FLOW, " LLNE\n");
 	  SETCC_L;
-	  LCNE;
+	  crs[A] = LCNE;
 	  continue;
 
 	case 0141515:
 	  TRACE(T_FLOW, " LLGT\n");
 	  SETCC_L;
-	  LCGT;
+	  crs[A] = LCGT;
 	  continue;
 
 	case 0141110:
 	  TRACE(T_FLOW, " LFLT\n");
 	  SETCC_F;
-	  LCLT;
+	  crs[A] = LCLT;
 	  continue;
 
 	case 0141111:
 	  TRACE(T_FLOW, " LFLE\n");
 	  SETCC_F;
-	  LCLE;
+	  crs[A] = LCLE;
 	  continue;
 
 	case 0141113:
 	  TRACE(T_FLOW, " LFEQ\n");
 	  SETCC_F;
-	  LCEQ;
+	  crs[A] = LCEQ;
 	  continue;
 
 	case 0141112:
 	  TRACE(T_FLOW, " LFNE\n");
 	  SETCC_F;
-	  LCNE;
+	  crs[A] = LCNE;
 	  continue;
 
 	case 0141114:
 	  TRACE(T_FLOW, " LFGE\n");
 	  SETCC_F;
-	  LCGE;
+	  crs[A] = LCGE;
 	  continue;
 
 	case 0141115:
 	  TRACE(T_FLOW, " LFGT\n");
 	  SETCC_F;
-	  LCGT;
+	  crs[A] = LCGT;
 	  continue;
 
 	case 0140550:
@@ -5157,41 +5267,24 @@ a1a:
 	  *(int *)(crs+E) = templ;
 	  continue;
 
-	/* queue instructions
-
-	   NOTE: ABQ is typically used in software to add an item to a
-	   hardware (physical) queue and RTQ is used by DMQ hardware
-	   to fetch items from the queue. */
+        /* queue instructions */
 
 	case 0141714:
 	  TRACE(T_FLOW, " RTQ\n");
 	  ea = apea(NULL);
-	  if (rtq(ea,&utempa,RP)) {
-	    crs[A] = utempa;
+	  if (rtq(ea, crs+A, RP))
 	    crs[KEYS] &= ~0100;
-	  } else {
-	    crs[A] = 0;
+	  else
 	    crs[KEYS] |= 0100;
-	  }
 	  continue;
 
 	case 0141715:
 	  TRACE(T_FLOW, " RBQ\n");
 	  ea = apea(NULL);
-	  qtop = get16(ea);
-	  qbot = get16(ea+1);
-	  if (qtop == qbot) {  /* queue empty */
-	    crs[A] = 0;
-	    crs[KEYS] |= 0100;
-	  } else {
-	    qseg = get16(ea+2) & 0x7FFF;
-	    qmask = get16(ea+3);
-	    qbot = (qbot & ~qmask) | ((qbot-1) & qmask);
-	    qea = MAKEVA(qseg,qbot);
-	    crs[A] = get16(qea);
-	    put16(qbot, ea+1);
+	  if (rbq(ea, crs+A, RP))
 	    crs[KEYS] &= ~0100;
-	  }
+	  else
+	    crs[KEYS] |= 0100;
 	  continue;
 
 	case 0141716:
@@ -5206,28 +5299,16 @@ a1a:
 	case 0141717:
 	  TRACE(T_FLOW, " ATQ\n");
 	  ea = apea(NULL);
-	  qtop = get16(ea);
-	  qbot = get16(ea+1);
-	  qseg = get16(ea+2) & 0x7FFF;
-	  qmask = get16(ea+3);
-	  qtemp = (qtop & ~qmask) | ((qtop-1) & qmask);
-	  if (qtemp == qbot) {  /* queue full */
-	    crs[KEYS] |= 0100;
-	  } else {
-	    qea = MAKEVA(qseg,qtemp);
-	    put16(crs[A],qea);
-	    put16(qtemp, ea);
+	  if (atq(ea, crs[A], RP))
 	    crs[KEYS] &= ~0100;
-	  }
+	  else
+	    crs[KEYS] |= 0100;
 	  continue;
 
 	case 0141757:
 	  TRACE(T_FLOW, " TSTQ\n");
 	  ea = apea(NULL);
-	  qtop = get16(ea);
-	  qbot = get16(ea+1);
-	  qmask = get16(ea+3);
-	  crs[A] = (qbot-qtop) & qmask;
+	  crs[A] = tstq(ea);
 	  SETCC_A;
 	  continue;
 
@@ -5635,15 +5716,903 @@ keys = 14200, modals=100177
 
     if ((crs[KEYS] & 0016000) != 0010000) goto nonimode;
 #ifndef OSX
-    RESTRICT();
+    fault(ILLINSTFAULT, RPL, 0);
 #endif
-    ea = ea32i(earp, inst, &immu32, &immu64);
+
+    /* branch and register generic instructions don't have ea, so they
+       are tested outside the main switch, before an ea is computed */
+
+    opcode = inst >> 10;
     dr = (inst >> 7) & 7;
 
-    switch (inst >> 10) {
+    if (opcode == 010) {               /* register branch */
+      brop = inst & 0177;
+      switch (brop) {
+      case 0100:
+	TRACE(T_INST, " BRLE\n");
+	SETCC_32(crsl[dr]);
+	BCLE;
+	break;
+
+      case 0101:
+	TRACE(T_INST, " BRGT\n");
+	SETCC_32(crsl[dr]);
+	BCGT;
+	break;
+
+      case 0102:
+	TRACE(T_INST, " BREQ\n");
+	SETCC_32(crsl[dr]);
+	BCEQ;
+	break;
+
+      case 0103:
+	TRACE(T_INST, " BRNE\n");
+	SETCC_32(crsl[dr]);
+	BCNE;
+	break;
+
+      case 0104:
+	TRACE(T_INST, " BRLT\n");
+	SETCC_32(crsl[dr]);
+	BCLT;
+	break;
+
+      case 0105:
+	TRACE(T_INST, " BRGE\n");
+	SETCC_32(crsl[dr]);
+	BCGE;
+	break;
+
+      case 0110:
+	TRACE(T_INST, " BHLE\n");
+	SETCC_16(crs[dr*2]);
+	BCLE;
+	break;
+
+      case 0111:
+	TRACE(T_INST, " BHGT\n");
+	SETCC_16(crs[dr*2]);
+	BCGT;
+	break;
+
+      case 0112:
+	TRACE(T_INST, " BHEQ\n");
+	SETCC_16(crs[dr*2]);
+	BCEQ;
+	break;
+
+      case 0113:
+	TRACE(T_INST, " BHNE\n");
+	SETCC_16(crs[dr*2]);
+	BCNE;
+	break;
+
+      case 0114:
+	TRACE(T_INST, " BHLT\n");
+	SETCC_16(crs[dr*2]);
+	BCLT;
+	break;
+
+      case 0115:
+	TRACE(T_INST, " BHGE\n");
+	SETCC_16(crs[dr*2]);
+	BCGE;
+	break;
+
+      case 0120:
+	TRACE(T_INST, " BFLE\n");
+	SETCC_32(crsl[FAC0+dr]);
+	BCLE;
+	break;
+
+      case 0121:
+	TRACE(T_INST, " BFGT\n");
+	SETCC_32(crsl[FAC0+dr]);
+	BCGT;
+	break;
+
+      case 0122:
+	TRACE(T_INST, " BFEQ\n");
+	SETCC_32(crsl[FAC0+dr]);
+	BCEQ;
+	break;
+
+      case 0123:
+	TRACE(T_INST, " BFNE\n");
+	SETCC_32(crsl[FAC0+dr]);
+	BCNE;
+	break;
+
+      case 0124:
+	TRACE(T_INST, " BFLT\n");
+	SETCC_32(crsl[FAC0+dr]);
+	BCLT;
+	break;
+
+      case 0125:
+	TRACE(T_INST, " BFGE\n");
+	SETCC_32(crsl[FAC0+dr]);
+	BCGE;
+	break;
+
+      case 0130:
+	TRACE(T_INST, " BRI1\n");
+	crsl[dr]++;
+	if (crsl[dr] != 0)
+	  RPL = iget16(RP);
+	else
+	  RPL++;
+	break;
+
+      case 0131:
+	TRACE(T_INST, " BRI2\n");
+	crsl[dr] += 2;
+	if (crsl[dr] != 0)
+	  RPL = iget16(RP);
+	else
+	  RPL++;
+	break;
+
+      case 0132:
+	TRACE(T_INST, " BRI4\n");
+	crsl[dr] += 4;
+	if (crsl[dr] != 0)
+	  RPL = iget16(RP);
+	else
+	  RPL++;
+	break;
+
+      case 0134:
+	TRACE(T_INST, " BRD1\n");
+	crsl[dr]--;
+	if (crsl[dr] != 0)
+	  RPL = iget16(RP);
+	else
+	  RPL++;
+	break;
+
+      case 0135:
+	TRACE(T_INST, " BRD2\n");
+	crsl[dr] -= 2;
+	if (crsl[dr] != 0)
+	  RPL = iget16(RP);
+	else
+	  RPL++;
+	break;
+
+      case 0136:
+	TRACE(T_INST, " BRD4\n");
+	crsl[dr] -= 4;
+	if (crsl[dr] != 0)
+	  RPL = iget16(RP);
+	else
+	  RPL++;
+	break;
+
+      case 0140:
+	TRACE(T_INST, " BHI1\n");
+	crs[dr*2]++;
+	if (crs[dr*2] != 0)
+	  RPL = iget16(RP);
+	else
+	  RPL++;
+	break;
+
+      case 0141:
+	TRACE(T_INST, " BHI2\n");
+	crs[dr*2] += 2;
+	if (crs[dr*2] != 0)
+	  RPL = iget16(RP);
+	else
+	  RPL++;
+	break;
+
+      case 0142:
+	TRACE(T_INST, " BHI4\n");
+	crs[dr*2] += 4;
+	if (crs[dr*2] != 0)
+	  RPL = iget16(RP);
+	else
+	  RPL++;
+	break;
+
+      case 0144:
+	TRACE(T_INST, " BHD1\n");
+	crs[dr*2]--;
+	if (crs[dr*2] != 0)
+	  RPL = iget16(RP);
+	else
+	  RPL++;
+	break;
+
+      case 0145:
+	TRACE(T_INST, " BHD2\n");
+	crs[dr*2] -= 2;
+	if (crs[dr*2] != 0)
+	  RPL = iget16(RP);
+	else
+	  RPL++;
+	break;
+
+      case 0146:
+	TRACE(T_INST, " BHD4\n");
+	crs[dr*2] -= 4;
+	if (crs[dr*2] != 0)
+	  RPL = iget16(RP);
+	else
+	  RPL++;
+	break;
+
+      default:
+	if (brop <= 037) {
+	  TRACE(T_INST, " BRBS\n");
+	  if (crsl[dr] & bitmask32[brop+1])
+	    RPL = iget16(RP);
+	  else
+	    RPL++;
+	} else if (brop <= 077) {
+	  TRACE(T_INST, " BRBR\n");
+	  if (crsl[dr] & bitmask32[brop-040+1])
+	    RPL++;
+	  else
+	    RPL = iget16(RP);
+	} else
+	  fault(UIIFAULT, RPL, RP);
+      }
+      continue;
+    }
+
+    if (opcode == 030) {       /* register generic */
+      switch (inst & 0177) {
+      case 0134:
+	TRACE(T_INST, " ABQ\n");
+	ea = apea(NULL);
+	if (abq(ea, crs[dr*2], RP))
+	  crs[KEYS] &= ~0100;
+	else
+	  crs[KEYS] |= 0100;
+	break;
+
+      case 0014:
+	TRACE(T_INST, " ADLR\n");
+	warn("IXX ADLR");
+	break;
+
+      case 0161:
+	TRACE(T_INST, " ARFA0\n");
+	arfa(0, crsl[dr]);
+	break;
+
+      case 0171:
+	TRACE(T_INST, " ARFA1\n");
+	arfa(1, crsl[dr]);
+	break;
+
+      case 0135:
+	TRACE(T_INST, " ATQ\n");
+	ea = apea(NULL);
+	if (atq(ea, crs[dr*2], RP))
+	  crs[KEYS] &= ~0100;
+	else
+	  crs[KEYS] |= 0100;
+	break;
+
+      case 0026:
+	TRACE(T_INST, " CGT\n");
+	warn("IXX CGT");
+	break;
+
+      case 0040:
+	TRACE(T_INST, " CHS\n");
+	crsl[dr] ^= 0x80000000;
+	break;
+
+      case 045:
+	TRACE(T_INST, " CMH\n");
+	crs[dr*2] = ~crs[dr*2];
+	break;
+
+      case 044:
+	TRACE(T_INST, " CMR\n");
+	crsl[dr] = ~crsl[dr];
+	break;
+
+      case 0056:
+	TRACE(T_INST, " CR\n");
+	crsl[dr] = 0;
+	break;
+
+      case 0062:
+	TRACE(T_INST, " CRBL\n");
+	crsl[dr] &= 0x00FFFFFF;
+	break;
+
+      case 0063:
+	TRACE(T_INST, " CRBR\n");
+	crsl[dr] &= 0xFF00FFFF;
+	break;
+
+      case 0054:
+	TRACE(T_INST, " CRHL\n");
+	crsl[dr] &= 0x0000FFFF;
+	break;
+
+      case 0055:
+	TRACE(T_INST, " CRHR\n");
+	crsl[dr] &= 0xFFFF0000;
+	break;
+
+      case 0041:
+	TRACE(T_INST, " CSR\n");
+	crs[KEYS] = (crs[KEYS] & 0x7FFF) | (crs[dr*2] & 0x8000);
+	crsl[dr] &= 0x7FFFFFFF;
+	break;
+
+      case 0106:
+	TRACE(T_INST, " DBLE\n");
+	crsl[FAC0+dr+1] &= 0xFFFF0000;
+	break;
+
+      case 0160:
+	TRACE(T_INST, " DCP\n");
+	utempl = ((crsl[dr] & 0x0FFFFFFF)<<1) | ((crsl[dr]>>12) & 1);
+	utempl -= utempl;
+	crsl[dr] = (crsl[dr] & 0xE0000000) | ((utempl & 1)<<12) | ((utempl>>1) & 0x0FFFFFFF);
+	break;
+
+      case 0144:
+	TRACE(T_INST, " DFCM\n");
+	warn("IXX DFCM");
+	break;
+
+      case 0130:
+	TRACE(T_INST, " DH1\n");
+	/* IXX: C, L, etc. */
+	crs[dr*2]--;
+	break;
+
+      case 0131:
+	TRACE(T_INST, " DH2\n");
+	/* IXX: C, L, etc. */
+	crs[dr*2] -= 2;
+	break;
+
+      case 0124:
+	TRACE(T_INST, " DR1\n");
+	/* IXX: C, L, etc. */
+	crsl[dr]--;
+	break;
+
+      case 0125:
+	TRACE(T_INST, " DR2\n");
+	/* IXX: C, L, etc. */
+	crsl[dr] -= 2;
+	break;
+
+      case 0100:
+	TRACE(T_INST, " FCM\n");
+	warn("IXX FCM");
+	break;
+
+      case 0105:
+	TRACE(T_INST, " FLT0\n");
+	warn("IXX FLT0");
+	break;
+
+      case 0115:
+	TRACE(T_INST, " FLT1\n");
+	warn("IXX FLT1");
+	break;
+
+      case 0102:
+	TRACE(T_INST, " FLTH0\n");
+	warn("IXX FLTH0");
+	break;
+
+      case 0112:
+	TRACE(T_INST, " FLTH1\n");
+	warn("IXX FLTH1");
+	break;
+
+      case 0107:
+	TRACE(T_INST, " FRN\n");
+	warn("IXX FRN");
+	break;
+
+      case 0146:
+	TRACE(T_INST, " FRNM\n");
+	warn("IXX FRNM");
+	break;
+
+      case 0145:
+	TRACE(T_INST, " FRNP\n");
+	warn("IXX FRNP");
+	break;
+
+      case 0147:
+	TRACE(T_INST, " FRNZ\n");
+	warn("IXX FRNZ");
+	break;
+
+      case 0065:
+	TRACE(T_INST, " ICBL\n");
+	crs[dr*2] = crs[dr*2]>>8;
+	break;
+
+      case 0066:
+	TRACE(T_INST, " ICBR\n");
+	crs[dr*2] = crs[dr*2]<<8;
+	break;
+
+      case 0060:
+	TRACE(T_INST, " ICHL\n");
+	crsl[dr] = crsl[dr]>>16;
+	break;
+
+      case 0061:
+	TRACE(T_INST, " ICHR\n");
+	crsl[dr] = crsl[dr]<<16;
+	break;
+
+      case 0167:
+	TRACE(T_INST, " ICP\n");
+	warn("IXX ICP");
+	break;
+
+      case 0126:
+	TRACE(T_INST, " IH1\n");
+	/* IXX: C, L, etc. */
+	crs[dr*2]++;
+	break;
+
+      case 0127:
+	TRACE(T_INST, " IH2\n");
+	crs[dr*2] += 2;
+	break;
+
+      case 0070:
+	TRACE(T_INST, " INK\n");
+	crs[dr*2] = crs[KEYS];    /* IXX: says to read S register? */
+	break;
+
+      case 0103:
+	TRACE(T_INST, " INT0\n");
+	warn("IXX INT0");
+	break;
+
+      case 0113:
+	TRACE(T_INST, " INT1\n");
+	warn("IXX INT1");
+	break;
+
+      case 0101:
+	TRACE(T_INST, " INTH0\n");
+	warn("IXX INTH0");
+	break;
+
+      case 0111:
+	TRACE(T_INST, " INTH1\n");
+	warn("IXX INTH1");
+	break;
+
+      case 0122:
+	TRACE(T_INST, " IR1\n");
+	/* IXX: C, L, etc. */
+	crs[dr]++;
+	break;
+
+      case 0123:
+	TRACE(T_INST, " IR2\n");
+	/* IXX: C, L, etc. */
+	crs[dr] += 2;
+	break;
+
+      case 0064:
+	TRACE(T_INST, " IRB\n");
+	crs[dr*2] = (crs[dr*2]>>8) | (crs[dr*2]<<8);
+	break;
+
+      case 0057:
+	TRACE(T_INST, " IRH\n");
+	crsl[dr] = (crsl[dr]>>16) | (crsl[dr]<<16);
+	break;
+
+      case 0153:
+	TRACE(T_INST, " LCEQ\n");
+	crs[dr*2] = LCEQ;
+	break;
+
+      case 0154:
+	TRACE(T_INST, " LCGE\n");
+	crs[dr*2] = LCGE;
+	break;
+
+      case 0155:
+	TRACE(T_INST, " LCGT\n");
+	crs[dr*2] = LCGT;
+	break;
+
+      case 0151:
+	TRACE(T_INST, " LCLE\n");
+	crs[dr*2] = LCLE;
+	break;
+
+      case 0150:
+	TRACE(T_INST, " LCLT\n");
+	crs[dr*2] = LCLT;
+	break;
+
+      case 0152:
+	TRACE(T_INST, " LCNE\n");
+	crs[dr*2] = LCNE;
+	break;
+
+      case 0162:
+	TRACE(T_INST, " LDC 0\n");
+	crs[dr*2] = ldc(0, crs[dr*2]);
+	break;
+
+      case 0172:
+	TRACE(T_INST, " LDC 1\n");
+	crs[dr*2] = ldc(1, crs[dr*2]);
+	break;
+
+      case 0003:
+	TRACE(T_INST, " LEQ\n");
+	SETCC_32(crs[dr]);
+	crs[dr*2] = LCEQ;
+	break;
+
+      case 0016:
+	TRACE(T_INST, " LF\n");
+	crs[dr*2] = 0;
+	break;
+
+      case 0023:
+	TRACE(T_INST, " LFEQ0\n");
+	SETCC_32(crsl[FAC0]);
+	crs[dr*2] = LCEQ;
+	break;
+
+      case 0033:
+	TRACE(T_INST, " LFEQ1\n");
+	SETCC_32(crsl[FAC1]);
+	crs[dr*2] = LCEQ;
+	break;
+
+      case 0024:
+	TRACE(T_INST, " LFGE0\n");
+	SETCC_32(crsl[FAC0]);
+	crs[dr*2] = LCGE;
+	break;
+
+      case 0034:
+	TRACE(T_INST, " LFGE1\n");
+	SETCC_32(crsl[FAC1]);
+	crs[dr*2] = LCGE;
+	break;
+
+      case 0025:
+	TRACE(T_INST, " LFGT0\n");
+	SETCC_32(crsl[FAC0]);
+	crs[dr*2] = LCGT;
+	break;
+
+      case 0035:
+	TRACE(T_INST, " LFGT1\n");
+	SETCC_32(crsl[FAC1]);
+	crs[dr*2] = LCGT;
+	break;
+
+      case 0021:
+	TRACE(T_INST, " LFLE0\n");
+	SETCC_32(crsl[FAC0]);
+	crs[dr*2] = LCLE;
+	break;
+
+      case 0031:
+	TRACE(T_INST, " LFLE1\n");
+	SETCC_32(crsl[FAC1]);
+	crs[dr*2] = LCLE;
+	break;
+
+      case 0020:
+	TRACE(T_INST, " LFLT0\n");
+	SETCC_32(crsl[FAC0]);
+	crs[dr*2] = LCLT;
+	break;
+
+      case 0030:
+	TRACE(T_INST, " LFLT1\n");
+	SETCC_32(crsl[FAC1]);
+	crs[dr*2] = LCLT;
+	break;
+
+      case 0022:
+	TRACE(T_INST, " LFNE0\n");
+	SETCC_32(crsl[FAC0]);
+	crs[dr*2] = LCNE;
+	break;
+
+      case 0032:
+	TRACE(T_INST, " LFNE1\n");
+	SETCC_32(crsl[FAC1]);
+	crs[dr*2] = LCNE;
+	break;
+
+      case 0004:
+	TRACE(T_INST, " LGE/LHGE\n");
+	SETCC_32(crsl[dr]);
+	crs[dr*2] = LCEQ;
+	break;
+
+      case 0005:
+	TRACE(T_INST, " LGT\n");
+	SETCC_32(crsl[dr]);
+	crs[dr*2] = LCGT;
+	break;
+
+      case 0013:
+	TRACE(T_INST, " LHEQ\n");
+	SETCC_16(crs[dr*2]);
+	crs[dr*2] = LCEQ;
+	break;
+
+      case 0015:
+	TRACE(T_INST, " LHGT\n");
+	SETCC_16(crs[dr*2]);
+	crs[dr*2] = LCGT;
+	break;
+
+      case 0011:
+	TRACE(T_INST, " LHLE\n");
+	SETCC_16(crs[dr*2]);
+	crs[dr*2] = LCLE;
+	break;
+
+      case 0000:
+	TRACE(T_INST, " LLT/LHLT\n");
+	SETCC_32(crsl[dr]);
+	crs[dr*2] = LCLT;
+	break;
+
+      case 0012:
+	TRACE(T_INST, " LHNE\n");
+	SETCC_16(crs[dr*2]);
+	crs[dr*2] = LCNE;
+	break;
+
+      case 0001:
+	TRACE(T_INST, " LLE\n");
+	SETCC_32(crsl[dr]);
+	crs[dr*2] = LCLE;
+	break;
+
+      case 0002:
+	TRACE(T_INST, " LNE\n");
+	SETCC_32(crsl[dr]);
+	crs[dr*2] = LCNE;
+	break;
+
+      case 0017:
+	TRACE(T_INST, " LT\n");
+	crs[dr*2] = 1;
+	break;
+
+      case 0071:
+	TRACE(T_INST, " OTK\n");
+	newkeys(crs[dr*2] & 0177770);
+	inhcount = 1;
+	break;
+
+      case 0052:
+	TRACE(T_INST, " PID\n");
+	*(long long *)(crsl+dr) = *(int *)(crsl+dr);
+	break;
+
+      case 0053:
+	TRACE(T_INST, " PIDH\n");
+	*(int *)(crsl+dr) = *(short *)(crsl+dr);
+	break;
+
+      case 0050:
+	TRACE(T_INST, " PIM\n");
+	warn("IXX PIM");
+	break;
+
+      case 0051:
+	TRACE(T_INST, " PIMH\n");
+	warn("IXX PIML");
+	break;
+
+      case 0133:
+	TRACE(T_INST, " RBQ\n");
+	ea = apea(NULL);
+	if (rbq(ea, crs+dr*2, RP))
+	  crs[KEYS] &= ~0100;
+	else
+	  crs[KEYS] |= 0100;
+	break;
+
+      case 0132:
+	TRACE(T_INST, " RTQ\n");
+	ea = apea(NULL);
+	if (rtq(ea,crs+dr*2,RP))
+	  crs[KEYS] &= ~0100;
+	else
+	  crs[KEYS] |= 0100;
+	break;
+
+      case 0076:
+	TRACE(T_INST, " SHL1\n");
+	if (crsl[dr] & 0x80000000)
+	  SETCL;
+	else
+	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	crs[dr*2] = crs[dr*2] << 1;
+	break;
+
+      case 0077:
+	TRACE(T_INST, " SHL2\n");
+	if (crsl[dr] & 0x40000000)
+	  SETCL;
+	else
+	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	crs[dr*2] = crs[dr*2] << 2;
+	break;
+
+      case 0120:
+	TRACE(T_INST, " SHR1\n");
+	if (crsl[dr] & 0x00010000)
+	  SETCL;
+	else
+	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	crs[dr*2] = crs[dr*2] >> 1;
+	break;
+
+      case 0121:
+	TRACE(T_INST, " SHR2\n");
+	if (crsl[dr] & 0x00020000)
+	  SETCL;
+	else
+	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	crs[dr*2] = crs[dr*2] >> 2;
+	break;
+
+      case 0072:
+	TRACE(T_INST, " SL1\n");
+	if (crsl[dr] & 0x80000000)
+	  SETCL;
+	else
+	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	crsl[dr] = crsl[dr] << 1;
+	break;
+
+      case 0073:
+	TRACE(T_INST, " SL2\n");
+	if (crsl[dr] & 0x40000000)
+	  SETCL;
+	else
+	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	crsl[dr] = crsl[dr] << 2;
+	break;
+
+      case 0074:
+	TRACE(T_INST, " SR1\n");
+	if (crsl[dr] & 0x00010000)
+	  SETCL;
+	else
+	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	crsl[dr] = crsl[dr] >> 1;
+	break;
+
+      case 0075:
+	TRACE(T_INST, " SR2\n");
+	if (crsl[dr] & 0x00020000)
+	  SETCL;
+	else
+	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	crsl[dr] = crsl[dr] >> 2;
+	break;
+
+      case 0042:
+	TRACE(T_INST, " SSM\n");
+	crsl[dr] |= 0x80000000;
+	break;
+
+      case 0043:
+	TRACE(T_INST, " SSP\n");
+	crsl[dr] &= 0x7FFFFFFF;
+	break;
+
+      case 0166:
+	TRACE(T_INST, " STC 0\n");
+	stc(0, crs[dr*2]);
+	break;
+
+      case 0176:
+	TRACE(T_INST, " STC 1\n");
+	stc(1, crs[dr*2]);
+	break;
+
+      case 0137:
+	TRACE(T_INST, " STCD\n");
+	ea = apea(NULL);
+	if (get32(ea) == crsl[dr+1]) {
+	  put32(crsl[dr], ea);
+	  crs[KEYS] |= 0100;       /* set EQ */
+	} else 
+	  crs[KEYS] &= ~0100;      /* reset EQ */
+	break;
+
+      case 0136:
+	TRACE(T_INST, " STCH\n");
+	ea = apea(NULL);
+	if (get16(ea) == (crsl[dr] & 0xFFFF)) {
+	  put16(crs[dr*2], ea);
+	  crs[KEYS] |= 0100;       /* set EQ */
+	} else 
+	  crs[KEYS] &= ~0100;      /* reset EQ */
+	break;
+
+      case 0027:
+	TRACE(T_INST, " STEX\n");
+	warn("IXX STEX");
+	break;
+
+      case 0046:
+	TRACE(T_INST, " TC\n");
+	warn("IXX TC");
+	break;
+
+      case 0047:
+	TRACE(T_INST, " TCH\n");
+	warn("IXX TCH");
+	break;
+
+      case 0163:
+	TRACE(T_INST, " TFLR0\n");
+	crsl[dr] = GETFLR(0);
+	break;
+
+      case 0173:
+	TRACE(T_INST, " TFLR 1\n");
+	crsl[dr] = GETFLR(1);
+	break;
+
+      case 0165:
+	TRACE(T_INST, " TRFL 0\n");
+	PUTFLR(0,crsl[dr]);
+	break;
+
+      case 0175:
+	TRACE(T_INST, " TRFL 1\n");
+	PUTFLR(0,crsl[dr]);
+	break;
+
+
+      case 0104:
+	TRACE(T_INST, " TSTQ\n");
+	ea = apea(NULL);
+	crs[dr*2] = tstq(ea);
+	SETCC_16(crs[dr*2]);
+	break;
+
+      default:
+	warn("IXX 030");
+	fault(ILLINSTFAULT, RPL, 0);
+      }
+      continue;
+    }
+
+    ea = ea32i(earp, inst, &immu32, &immu64);
+
+    switch (opcode) {
 
     case 000:
-      fatal("I-mode generic class 0?");
+      warn("I-mode generic class 0?");
+      fault(ILLINSTFAULT, RPL, 0);
 
     case 001:
       TRACE(T_INST, " L\n");
@@ -5654,6 +6623,7 @@ keys = 14200, modals=100177
       continue;
 
     case 002:
+      /* IXX: use common code block */
       TRACE(T_INST, " A\n");
       if (*(int *)&ea < 0)
 	utempl2 = immu32;
@@ -5694,21 +6664,20 @@ keys = 14200, modals=100177
 
     case 005:
       TRACE(T_INST, " SHL\n");
-      fatal("SHL not implemented");
+      warn("IXX: SHL not implemented");
       continue;
 
     case 006:  /* Special MR FP format */
       /* DFC, DFL, FC, FL */
-      fatal("I opcode 006");
+      warn("IXX opcode 006");
       continue;
 
     case 007:
-      fatal("I-mode opcode 007?");
+      warn("I-mode opcode 007?");
+      fault(ILLINSTFAULT, RPL, 0);
 
-    case 010:
-      /* register generic branch */
-      fatal("I 010");
-      continue;
+    case 010:                            /* register generic branch */
+      fatal("I-mode RGBR?");
 
     case 011:
       TRACE(T_INST, " LH\n");
@@ -5717,12 +6686,11 @@ keys = 14200, modals=100177
 	crs[dr*2] = immu32 >> 16;
       } else
 	crs[dr*2] = get16(ea);
-      TRACE(T_INST, " after load, crsl[%d]=%x\n", dr, crsl[dr]);
       continue;
 
     case 012:
       TRACE(T_INST, " AH\n");
-      fatal("I 012");
+      warn("IXX 012");
       continue;
 
     case 013:
@@ -5743,30 +6711,35 @@ keys = 14200, modals=100177
 
     case 015:
       TRACE(T_INST, " SHA\n");
-      fatal("I 015");
+      warn("IXX 015");
       continue;
 
     case 016:  /* Special MR FP format */
-      /* DFA, DFST, FA, FST, PCL */
-      fatal("I 016");
+      /* DFA, DFST, FA, FST */
+      warn("IXX 016");
       continue;
 
     case 017:
-      fatal("I-mode opcode 017?");
+      warn("I-mode opcode 017?");
+      fault(ILLINSTFAULT, RPL, 0);
 
     case 020:
-      fatal("I-mode generic class 1?");
+      warn("I-mode generic class 1?");
+      fault(ILLINSTFAULT, RPL, 0);
 
     case 021:
       TRACE(T_INST, " ST\n");
-      if (*(int *)&ea < 0)
-	fatal("ST imm");
-      put32(crsl[dr],ea);
+      if (*(int *)&ea >= 0)
+	put32(crsl[dr],ea);
+      else {
+	warn("I-mode immediate ST?");
+	fault(ILLINSTFAULT, RPL, 0);
+      }
       continue;
 
     case 022:
       TRACE(T_INST, " S\n");
-      fatal("I 022");
+      warn("IXX 022");
       continue;
 
     case 023:
@@ -5779,31 +6752,36 @@ keys = 14200, modals=100177
 
     case 024:
       TRACE(T_INST, " ROT\n");
-      fatal("I 024");
+      warn("IXX 024");
       continue;
 
     case 025:
-      fatal("I-mode opcode 025?");
+      warn("I-mode opcode 025?");
+      fault(ILLINSTFAULT, RPL, 0);
 
     case 026:  /* Special MR FP format */
       /* DFM, DFS, FM, FS */
-      fatal("I 026");
+      warn("IXX 026");
       continue;
 
     case 027:
-      fatal("I-mode opcode 027?");
+      warn("I-mode opcode 027?");
+      fault(ILLINSTFAULT, RPL, 0);
 
     case 030:  /* register generic */
-      switch (inst) {
-      }
-      continue;
+      fatal("I-mode RGEN?");
 
     case 031:
-      fatal("I-mode opcode 031?");
+      TRACE(T_INST, " STH\n");
+      if (*(int *)&ea < 0)
+	crs[((inst >> 2) & 7)*2] = crs[dr*2];
+      else
+	put16(crs[dr*2], ea);
+      continue;
 
     case 032:
       TRACE(T_INST, " SH\n");
-      fatal("I 032");
+      warn("IXX 032");
       continue;
 
     case 033:
@@ -5829,14 +6807,16 @@ keys = 14200, modals=100177
 
     case 036:  /* Special MR FP format */
       /* DFD, FD, QFAD, QFLD, QFSB, QFST */
-      fatal("I 036");
+      warn("IXX 036");
       continue;
 
     case 037:
-      fatal("I-mode opcode 037?");
+      warn("I-mode opcode 037?");
+      fault(ILLINSTFAULT, RPL, 0);
 
     case 040:  /* generic class 2, overlays skip group */
-      fatal("I-mode generic class 2?");
+      warn("I-mode generic class 2?");
+      fault(ILLINSTFAULT, RPL, 0);
 
     case 041:
       TRACE(T_INST, " I\n");
@@ -5852,7 +6832,7 @@ keys = 14200, modals=100177
 
     case 042:
       TRACE(T_INST, " M\n");
-      fatal("I 042");
+      warn("IXX 042");
       continue;
 
     case 043:
@@ -5865,47 +6845,101 @@ keys = 14200, modals=100177
 
     case 044:
       TRACE(T_INST, " LDAR\n");
-      utempa = ea;                 /* word number portion only */
-      if (utempa & 040000) {       /* absolute RF addressing */
-	RESTRICT();
-	utempa &= 0377;
-	if (utempa == 020)
-	  crsl[dr] = 1;
-	else if (utempa == 024)
-	  crsl[dr] = -1;
-	else
-	  crsl[dr] = regs.u32[utempa];
-      } else {
-	utempa &= 037;
-	if (utempa > 017) RESTRICT();
-	crsl[dr] = *(((unsigned int *)crs)+utempa);
-      }
+      crsl[dr] = ldar(ea);
       continue;
 
     case 045:
       TRACE(T_INST, " CCP/LCP\n");
-      fatal("I 045");
+      warn("I 045");
       continue;
 
-    case 046:  /* I-mode special MR, GR format */
-      /* EALB, IM, QFC, QFDV, QFMP, TM */
-      fatal("I 046");
+    case 046:  /* I special MR, GR format: IM, PCL, EALB, ZM, TM, QFMP, QFDV, QFC */
+      switch (dr) {
+      case 0:
+	TRACE(T_INST, " IM\n");
+	utempl = get32(ea) + 1;
+	SETCC_32(utempl);
+	put32(utempl, ea);
+	break;
+
+
+      case 1:
+	TRACE(T_FLOW|T_PCL, " PCL %s\n", searchloadmap(ea, 'e'));
+
+	/* NOTE: see duplicated code under V-mode PCL! */
+
+	//TRACE(T_FLOW|T_PCL, "#%d %o/%o: PCL %o/%o\n", instcount, RPH, RPL-2, ea>>16, ea&0xFFFF);
+	if (numtraceprocs > 0 && TRACEUSER)
+	  for (i=0; i<numtraceprocs; i++)
+	    if (traceprocs[i].ecb == (ea & 0xFFFFFFF) && traceprocs[i].sb == -1) {
+	      traceflags = ~TB_MAP;
+	      savetraceflags = traceflags;
+	      traceprocs[i].sb = *(int *)(crs+SB);
+	      printf("Enabled trace for %s at sb '%o/%o\n", traceprocs[i].name, crs[SBH], crs[SBL]);
+	      break;
+	    }
+	pcl(ea);
+	break;
+
+      case 2:
+	TRACE(T_INST, " EALB\n");
+	*(ea_t *)(crs+LB) = ea;
+	break;
+
+      case 3:
+	TRACE(T_INST, " ZM\n");
+	put32(0, ea);
+	break;
+
+      case 4:
+	TRACE(T_INST, " TM\n");
+	utempl = get32(ea);
+	SETCC_32(utempl);
+	break;
+
+      case 5:
+	TRACE(T_INST, " QFMP\n");
+	warn("IXX QFMP");
+	break;
+
+      case 6:
+	TRACE(T_INST, " QFDV\n");
+	warn("IXX QFDV");
+	break;
+
+      case 7:
+	TRACE(T_INST, " QFC\n");
+	warn("IXX QFC");
+	break;
+
+      default:
+	fault(ILLINSTFAULT, RPL, 0);
+      }
       continue;
 
     case 047:
-      fatal("I-mode opcode 047?");
+      warn("I-mode opcode 047?");
+      fault(ILLINSTFAULT, RPL, 0);
 
     case 050:
-      fatal("I-mode opcode 050?");
+      warn("I-mode opcode 050?");
+      fault(ILLINSTFAULT, RPL, 0);
 
     case 051:
-      /* IH, STH */
-      fatal("I 051");
+      TRACE(T_INST, " IH\n");
+      utempa = crs[dr*2];
+      if (*(int *)&ea < 0) {
+	crs[dr*2] = immu32 >> 16;
+	crs[((inst >> 2) & 7)*2] = utempa;
+      } else {
+	crs[dr*2] = get16(ea);
+	put16(utempa, ea);
+      }
       continue;
 
     case 052:
       TRACE(T_INST, " MH\n");
-      fatal("I 052");
+      warn("I 052");
       continue;
 
     case 053:
@@ -5918,105 +6952,174 @@ keys = 14200, modals=100177
 
     case 054:
       TRACE(T_INST, " STAR\n");
-      utempa = ea;                 /* word number portion only */
-      if (utempa & 040000) {       /* absolute RF addressing */
-	RESTRICT();
-	regs.u32[utempa & 0377] = crsl[dr];
-      } else {
-	utempa &= 037;
-	if (utempa > 017) RESTRICT();
-	*(((unsigned int *)crs)+utempa) = crsl[dr];
-      }
+      star(crsl[dr], ea);
       continue;
 
     case 055:
       /* ACP, SCC */
-      fatal("I 055");
+      warn("I 055");
       continue;
 
-    case 056:  /* I-mode special MR, GR format */
-      /* EAXB, IMH, JMP, TMH */
-      fatal("I 056");
+    case 056:  /* I special MR, GR format: IMH, JMP, EAXB, ZMH, TMH */
+      switch (dr) {
+      case 0:
+	TRACE(T_INST, " IMH\n");
+	utempa = get16(ea) + 1;
+	SETCC_16(utempa);
+	put16(utempa, ea);
+	break;
+
+      case 1:
+	TRACE(T_INST, " JMP\n");
+	RP = ea;
+	break;
+
+      case 2:
+	TRACE(T_INST, " EAXB\n");
+	*(ea_t *)(crs+XB) = ea;
+	break;
+
+      case 3:
+	TRACE(T_INST, " ZMH\n");
+	put16(0, ea);
+	break;
+
+      case 4:
+	TRACE(T_INST, " TMH\n");
+	utempa = get16(ea);
+	SETCC_16(utempa);
+	break;
+
+      default:
+	fault(ILLINSTFAULT, RPL, 0);
+      }
       continue;
 
     case 057:
-      fatal("I-mode opcode 057?");
+      warn("I-mode opcode 057?");
+      fault(ILLINSTFAULT, RPL, 0);
 
     case 060:
-      fatal("I-mode generic class 3?");
+      warn("I-mode generic class 3?");
+      fault(ILLINSTFAULT, RPL, 0);
 
     case 061:
       TRACE(T_INST, " C\n");
-      fatal("I 061");
+      warn("I 061");
       continue;
 
     case 062:
       TRACE(T_INST, " D\n");
-      fatal("I 062");
+      warn("I 062");
       continue;
 
     case 063:
       TRACE(T_INST, " EAR\n");
-      if (*(int *)&ea < 0)
-	fatal("Immediate mode EAR?");
-      crsl[dr] = ea;
+      if (*(int *)&ea >= 0)
+	crsl[dr] = ea;
+      else {
+	warn("Immediate mode EAR?");
+	fault(ILLINSTFAULT, RPL, 0);
+      }
       continue;
 
     case 064:
-      fatal("I-mode opcode 064?");
+      warn("I-mode opcode 064?");
+      fault(ILLINSTFAULT, RPL, 0);
 
     case 065:
       TRACE(T_INST, " LIP\n");
-      crsl[dr] = get32(ea);
-      if (crsl[dr] & 0x80000000)
-	fault(POINTERFAULT, crsl[dr]>>16, ea);
+      utempl = get32(ea);
+      if (utempl & 0x80000000)
+	fault(POINTERFAULT, utempl>>16, ea);
+      crsl[dr] = utempl;
       continue;
 
-    case 066:  /* I-mode special MR */
-      /* DM, JSXB */
-      fatal("I 066");
+    case 066:  /* I-mode special MR: DM, JSXB */
+      switch (dr) {
+      case 0:
+	TRACE(T_INST, " DM\n");
+	utempl = get32(ea) - 1;
+	SETCC_32(utempl);
+	put32(utempl, ea);
+	break;
+
+      case 1:
+	TRACE(T_INST, " JSXB\n");
+	*(unsigned int *)(crs+XB) = RP;
+	RP = ea;
+	break;
+
+      default:
+	fault(ILLINSTFAULT, RPL, 0);
+      }
       continue;
 
     case 067:
-      fatal("I-mode opcode 067?");
+      warn("I-mode opcode 067?");
+      fault(ILLINSTFAULT, RPL, 0);
 
     case 070:
-      fatal("I-mode opcode 070?");
+      warn("I-mode opcode 070?");
+      fault(ILLINSTFAULT, RPL, 0);
 
     case 071:
       TRACE(T_INST, " CH\n");
-      fatal("I 071");
+      warn("I 071");
       continue;
 
     case 072:
       TRACE(T_INST, " DH\n");
-      fatal("I 072");
+      warn("I 072");
       continue;
 
     case 073:
       TRACE(T_INST, " JSR\n");
-      crs[dr*2] = RPH;
-      RPH = ea;
+      crs[dr*2] = RPL;
+      RP = ea;
       continue;
 
     case 074:
-      fatal("I-mode opcode 074?");
+      warn("I-mode opcode 074?");
+      fault(ILLINSTFAULT, RPL, 0);
 
     case 075:
       TRACE(T_INST, " AIP\n");
-      crsl[dr] += get32(ea);
-      if (crsl[dr] & 0x80000000)
-	fault(POINTERFAULT, crsl[dr]>>16, ea);
-      /* NOTE: ISG says C & L need to be set, ring needs to be weakened */
+      utempl = crsl[dr] + get32(ea);
+      if (utempl & 0x80000000)
+	fault(POINTERFAULT, utempl>>16, ea);
+      /* IXX: ISG says C & L are set, ring needs to be weakened */
+      crsl[dr] = utempl;
       continue;
 
-    case 076:
-      /* DMH, TCNP */
-      fatal("I 076");
+    case 076:  /* I-mode special MR: DMH, TCNP */
+      switch (dr) {
+      case 0:
+	TRACE(T_INST, " DMH\n");
+	utempa = get16(ea) - 1;
+	SETCC_16(utempa);
+	put16(utempa, ea);
+	break;
+
+      case 6:
+	TRACE(T_INST, " TCNP\n");
+	if (*(int *)&ea > 0)
+	  if (get32(ea) & 0x1FFFFFFF == 0)
+	    crs[KEYS] |= 0100;
+	  else
+	    crs[KEYS] &= ~0100;
+	else
+	  fault(UIIFAULT, RPL, RP);
+	break;
+
+      default:
+	fault(ILLINSTFAULT, RPL, 0);
+      }
       continue;
 
     case 077:
-      fatal("I-mode opcode 077");
+      warn("I-mode opcode 077");
+      fault(ILLINSTFAULT, RPL, 0);
     }
     fatal("I-mode fall-through?");
 
@@ -6445,6 +7548,9 @@ nonimode:
       continue;
 
     case 01002:
+
+      /* NOTE: see duplicated code under I-mode PCL! */
+
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	TRACE(T_FLOW|T_PCL, " PCL %s\n", searchloadmap(ea, 'e'));
 	//TRACE(T_FLOW|T_PCL, "#%d %o/%o: PCL %o/%o\n", instcount, RPH, RPL-2, ea>>16, ea&0xFFFF);
@@ -6859,34 +7965,12 @@ nonimode:
 
     case 0301:
       TRACE(T_FLOW, " STLR '%06o\n", ea & 0xFFFF);
-      utempa = ea;                 /* word number portion only */
-      if (utempa & 040000) {       /* absolute RF addressing */
-	RESTRICT();
-	regs.s32[utempa & 0377] = *(int *)(crs+L);
-      } else {
-	utempa &= 037;
-	if (utempa > 017) RESTRICT();
-	*(int *)(crsl+utempa) = *(int *)(crs+L);
-      }
+      star(*(int *)(crs+L), ea);
       continue;
 
     case 0501:
       TRACE(T_FLOW, " LDLR '%06o\n", ea & 0xFFFF);
-      utempa = ea;                 /* word number portion only */
-      if (utempa & 040000) {       /* absolute RF addressing */
-	RESTRICT();
-	utempa &= 0377;
-	if (utempa == 020)
-	  *(int *)(crs+L) = 1;
-	else if (utempa == 024)
-	  *(int *)(crs+L) = -1;
-	else
-	  *(int *)(crs+L) = regs.s32[utempa];
-      } else {
-	utempa &= 037;
-	if (utempa > 017) RESTRICT();
-	*(int *)(crs+L) = *(int *)(crsl+utempa);
-      }
+      *(int *)(crs+L) = ldar(ea);
       continue;
 
     case 01401:
