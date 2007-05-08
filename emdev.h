@@ -1034,7 +1034,7 @@ int devmt (int class, int func, int device) {
       while (1) {
 	dmxreg = dmxchan & 0x7FF;
 	if (dmxchan & 0x0800) {         /* DMC */
-	  dmcpair = get32r0(dmxreg);    /* fetch begin/end pair */
+	  dmcpair = get32io(dmxreg);    /* fetch begin/end pair */
 	  dmxaddr = dmcpair>>16;
 	  dmxnw = (dmcpair & 0xffff) - dmxaddr + 1;
 	  TRACE(T_INST|T_TIO,  " DMC channels: ['%o]='%o, ['%o]='%o, nwords=%d\n", dmxreg, dmxaddr, dmxreg+1, (dmcpair & 0xffff), dmxnw);
@@ -1056,20 +1056,20 @@ int devmt (int class, int func, int device) {
 	  if (dmxtotnw+dmxnw > MAXTAPEWORDS)
 	    fatal("Tape write is too big");
 	  for (i=0; i < dmxnw; i++) {
-	    *iobufp++ = get16r0(dmxaddr+i);
+	    *iobufp++ = get16io(dmxaddr+i);
 	  }
 	  dmxtotnw = dmxtotnw + dmxnw;
 	} else {
 	  if (dmxnw > dmxtotnw)
 	    dmxnw = dmxtotnw;
 	  for (i=0; i < dmxnw; i++) {
-	    put16r0(*iobufp++, dmxaddr+i);
+	    put16io(*iobufp++, dmxaddr+i);
 	  }
 	  dmxtotnw = dmxtotnw - dmxnw;
 	}
 	TRACE(T_TIO, " read/wrote %d words\n", dmxnw);
 	if (dmxchan & 0x0800) {         /* DMC */
-	  put16r0(dmxaddr+dmxnw, dmxreg);          /* update starting address */
+	  put16io(dmxaddr+dmxnw, dmxreg);          /* update starting address */
 	} else {
 	  regs.sym.regdmx[dmxreg] += dmxnw<<4;     /* increment # words */
 	  regs.sym.regdmx[dmxreg+1] += dmxnw;      /* increment address */
@@ -1510,7 +1510,8 @@ int devdisk (int class, int func, int device) {
   unsigned short order;
   unsigned short m,m1,m2;
   short head, track, rec, recsize, nwords;
-  unsigned short dmareg, dmaaddr;
+  unsigned short dmareg;
+  unsigned int dmaaddr;
   unsigned char *hashp;
 
 
@@ -1624,9 +1625,9 @@ int devdisk (int class, int func, int device) {
   case 4:   /* poll (run channel program) */
 
     while (dc[device].state == S_RUN) {
-      m = get16r0(dc[device].oar);
-      m1 = get16r0(dc[device].oar+1);
-      TRACE(T_INST|T_DIO, "\nDIOC %o: %o %o %o\n", dc[device].oar, m, m1, get16r0(dc[device].oar+2));
+      m = get16io(dc[device].oar);
+      m1 = get16io(dc[device].oar+1);
+      TRACE(T_INST|T_DIO, "\nDIOC %o: %o %o %o\n", dc[device].oar, m, m1, get16io(dc[device].oar+2));
       dc[device].oar += 2;
       order = m>>12;
 
@@ -1650,7 +1651,7 @@ int devdisk (int class, int func, int device) {
       case 5: /* SREAD = Read */
       case 6: /* SWRITE = Write */
 	dc[device].status &= ~076000;             /* clear bits 2-6 */
-	m2 = get16r0(dc[device].oar++);
+	m2 = get16io(dc[device].oar++);
 	recsize = m & 017;
 	track = m1 & 01777;
 	rec = m2 >> 8;   /* # records for format, rec # for R/W */
@@ -1727,24 +1728,11 @@ int devdisk (int class, int func, int device) {
 	  //fprintf(stderr," Before disk op %d, hashp=%p\n", order, hashp);
 #endif
 
-#if 0
-	  if (order == 6) {
-	    dmareg = dc[device].dmachan << 1;
-	    dmanw = regs.sym.regdmx[dmareg];
-	    dmanw = -(dmanw>>4);
-	    dmaaddr = regs.sym.regdmx[dmareg+1];
-	    phyra2 = get16r0(dmaaddr+0);
-	    phyra2 = phyra2<<16 | get16r0(dmaaddr+1);
-	    if (phyra2 != phyra)
-	      fprintf(stderr,"devdisk: phyra=%d, phyra2=%d; CRA mismatch (dmanw = %d)!\n", phyra, phyra2, dmanw);
-	  }
-#endif
-	    
 	  while (dc[device].dmanch >= 0) {
 	    dmareg = dc[device].dmachan << 1;
 	    dmanw = regs.sym.regdmx[dmareg];
 	    dmanw = -(dmanw>>4);
-	    dmaaddr = regs.sym.regdmx[dmareg+1];
+	    dmaaddr = ((regs.sym.regdmx[dmareg] & 3)<<16) | regs.sym.regdmx[dmareg+1];
 	    TRACE(T_INST|T_DIO,  " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dc[device].dmanch, dc[device].dmachan, regs.sym.regdmx[dmareg], dc[device].dmachan+1, dmaaddr, dmanw);
 	    
 	    if (order == 5) {
@@ -1752,7 +1740,7 @@ int devdisk (int class, int func, int device) {
 		if ((dmaaddr & 01777) || dmanw > 1024)
 		  iobufp = iobuf;
 		else
-		  iobufp = mem+mapva(dmaaddr, WACC, &access, 0);
+		  iobufp = mem+mapio(dmaaddr);
 	      else
 		iobufp = mem+dmaaddr;
 	      if (hashp != NULL) {
@@ -1765,12 +1753,12 @@ int devdisk (int class, int func, int device) {
 	      }
 	      if (iobufp == iobuf)
 		for (i=0; i<dmanw; i++)
-		  put16r0(iobuf[i], dmaaddr+i);
+		  put16io(iobuf[i], dmaaddr+i);
 	    } else {
 	      if (crs[MODALS] & 020) {
 		iobufp = iobuf;
 		for (i=0; i<dmanw; i++)
-		  iobuf[i] = get16r0(dmaaddr+i);
+		  iobuf[i] = get16io(dmaaddr+i);
 	      } else
 		iobufp = mem+dmaaddr;
 	      if (hashp != NULL) {
@@ -1863,12 +1851,12 @@ int devdisk (int class, int func, int device) {
 
       case 9: /* DSTAT = Store status to memory */
 	TRACE(T_INST|T_DIO,  " store status='%o to '%o\n", dc[device].status, m1);
-	put16r0(dc[device].status,m1);
+	put16io(dc[device].status,m1);
 	break;
 
       case 11: /* DOAR = Store OAR to memory (2 words) */
 	TRACE(T_INST|T_DIO,  " store OAR='%o to '%o\n", dc[device].oar, m1);
-	put16r0(dc[device].oar,m1);
+	put16io(dc[device].oar,m1);
 	break;
 
       case 13: /* SDMA = select DMA channel(s) to use */
@@ -2242,7 +2230,7 @@ int devamlc (int class, int func, int device) {
 	fatal("Can't run AMLC in DMA mode!");
 #if 0
 	    dmcea = dc[device].dmcchan;
-	  dmcpair = get32r0(dmcea);
+	  dmcpair = get32io(dmcea);
 	  dmcbufbegea = dmcpair>>16;
 	  dmcbufendea = dmcpair & 0xffff;
 	  dmcnw = dmcbufendea - dmcbufbegea + 1;
@@ -2396,16 +2384,16 @@ OK, ");
 	      }
 	    } else {         /* no line connected, just drain queue */
 	      //printf("Draining output queue on line %d\n", lx);
-	      put16r0(get16r0(qcbea), qcbea+1);
+	      put16io(get16io(qcbea), qcbea+1);
 	    }
 	  } else {  /* DMT */
-	    utempa = get16r0(dc[device].baseaddr + lx);
+	    utempa = get16io(dc[device].baseaddr + lx);
 	    if (utempa != 0) {
 	      if ((utempa & 0x8000) && (dc[device].dss & bitmask16[lx+1])) {
 		//printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
 		buf[n++] = utempa & 0x7F;
 	      }
-	      put16r0(0, dc[device].baseaddr + lx);
+	      put16io(0, dc[device].baseaddr + lx);
 	    }
 	    /* would need to setup DMT xmit poll here, and/or look for
 	       char time interrupt.  In practice, DMT isn't used when
@@ -2461,7 +2449,7 @@ OK, ");
 	dmcea = dc[device].dmcchan ^ 2;
       else
 	dmcea = dc[device].dmcchan;
-      dmcpair = get32r0(dmcea);
+      dmcpair = get32io(dmcea);
       dmcbufbegea = dmcpair>>16;
       dmcbufendea = dmcpair & 0xffff;
       dmcnw = dmcbufendea - dmcbufbegea + 1;
@@ -2522,7 +2510,7 @@ OK, ");
 		else {
     storech:
 		  utempa = lx<<12 | 0x0200 | ch;
-		  put16r0(utempa, dmcbufbegea);
+		  put16io(utempa, dmcbufbegea);
 		  //printf("******* stored character %o (%c) at %o\n", utempa, utempa&0x7f, dmcbufbegea);
 		  dmcbufbegea = INCVA(dmcbufbegea, 1);
 		  dmcnw--;
@@ -2563,7 +2551,7 @@ OK, ");
       dc[device].recvlx = lx;
       if (dmcbufbegea-1 > dmcbufendea)
 	fatal("AMLC tumble table overflowed?");
-      put16r0(dmcbufbegea, dmcea);
+      put16io(dmcbufbegea, dmcea);
       if (dmcbufbegea > dmcbufendea) {          /* end of range has occurred */
 	dc[device].bufnum = 1-dc[device].bufnum;
 	dc[device].eor = 1;
@@ -3138,7 +3126,7 @@ int devpnc (int class, int func, int device) {
       else
 	recv.dmanw = -((recv.dmanw>>4) ^ 0xF000);
       recv.dmaaddr = regs.sym.regdmx[recv.dmareg+1];
-      recv.iobufp = mem + mapva(recv.dmaaddr, WACC, &access, 0);
+      recv.iobufp = mem + mapio(recv.dmaaddr);
       recv.state = XR_READY;
       recv.offset = -1;         /* initialize for new packet */
       TRACE(T_INST|T_RIO, " recv: dmachan=%o, dmareg=%o, dmaaddr=%o, dmanw=%d\n", recv.dmachan, recv.dmareg, recv.dmaaddr, recv.dmanw);

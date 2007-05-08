@@ -18,9 +18,9 @@
 
 #define FLTH 20
 #define FLTL 21
-#define FEXP 22
-#define FLTD 23
-#define VSC 22
+#define FLTD 22
+#define FEXP 23
+#define VSC 23
 
 #define PB 24
 #define PBH 24

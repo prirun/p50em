@@ -209,7 +209,6 @@ typedef unsigned int pa_t;            /* physical address */
 
 #define RESTRICTR(rpring) if ((rpring) & RINGMASK32) fault(RESTRICTFAULT, 0, 0);
 
-
 /* Table for unusual instructions that aren't implemented but we want to
    print something when they're encountered */
 
@@ -368,8 +367,7 @@ unsigned short mem[MEMSIZE];   /* system's physical memory */
 
 /* STLB cache is defined here.  There are several different styles on
    Prime models.  This is modeled after the 6350 STLB, but is only
-   1-way associative and doesn't have slots dedicated to I/O
-   segments */
+   1-way associative. */
 
 #define STLBENTS 512
 
@@ -386,6 +384,17 @@ typedef struct {
 } stlbe_t;
 
 stlbe_t stlb[STLBENTS];
+
+/* The IOTLB stores translations for each page of the I/O segments 0-3 */
+
+#define IOTLBENTS 64*4
+
+typedef struct {
+  char valid;                 /* 1 if IOTLB entry is valid, zero otherwise */
+  unsigned int ppn;           /* physical page (16 bits = 128MB limit) */
+} iotlbe_t;
+
+iotlbe_t iotlb[IOTLBENTS];
 
 unsigned long long bitmask64[65] = {0,
    1LL<<63, 1LL<<62, 1LL<<61, 1LL<<60, 1LL<<59, 1LL<<58, 1LL<<57, 1LL<<56,
@@ -638,7 +647,7 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr);
 
 pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
   short relseg,seg,nsegs,ring;
-  unsigned short pte, stlbix;
+  unsigned short pte, stlbix, iotlbix;
   stlbe_t *stlbp;
   unsigned int dtar,sdw,staddr,ptaddr,pmaddr,ppn;
   pa_t pa;
@@ -699,6 +708,18 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
       stlbp->ppn = ppn;
       stlbp->pmep = mem+pmaddr;
       stlbp->load_ic = instcount;
+
+      /* if this is an I/O segment reference, load the I/O TLB too.
+	 This is done because earlier machines didn't have the LIOT
+	 instruction to load the IOTLB; instead, they loaded it with
+	 regular memory reference instructions like LDA (they also
+	 only had a 64-entry IOTLB, so the emulation is not exact) */
+
+      if (seg < 4) {
+	iotlbix = (ea & 0x3FFFF) >> 10;
+	iotlb[iotlbix].valid = 1;
+	iotlb[iotlbix].ppn = ppn;
+      }
     }
     *access = stlbp->access[ring];
     if (((intacc & *access) != intacc) || (intacc == PACC && ((*access & 3) == 0)))
@@ -718,6 +739,33 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
   fatal(NULL);
   /* NOTE: could also take a missing memory check here... */
 }
+
+/* for I/O, ea is either an 18-bit physical address (which is just
+   returned if not in mapped I/O mode), or a 2-bit segment number and
+   16-bit word number for mapped I/O.  A physical address is returned. */
+
+unsigned int mapio(ea_t ea) {
+  int iotlbix;
+
+  ea &= 0x3FFFF;
+  if (crs[MODALS] & 020) {           /* mapped I/O mode? */
+    iotlbix = (ea >> 10) & 0xFF;     /* TLB range is 0-255 */
+    if (iotlb[iotlbix].valid)
+      return (iotlb[iotlbix].ppn << 10) | (ea & 0x3FF);
+    else {
+      printf("Mapped I/O request to %o/%o, but IOTLB is invalid!\n", ea>>16, ea&0xFFFF);
+      fatal(NULL);
+    }
+  }
+  return ea;
+}
+
+/* these are I/O versions of get/put that use the IOTLB rather than
+   the STLB */
+
+#define get16io(ea) mem[mapio((ea))]
+#define get32io(ea) *(unsigned int *)(mem+mapio((ea)))
+#define put16io(word,ea) mem[mapio((ea))] = word
 
 /* these are shorthand macros for get/put that use the current program
    counter - the typical usage - or Ring 0, the other typical case.
@@ -3007,6 +3055,7 @@ int rtq(ea_t qcbea, unsigned short *qent, ea_t rp) {
     *qent = get16r(qentea, rp);
   else {
     RESTRICTR(rp);
+    /* XXX: this should probably go through mapio */
     *qent = mem[qentea];
   }
   qtop = (qtop & ~qmask) | ((qtop+1) & qmask);
@@ -3033,6 +3082,7 @@ int abq(ea_t qcbea, unsigned short qent, ea_t rp) {
     put16r(qent, qentea, rp);
   else {
     RESTRICTR(rp);
+    /* XXX: this should probably go through mapio */
     mem[qentea] = qent;
   }
   put16r(qtemp, qcbea+1, rp);
@@ -3145,7 +3195,7 @@ int add32(unsigned int *a1, unsigned int a2, unsigned int a3) {
   if ((~uorig ^ a2) & (uorig ^ uresult) & 0x80000000) {
     if (*(int *)&uresult >= 0)
       lt = 0200;
-    crs[KEYS] = crs[KEYS] | link | eq | lt;
+    crs[KEYS] = crs[KEYS] | link | eq | lt; /* update now: might fault */
     mathexception('i', FC_INT_OFLOW, 0);
   } else if (*(int *)&uresult < 0)
     lt = 0200;
@@ -3173,7 +3223,7 @@ int add16(unsigned short *a1, unsigned short a2, unsigned short a3) {
   if ((~uorig ^ a2) & (uorig ^ uresult) & 0x8000) {
     if (*(int *)&uresult >= 0)
       lt = 0200;
-    crs[KEYS] = crs[KEYS] | link | eq | lt; /* update here: might fault */
+    crs[KEYS] = crs[KEYS] | link | eq | lt; /* update now: might fault */
     mathexception('i', FC_INT_OFLOW, 0);
   } else if (*(int *)&uresult < 0)
     lt = 0200;
@@ -3305,6 +3355,8 @@ main (int argc, char **argv) {
   RPL = 01000;
   for (i=0; i < STLBENTS; i++)
     stlb[i].valid = 0;
+  for (i=0; i < IOTLBENTS; i++)
+    iotlb[i].valid = 0;
   bzero(mem, sizeof(mem));
 
   verbose = 0;
@@ -3660,13 +3712,21 @@ For disk boots, the last 3 digits can be:\n\
       traceflags = 0;
 #endif
 
-#if 1
+#if 0
     /* NOTE: rev 23.4 halts at inst #75379065 with the error:
        "System Serial Number does not agree with this version of Primos."
        To track this down, turn on tracing just before this instruction. */
 
     if (75370000 < instcount && instcount < 75380000)
       traceflags = ~TB_MAP;
+#endif
+
+#if 0
+    /* turn on tracing  near instruction #47704931 to debug I/O TLB error
+       in rev 22.1 */
+
+    if (instcount > 47700000)
+      traceflags = ~0;
 #endif
 
     /* poll any devices that requested a poll */
@@ -4163,7 +4223,15 @@ stfa:
 	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
 	  }
 #else
-	  /* this should work, but emacs explore "dive" (P) breaks :( */
+	  /* this should work, but emacs explore "dive" (P) breaks :(
+
+	     I think what might happen is that if a fault occurs in
+	     the loop because of the ldc/stc memory references, the
+	     ZMVD is completely restarted but the field address/length
+	     registers (and keys) have been modified and are not in
+	     the same state as when the ZMVD started.  Emulating ZMVD
+	     via UII works because the individual stc/ldc causing the
+	     fault is restarted rather than the whole ZMVD */
 
 	  utempa1 = crs[KEYS];   /* UII does this because of fault */
 	  do {
@@ -4358,6 +4426,8 @@ stfa:
 	    utempa = STLBIX(utempl);
 	    stlb[utempa].valid = 0;
 	    TRACE(T_INST, " invalidated STLB index %d\n", utempa);
+	    if (((utempl >> 16) & 07777) < 4)
+	      iotlb[(utempl >> 10) & 0xFF].valid = 0;
 	  }
 #if 0
 	  /* HACK for DIAG to suppress ITLB loop in trace */
@@ -5244,7 +5314,7 @@ a1a:
 	case 0140550:
 	  TRACE(T_FLOW, " FLOT\n");
 	  templ = *(short *)(crs+A);
-	  templ = crs[B] | (templ<<15);
+	  templ = (templ<<15) | crs[B];
 	  tempf = templ;
 	  tempf1 = tempf;
 	  ieeepr4(&tempf);
@@ -6079,12 +6149,12 @@ keys = 14200, modals=100177
 	break;
 
       case 0161:
-	TRACE(T_FLOW, " ARFA0\n");
+	TRACE(T_FLOW, " ARFA 0\n");
 	arfa(0, crsl[dr]);
 	break;
 
       case 0171:
-	TRACE(T_FLOW, " ARFA1\n");
+	TRACE(T_FLOW, " ARFA 1\n");
 	arfa(1, crsl[dr]);
 	break;
 
@@ -6380,73 +6450,73 @@ keys = 14200, modals=100177
 	break;
 
       case 0023:
-	TRACE(T_FLOW, " LFEQ0\n");
+	TRACE(T_FLOW, " LFEQ 0\n");
 	SETCC_32(crsl[FAC0]);
 	crs[dr*2] = LCEQ;
 	break;
 
       case 0033:
-	TRACE(T_FLOW, " LFEQ1\n");
+	TRACE(T_FLOW, " LFEQ 1\n");
 	SETCC_32(crsl[FAC1]);
 	crs[dr*2] = LCEQ;
 	break;
 
       case 0024:
-	TRACE(T_FLOW, " LFGE0\n");
+	TRACE(T_FLOW, " LFGE 0\n");
 	SETCC_32(crsl[FAC0]);
 	crs[dr*2] = LCGE;
 	break;
 
       case 0034:
-	TRACE(T_FLOW, " LFGE1\n");
+	TRACE(T_FLOW, " LFGE 1\n");
 	SETCC_32(crsl[FAC1]);
 	crs[dr*2] = LCGE;
 	break;
 
       case 0025:
-	TRACE(T_FLOW, " LFGT0\n");
+	TRACE(T_FLOW, " LFGT 0\n");
 	SETCC_32(crsl[FAC0]);
 	crs[dr*2] = LCGT;
 	break;
 
       case 0035:
-	TRACE(T_FLOW, " LFGT1\n");
+	TRACE(T_FLOW, " LFGT 1\n");
 	SETCC_32(crsl[FAC1]);
 	crs[dr*2] = LCGT;
 	break;
 
       case 0021:
-	TRACE(T_FLOW, " LFLE0\n");
+	TRACE(T_FLOW, " LFLE 0\n");
 	SETCC_32(crsl[FAC0]);
 	crs[dr*2] = LCLE;
 	break;
 
       case 0031:
-	TRACE(T_FLOW, " LFLE1\n");
+	TRACE(T_FLOW, " LFLE 1\n");
 	SETCC_32(crsl[FAC1]);
 	crs[dr*2] = LCLE;
 	break;
 
       case 0020:
-	TRACE(T_FLOW, " LFLT0\n");
+	TRACE(T_FLOW, " LFLT 0\n");
 	SETCC_32(crsl[FAC0]);
 	crs[dr*2] = LCLT;
 	break;
 
       case 0030:
-	TRACE(T_FLOW, " LFLT1\n");
+	TRACE(T_FLOW, " LFLT 1\n");
 	SETCC_32(crsl[FAC1]);
 	crs[dr*2] = LCLT;
 	break;
 
       case 0022:
-	TRACE(T_FLOW, " LFNE0\n");
+	TRACE(T_FLOW, " LFNE 0\n");
 	SETCC_32(crsl[FAC0]);
 	crs[dr*2] = LCNE;
 	break;
 
       case 0032:
-	TRACE(T_FLOW, " LFNE1\n");
+	TRACE(T_FLOW, " LFNE 1\n");
 	SETCC_32(crsl[FAC1]);
 	crs[dr*2] = LCNE;
 	break;
@@ -6454,7 +6524,7 @@ keys = 14200, modals=100177
       case 0004:
 	TRACE(T_FLOW, " LGE/LHGE\n");
 	SETCC_32(crsl[dr]);
-	crs[dr*2] = LCEQ;
+	crs[dr*2] = LCGE;
 	break;
 
       case 0005:
@@ -6571,7 +6641,7 @@ keys = 14200, modals=100177
 
       case 0076:
 	TRACE(T_FLOW, " SHL1\n");
-	if (crsl[dr] & 0x80000000)
+	if (crs[dr*2] & 0x8000)
 	  SETCL;
 	else
 	  crs[KEYS] &= ~0120000;              /* clear C,L */
@@ -6580,7 +6650,7 @@ keys = 14200, modals=100177
 
       case 0077:
 	TRACE(T_FLOW, " SHL2\n");
-	if (crsl[dr] & 0x40000000)
+	if (crs[dr*2] & 0x4000)
 	  SETCL;
 	else
 	  crs[KEYS] &= ~0120000;              /* clear C,L */
@@ -6589,7 +6659,7 @@ keys = 14200, modals=100177
 
       case 0120:
 	TRACE(T_FLOW, " SHR1\n");
-	if (crsl[dr] & 0x00010000)
+	if (crs[dr*2] & 0x0001)
 	  SETCL;
 	else
 	  crs[KEYS] &= ~0120000;              /* clear C,L */
@@ -6598,7 +6668,7 @@ keys = 14200, modals=100177
 
       case 0121:
 	TRACE(T_FLOW, " SHR2\n");
-	if (crsl[dr] & 0x00020000)
+	if (crs[dr*2] & 0x0002)
 	  SETCL;
 	else
 	  crs[KEYS] &= ~0120000;              /* clear C,L */
@@ -6625,7 +6695,7 @@ keys = 14200, modals=100177
 
       case 0074:
 	TRACE(T_FLOW, " SR1\n");
-	if (crsl[dr] & 0x00010000)
+	if (crsl[dr] & 0x00000001)
 	  SETCL;
 	else
 	  crs[KEYS] &= ~0120000;              /* clear C,L */
@@ -6634,7 +6704,7 @@ keys = 14200, modals=100177
 
       case 0075:
 	TRACE(T_FLOW, " SR2\n");
-	if (crsl[dr] & 0x00020000)
+	if (crsl[dr] & 0x00000002)
 	  SETCL;
 	else
 	  crs[KEYS] &= ~0120000;              /* clear C,L */
@@ -6674,7 +6744,7 @@ keys = 14200, modals=100177
       case 0136:
 	TRACE(T_FLOW, " STCH\n");
 	ea = apea(NULL);
-	if (get16(ea) == (crsl[dr] & 0xFFFF)) {
+	if (get16(ea) == (crs[dr*2])) {
 	  put16(crs[dr*2], ea);
 	  crs[KEYS] |= 0100;       /* set EQ */
 	} else 
@@ -6705,7 +6775,7 @@ keys = 14200, modals=100177
 	break;
 
       case 0163:
-	TRACE(T_FLOW, " TFLR0\n");
+	TRACE(T_FLOW, " TFLR 0\n");
 	crsl[dr] = GETFLR(0);
 	break;
 
@@ -6716,12 +6786,12 @@ keys = 14200, modals=100177
 
       case 0165:
 	TRACE(T_FLOW, " TRFL 0\n");
-	PUTFLR(0,crsl[dr]);
+	PUTFLR(0, crsl[dr]);
 	break;
 
       case 0175:
 	TRACE(T_FLOW, " TRFL 1\n");
-	PUTFLR(0,crsl[dr]);
+	PUTFLR(0, crsl[dr]);
 	break;
 
 
@@ -6805,6 +6875,7 @@ keys = 14200, modals=100177
 
     case 006:  /* Special MR FP format */
       /* DFC, DFL, FC, FL */
+      warn("IXX 006");
       switch (dr) {
       case 0:
       case 2:
@@ -7101,12 +7172,13 @@ keys = 14200, modals=100177
       switch (dr) {
       case 0:
 	TRACE(T_FLOW, " IM\n");
-	utempl = get32(ea);
-	put32(utempl+1, ea);
+	templ = get32(ea);
+	put32(templ+1, ea);
 	crs[KEYS] &= ~0300;
-	if (*(int *)&utempl == -1)
+	/* NOTE: test pre-incremented values to get true LT (overflow) */
+	if (templ == -1)
 	  crs[KEYS] |= 0100;
-	else if (*(int *)&utempl < 0)
+	else if (templ < 0)
 	  crs[KEYS] |= 0200;
 	break;
 
@@ -7233,12 +7305,12 @@ imodepcl:
       switch (dr) {
       case 0:
 	TRACE(T_FLOW, " IMH\n");
-	utempa = get16(ea);
-	put16(utempa+1, ea);
+	tempa = get16(ea);
+	put16(tempa+1, ea);
 	crs[KEYS] &= ~0300;
-	if (*(short *)&utempa == -1)
+	if (tempa == -1)
 	  crs[KEYS] |= 0100;
-	else if (*(short *)&utempa < 0)
+	else if (tempa < 0)
 	  crs[KEYS] |= 0200;
 	break;
 
@@ -7338,12 +7410,13 @@ imodepcl:
       switch (dr) {
       case 0:
 	TRACE(T_FLOW, " DM\n");
-	utempl = get32(ea);
-	put32(utempl-1, ea);
+	templ = get32(ea);
+	put32(templ-1, ea);
+	/* NOTE: test pre-decremented values to get true LT (overflow) */
 	crs[KEYS] &= ~0300;
-	if (utempl == 1)
+	if (templ == 1)
 	  crs[KEYS] |= 0100;
-	else if (*(int *)&utempl <= 0)
+	else if (templ <= 0)
 	  crs[KEYS] |= 0200;
 	break;
 
@@ -7380,7 +7453,6 @@ imodepcl:
 	crs[KEYS] |= 0100;
       else if (*(short *)(crs+dr*2) < *(short *)&utempa)
 	crs[KEYS] |= 0200;
-      /* IXX should set the L bit like subtract */
       continue;
 
     case 072:
@@ -7424,12 +7496,13 @@ imodepcl:
       switch (dr) {
       case 0:
 	TRACE(T_FLOW, " DMH\n");
-	utempa = get16(ea);
-	put16(utempa-1, ea);
+	tempa = get16(ea);
+	put16(tempa-1, ea);
 	crs[KEYS] &= ~0300;
-	if (utempa == 1)
+	/* NOTE: test pre-decremented values to get true LT (overflow) */
+	if (tempa == 1)
 	  crs[KEYS] |= 0100;
-	else if (*(short *)&utempa <= 0)
+	else if (tempa <= 0)
 	  crs[KEYS] |= 0200;
 	break;
 
@@ -8213,22 +8286,6 @@ nonimode:
       *(ea_t *)(crs+LB) = ea;
       continue;
 
-    /* NOTE: during Primos coldstart, when setting PPA:
-
-14/35052: 7404          A='100/64 B='0/0 X=1010/520 Y=1235/669 C=0 L=1 LT=0 EQ=1        #75327960 [SEG0 0]
- opcode=00300, i=0, x=0
- 2-word format, a=40032
- new opcode=00301, y=0, br=0, ixy=0, xok=1
- EA: 14/40032  COLDS+'32
- STLR
-
-14/35054: 141704                A='100/64 B='0/0 X=1010/520 Y=1235/669 C=0 L=1 LT=0 EQ=1        #75327961 [SEG0 0]
- generic class 3
- BCS
-
-       Not sure what the C-bit means here... maybe multi-processor stuff?
-    */
-
     case 0301:
       TRACE(T_FLOW, " STLR '%06o\n", ea & 0xFFFF);
       star(*(int *)(crs+L), ea);
@@ -8271,7 +8328,7 @@ nonimode:
 
 /* here for PIO instructions: OCP, SKS, INA, OTA.  The instruction
    word is passed in as an argument to handle EIO (Execute I/O) in
-   V-mode.
+   V/I modes.
 */
 
 pio(unsigned int inst) {
@@ -8286,630 +8343,3 @@ pio(unsigned int inst) {
   TRACE(T_INST, " pio, class=%d, func='%o, device='%o\n", class, func, device);
   devmap[device](class, func, device);
 }
-
-
-#if 0  
-/* Handle SVC instruction.  For real hardware emulation on an R-mode
-   such as the P300, SVC would interrupt (JST*) through location '75
-   (in vectored mode) or would fault on the P400.  
-
-   Since we may be running programs without an OS underneath us,
-   handle the SVC's here if vectors aren't set.
-
-   Typical usage:
-
-     CALL TNOUA ('MESSAGE', 7)
-         JST TNOUA
-         DAC =C'MESSAGE'
-         DAC =7
-         OCT 0
-         ... 
-
-     The library would resolve the TNOUA reference like this:
- 
-     TNOUA DAC  **        RETURN ADDRESS
-           SVC            ENTER THE OS
-           OCT  140703
-           JMP# BADCALL   HERE FOR BAD SVC
-           ...
-
-   The SVC code word follows the SVC instruction:
-
-     '100000 = this is an interlude; the actual arguments are found
-     at the address preceeding the SVC instruction (ie, the caller)
-
-     '040000 = there is an instruction following the SVC code, before
-     the argument list.  If there is an SVC error, like a bad function
-     code, the SVC handler will return to the location following the
-     code word.
-
-     Bits 3-4 are ignored
-
-     Bits 5-10 are the SVC group, 1-15.
-     Bits 11-16 are the SVC function within the group.
-
-  Interludes are used because at the time a program is compiled, the
-  compiler doesn't know whether a call is going to the OS or not.  So the
-  call is compiled like any other.  It's dumb for the library TNOUA to
-  muck around with all the arguments, so bit 1 is set as a shortcut and
-  the address of the argument list is just before the SVC itself.
-
-  If a program knows it's going to call the OS, a direct SVC can be used,
-  with bit 1 clear:
-
-	 SVC
-	 OCT  '040703
-         JMP# BADSVC
-         DAC  =C'MESSAGE'
-         DAC  =7
-         OCT  0
-  GOOD   ...
-
-  BADSVC EQU  *
-
-*/
-
-
-svc() {
-
-#define MAXCLASS 015
-#define MAXFUNC 027
-#define MAXSVCARGS 10
-
-  unsigned short code;             /* code word following SVC instruction */
-  unsigned short argl;             /* address of argument list */
-  void *arg[MAXSVCARGS];           /* arg address array */
-  short actargs;                   /* number of actual arguments */
-  short class;                     /* SVC class, from bits 5-10 */
-  short func;                      /* SVC func within class, bits 11-16 */
-  short temp16;
-  short dolocal;
-
-  static struct {
-    char name[8];                  /* svc routine name */
-    char numargs;                  /* number of arguments for this svc */
-    short locargs;                 /* bit mask for LOC(X) arguments */
-  } svcinfo[MAXCLASS+1][MAXFUNC+1] = {
-
-    /* class 0 is a dummy: it's mapped to class 1 below */
-
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-
-    /* class 1 */
-
-    "ATTACH", -5, 0, /* func 0 */
-    "SEARCH", -4, 0, /* func 1 */
-    "SAVE  ",  2, 0, /* func 2 */
-    "RESTOR", -3, 0, /* func 3 */
-    "RESUME",  1, 0, /* func 4 */
-    "EXIT  ",  0, 0, /* func 5 */
-    "ERRRTN",  4, 0, /* func 6 */
-    "UPDATE", 99, 0, /* func 7 */
-    "GETERR",  2, 0, /* func 010 */
-    "PRERR ",  0, 0, /* func 011 */
-    "GINFO ",  2, 0, /* func 012 */
-    "CNAME$", -3, 0, /* func 013 */
-    "ERRSET",  5, 0, /* func 014 */
-    "FORCEW",  2, 0, /* func 015 */
-    "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-
-    /* class 2 */
-
-    "READ  ", 99, 0, /* func 0 */
-    "WRITE ", 99, 0, /* func 1 */
-    "RDLIN ", -4, 0, /* func 2 */
-    "WTLIN ", -4, 0, /* func 3 */
-    "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-
-    /* class 3 */
-
-    "PRWFIL", -6, 020000, /* func 0 */
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-
-    /* class 4 */
-    
-    "FAMSVC", 99, 0, /* func 0 */
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-
-    /* class 5 */
-
-    "RREC  ", -6, 0, /* func 0 */
-    "WREC  ", -6, 0, /* func 1 */
-    "TIMDAT",  2, 0, /* func 2 */
-    "DIGIN ", -4, 0, /* func 3 */
-    "DIGINW", -4, 0, /* func 4 */
-    "RCYCL ",  0, 0, /* func 5 */
-    "D$INIT",  1, 0, /* func 6 */
-    "BREAK$",  1, 0, /* func 7 */
-    "T$MT  ",  6, 040000, /* func 010 */
-    "T$LMPC",  5, 040000, /* func 011 */
-    "T$CMPC",  5, 040000, /* func 012 */
-    "T$AMLC",  5, 040000, /* func 013 */
-    "T$VG  ",  5, 040000, /* func 014 */
-    "T$PMPC",  5, 040000, /* func 015 */
-    "RRECL ", -6, 0, /* func 016 */
-    "WRECL ", -6, 0, /* func 017 */
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-
-    /* class 6 */
-
-    "COMANL",  0, 0, /* func 0 */
-    "C1IN  ",  1, 0, /* func 1 */
-    "CMREAD",  1, 0, /* func 2 */
-    "COMINP", -3, 0, /* func 3 */
-    "CNIN$ ",  3, 0, /* func 4 */
-    "PHANT$",  5, 0, /* func 5 */
-    "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-
-    /* class 7 */
-
-    "T1IN  ",  1, 0, /* func 0 */
-    "T1OU  ",  1, 0, /* func 1 */
-    "TNOU  ",  2, 0, /* func 2 */
-    "TNOUA ",  2, 0, /* func 3 */
-    "TOOCT ",  1, 0, /* func 4 */
-    "DUPLX$",  1, 0, /* func 5 */
-    "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-
-    /* class 010 */
-
-    "T$MT  ",  6, 040000, /* func 0 */
-    "T$SMLC",  4, 020000, /* func 1 */
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-
-    /* class 011 */
-
-    "T$LMPC",  6, 040000, /* func 0 */
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-
-    /* class 012 */
-
-    "T$CMPC",  6, 040000, /* func 0 */
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-
-    /* class 013 (user defined) */
-
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-
-    /* class 014 */
-
-    "ATTAC$",  6, 002000, /* func 0 */
-    "CREAT$",  5, 004000, /* func 1 */
-    "ERRPR$",  6, 0, /* func 2 */
-    "ERRST$", 99, 0, /* func 3 */
-    "GPASS$",  5, 004000, /* func 4 */
-    "GQUOT$", 99, 0, /* func 5 */
-    "PRWFL$",  7, 021000, /* func 6 */
-    "RDENT$",  8, 000400, /* func 7 */
-    "SATTR$",  5, 004000, /* func 010 */
-    "SEARC$",  6, 002000, /* func 011 */
-    "SEGDR$",  5, 004000, /* func 012 */
-    "SPASS$",  3, 020000, /* func 013 */
-    "SQUOT$", 99, 0, /* func 014 */
-    "CNGNM$",  5, 004000, /* func 015 */
-    "COMIN$",  4, 010000, /* func 016 */
-    "RDTKN$",  5, 004000, /* func 017 */
-    "RESTO$",  4, 010000, /* func 020 */
-    "RESUM$",  2, 0,  /* func 021 */
-    "SAVE$ ",  4, 010000,  /* func 022 */
-    "",99,0, "",99,0, "",99,0, "",99,0, "",99,0,
-
-    /* class 015 */
-
-    "ATCH$$",  6, 0,  /* func 0 */
-    "CREA$$",  5, 0,  /* func 1 */
-    "",99,0,           /* func 2 */
-    "",99,0,           /* func 3 */
-    "GPAS$$",  5, 0,  /* func 4 */
-    "",99,0,           /* func 5 */
-    "PRWF$$",  7, 020000,  /* func 6 */
-    "RDEN$$",  8, 0,  /* func 7 */
-    "SATR$$",  5, 0,  /* func 010 */
-    "SRCH$$",  6, 0,  /* func 011 */
-    "SGDR$$",  5, 0,  /* func 012 */
-    "SPAS$$",  3, 0,  /* func 013 */
-    "",99,0,  /* func 014 */
-    "CNAM$$",  5, 0,  /* func 015 */
-    "COMI$$",  4, 0,  /* func 016 */
-    "RDTK$$",  5, 0,  /* func 017 */
-    "REST$$",  4, 0,  /* func 020 */
-    "RESU$$",  2, 0,  /* func 021 */
-    "SAVE$$",  4, 0,  /* func 022 */
-    "COMO$$",  5, 0,  /* func 023 */
-    "ERKL$$",  4, 0,  /* func 024 */
-    "RDLIN$",  4, 0,  /* func 025 */
-    "WTLIN$",  4, 0,  /* func 026 */
-    "",99,0
-  };
-
-#if 0
-  for (class=0; class<=MAXCLASS; class++)
-    for (func=0; func<=MAXFUNC; func++)
-      printf("Class %o, func %o: %s %d args %o\n", class,func, svcinfo[class][func].name, svcinfo[class][func].numargs, svcinfo[class][func].locargs);
-#endif
-
-  /* if location '65 is set, do indirect JST to handle svc */
-
-  /* if the svc fault vector is zero, interpret the svc here.  This
-     allows the emulator to run R-mode programs directly */
-
-  dolocal = 1;
-  if ((crs[MODALS] & 010) || get16(065) != 0)
-    dolocal = 0;
-
-  if (dolocal || (traceflags & (T_INST|T_FLOW))) {
-
-    /* get svc code word, break into class and function */
-
-    code = iget16(RP);
-    class = (code >> 6) & 077;
-    if (class == 0)
-      class = 1;
-    func = code & 077;
-
-    /* determine argument list location and create arg list vector */
-
-    if (code & 0100000)
-      argl = get16(MAKEVA(RPH,RPL-2));
-    else if (code & 040000)
-      argl = RPL+2;
-    else
-      argl = RPL+1;
-
-    TRACE(T_INST, " code=%o, class=%o, func=%o, argl=%o\n", code, class, func, argl);
-    if (class > MAXCLASS || func > MAXFUNC)
-      goto badsvc;
-
-    TRACE(T_FLOW, " name=%s, #args=%d, LOC args=%o\n", svcinfo[class][func].name, svcinfo[class][func].numargs, svcinfo[class][func].locargs);
-  }
-
-  if (!dolocal) {
-    fault(SVCFAULT, 0, 0);
-    fatal("Returned from SVC fault");
-  }
-
-  if (svcinfo[class][func].numargs == 99)
-    goto badsvc;
-
-  if (svcinfo[class][func].locargs != 0)
-    fatal("Can't handle LOC() args");
-
-  actargs = 0;
-  if (svcinfo[class][func].numargs == 1) {
-    actargs = 1;
-    arg[0] = mem+mem[argl++];
-    if (mem[argl] == 0)     /* single arg: terminating zero is optional */
-      argl++;
-  } else if (svcinfo[class][func].numargs > 0) {
-    while (mem[argl] != 0) {
-      if (actargs < MAXSVCARGS)
-	arg[actargs++] = mem+mem[argl];
-      argl++;
-    }
-    argl++;                 /* skip terminating zero */
-    while (actargs < svcinfo[class][func].numargs)
-      arg[actargs++] == NULL;
-  }
-
-  TRACE(T_INST, " return=%o, actargs=%d\n", argl, actargs);
-
-  switch (class) {
-  case 0: /* same as class 1 */
-  case 1: /* funcs 0-'15 */
-    switch (func) {
-    case 0:  /* ATTACH (NAME,DEV,PASSWD,HOMESET,ALTRTN) */
-      goto unimp;
-    case 1:  /* SEARCH (KEY,NAME,UNIT,ALTRTN) */
-      goto unimp;
-    case 2:  /* SAVE (RVEC,NAME) */
-      goto unimp;
-    case 3:  /* RESTOR (RVEC,NAME,ALTRTN) */
-      goto unimp;
-    case 4:  /* RESUME (NAME) */
-      goto unimp;
-    case 5:  /* EXIT () */
-      os_exit();
-    case 6:  /* ERRRTN (ALTRTN,'XXXXXX',MSG,MSGLEN) */
-      goto unimp;
-    case 7:  /* UPDATE */
-      goto unimp;
-    case 010:  /* GETERR (BUFF,N) */
-      goto unimp;
-    case 011:  /* PRERR () */  
-      goto unimp;
-    case 012:  /* GINFO (BUFF,N) */
-      os_ginfo(arg[0], arg[1]);
-      break;
-    case 013:  /* CNAME$ (OLDNAM,NEWNAM,ALTRTN) */
-      goto unimp;
-    case 014:  /* ERRSET (ALTVAL,ALTRTN,'XXXXXX','MSG',MSGLEN) */
-      goto unimp;
-    case 015:  /* FORCEW (KEY,UNIT) */
-      goto unimp;
-    default:
-      goto unimp;
-    }
-    break;
-
-  case 2: /* funcs 0-3 */
-    goto unimp;
-    break;
-
-  case 3: /* func 0 = PRWFIL */
-    switch (func) {
-    case 0:  /* PRWFIL (KEY,UNIT,LOC(BUF),N,POS,ALTRTN) */
-      goto unimp;
-    default:
-      goto unimp;
-    }
-    break;
-
-  case 4: /* func 0 = FAMSVC (obsolete) */
-    goto unimp;
-    break;
-
-  case 5: /* funcs 0-'17 */
-    switch (func) {
-    case 0:  /* RREC (PBAV,NWV,N,RA16,PDEV,ALTRTN) */
-      goto unimp;
-    case 1:  /* WREC (PBAV,NWV,N,RA16,PDEV,ALTRTN) */
-      goto unimp;
-    case 2:  /* TIMDAT (BUFF,N) */
-      os_timdat(arg[0], arg[1]);
-      break;
-    case 3:  /* DIGIN (N,ADRVEC,DATVEC,ALTRTN) */
-      goto unimp;
-    case 4:  /* DIGINW (same, but initial arg of 1 instead of 0 to DIGIN) */
-      goto unimp;
-    case 5:  /* RECYCL */
-      goto unimp;
-    case 6:  /* D$INIT (PDEV) */
-      goto unimp;
-    case 7:  /* BREAK$ (ONOFF) */
-      os_break$(arg[0]);
-      break;
-    case 010:  /* T$MT (UNIT,LOC(BUF),NW,INST,STATV,CODE) */
-      goto unimp;
-    case 011:  /* T$LMPC (UNIT,LOC(BUF),NW,INST,STATV) */
-      goto unimp;
-    case 012:  /* T$CMPC (UNIT,LOC(BUF),NW,INST,STATV) */
-      goto unimp;
-    case 013:  /* T$AMLC (LINE,LOC(BUF),NW,INST,STATV) */
-      goto unimp;
-    case 014:  /* T$VG (UNIT,LOC(BUF),NW,INST,STATV) */
-      goto unimp;
-    case 015:  /* T$PMPC (UNIT,LOC(BUF),NW,INST,STATV) */
-      goto unimp;
-    case 016:  /* RRECL (PBAV,NWV,N,RA32,PDEV,ALTRTN) */
-      goto unimp;
-    case 017:  /* WRECL (PBAV,NWV,N,RA32,PDEV,ALTRTN) */
-      goto unimp;
-    default:
-      goto unimp;
-    }
-    break;
-
-  case 6: /* funcs 0-5 */
-    switch (func) {
-    case 0:  /* COMANL () */
-      os_comanl();
-      break;
-    case 1:  /* C1IN (CHAR) */
-      os_c1in(arg[0]);
-      break;
-    case 2:  /* CMREAD (BUFF) */
-      strncpy(arg[0], "      ", 6);
-      break;
-    case 3:  /* COMINP (FILNAM,UNIT,ALTRTN) */
-      goto unimp;
-    case 4:  /* CNIN$ (BUF,MAXCHARS,ACTCHARS) */
-      os_cnin$(arg[0], arg[1], arg[2]);
-      break;
-    case 5:  /* PHANT$ (FILNAM,NAMLEN,UNIT,USER,CODE) */
-      goto unimp;
-    default:
-      goto unimp;
-    }
-    break;
-
-  case 7:
-    switch (func) {
-    case 0:  /* T1IN (CHAR) */
-      os_c1in(arg[0]);
-      break;
-    case 1:  /* T1OU (CHAR) */
-      os_t1ou(arg[0]);
-      break;
-    case 2: /* TNOU */                       
-    case 3: /* TNOUA */
-      os_tnoua(arg[0],arg[1]);
-      if (func == 2) {
-	temp16 = 1;
-	os_tnoua("\n", &temp16);
-      }
-      break;
-    case 4:  /* TOOCT (NUMBER) */
-      goto unimp;
-    case 5:  /* DUPLX$ (KEY) */
-      goto unimp;
-    default:
-      goto unimp;
-    }
-    break;
-
-  case 010:
-    switch (func) {
-    case 0:  /* T$MT (UNIT,LOC(BUF),NW,INST,STATV,CODE) */
-      goto unimp;
-    case 1:  /* T$SLC1 (KEY,LINE,LOC(BUF),NWORDS) */
-      goto unimp;
-    default:
-      goto unimp;
-    }
-    break;
-
-  case 011:
-    switch (func) {
-    case 0:  /* T$LMPC (UNIT,LOC(BUF),NW,INST,STATV,CODE) */
-      goto unimp;
-    default:
-      goto unimp;
-    }
-    break;
-
-  case 012:
-    switch (func) {
-    case 0:  /* T$CMPC (UNIT,LOC(BUF),NW,INST,STATV,CODE) */
-      goto unimp;
-    default:
-      goto unimp;
-    }
-    break;
-
-  case 013:
-    switch (func) {  /* func is 0-2 */
-    default:
-      goto unimp;
-    }
-    break;
-
-  case 014:
-    switch (func) {
-    case 0:  /* ATTAC$ (NAME,NAMLEN,LDEV,PASSWD,KEY,LOC(CODE)) */
-      goto unimp;
-    case 1:  /* CREAT$ (NAME,NAMLEN,OWNER,NONOWNER,LOC(CODE)) */
-      goto unimp;
-    case 2:  /* ERRPR$ (KEY,CODE,TEXT,TEXTLEN,PROGNAME,NAMLEN) */
-      os_errpr$ (arg[0], arg[1], arg[2], arg[3], arg[4], arg[5]);
-      break;
-    case 4:  /* GPASS$ (NAME,NAMLEN,OWNER,NONOWNER,LOC(CODE) */
-      goto unimp;
-    case 6:  /* PRWFL$ (KEY,UNIT,LOC(BUF),NW,POS,RNW,LOC(CODE)) */
-      goto unimp;
-    case 7:  /* RDENT$ (KEY,UNIT,BUF,BUFSIZ,RNW,NAME,NAMLEN,LOC(CODE)) */
-      goto unimp;
-    case 010:  /* SATTR$ (KEY,NAME,NAMLEN,ARRAY,LOC(CODE)) */
-      goto unimp;
-    case 011:  /* SEARC$ (KEY,NAME,NAMLEN,UNIT,TYPE,LOC(CODE) */
-      goto unimp;
-    case 012:  /* SEGDR$ (KEY,UNIT,ENTRYA,ENTRYB,LOC(CODE)) */
-      goto unimp;
-    case 013:  /* SPASS$ (OWNER,NONOWNER,LOC(CODE)) */
-      goto unimp;
-    case 015:  /* CNGNM$ (OLDNAM,OLDLEN,NEWNAM,NEWLEN,LOC(CODE)) */
-      goto unimp;
-    case 016:  /* COMIN$ (FILNAM,NAMLEN,UNIT,LOC(CODE)) */
-      goto unimp;
-    case 017:  /* RDTKN$ (KEY,INFO(5),BUF,BUFLEN,LOC(CODE)) */
-      goto unimp;
-    case 020:  /* RESTO$ (RVEC(9),FILNAM,NAMLEN,LOC(CODE)) */
-      goto unimp;
-    case 021:  /* RESUM$ (NAME,NAMLEN) */
-      goto unimp;
-    case 022:  /* SAVE$ (RVEC,FILNAM,NAMLEN,LOC(CODE)) */
-      goto unimp;
-    default:
-      goto unimp;
-    }
-    break;
-
-  case 015:
-    switch (func) {
-    case 0:  /* ATCH$$ (UFDNAM,NAMLEN,LDEV,PASSWD,KEY,CODE) */
-      goto unimp;
-    case 1:  /* CREA$$ (NAME,NAMLEN,OPASS,NPASS,CODE) */
-      goto unimp;
-    case 4:  /* GPAS$$ (UFDNAM,NAMLEN,OPASS,NPASS,CODE) */
-      goto unimp;
-    case 6:  /* PRWF$$ (KEY,FUNIT,LOC(BUF),BUFLEN,POS32,RNW,CODE) */
-      goto unimp;
-    case 7:  /* RDEN$$ (KEY,FUNIT,BUF,BUFLEN,RNW,NAME32,NAMLEN,CODE) */
-      goto unimp;
-    case 010:  /* SATR$$ (KEY,NAME,NAMLEN,ARRAY,CODE) */
-      goto unimp;
-    case 011:  /* SRCH$$ (KEY,NAME,NAMLEN,FUNIT,TYPE,CODE) */
-      goto unimp;
-    case 012:  /* SGDR$$ (KEY,FUNIT,ENTRYA,ENTRYB,CODE) */
-      goto unimp;
-    case 013:  /* SPAS$$ (OWNER,NON-OWNER,CODE) */
-      goto unimp;
-    case 015:  /* CNAM$$ (OLDNAM,OLDLEN,NEWNAM,NEWLEN,CODE) */
-      goto unimp;
-    case 016:  /* COMI$$ (FILNAM,NAMLEN,UNIT,CODE) */
-      goto unimp;
-    case 017:  /* RDTK$$ (KEY,INFO(5),BUF,BUFLEN,CODE) */
-      os_rdtk$$ (arg[0], arg[1], arg[2], arg[3], arg[4]);
-      break;
-    case 020:  /* REST$$ (RVEC,NAME,NAMLEN,CODE) */
-      goto unimp;
-    case 021:  /* RESU$$ (NAME,NAMLEN) */
-      goto unimp;
-    case 022:  /* SAVE$$ (RVEC,NAME,NAMLEN,CODE) */
-      goto unimp;
-    case 023:  /* COMO$$ (KEY,NAME,NAMLEN,XXXXXX,CODE) */
-      goto unimp;
-    case 024:  /* ERKL$$ (KEY,ERASECH,KILLCH,CODE) */
-      os_erkl$$(arg[0], arg[1], arg[2], arg[3]);
-      break;
-    case 025:  /* RDLIN$ (UNIT,LINE,NWDS,CODE) */
-      goto unimp;
-    case 026:  /* WTLIN$ (UNIT,LINE,NWDS,CODE) */
-      goto unimp;
-    default:
-      goto unimp;
-    }
-    break;
-
-  default:
-    goto unimp;                   /* bad class */
-  }
-
-  /* after the SVC, argl is the return address */
-
-  TRACE(T_INST, " returning from SVC to %o\n", argl);
-  RPL = argl;
-  return;
-
-
-unimp:
-
-  printf(" svc not implemented, class=%o, func=%o\n", class, func);
-  fatal(NULL);
-
-  /* here on a bad svc; if the bounce bit (bit 2) is set in the code word,
-     jump to the location following the code word (which is typically a
-     JMP instruction).  If the bounce bit isn't set, we have to halt */
-
-badsvc:
-
-  if (code & 040000) {
-    RPL++;
-    TRACE(T_INST, " bouncing svc error to address %o\n", RPL);
-    return;
-  }
-  
-  printf(" halting on bad svc, class=%o, func=%o\n", class, func);
-  fatal(NULL);
-}
-#endif
