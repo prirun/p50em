@@ -22,9 +22,10 @@
       (See complete boot table below)
 
    NOTE: the -map command is optional, but is needed to set the
-   real-time clock automatically.  If not available, use the Primos SE
-   command to set the clock manually after the system boots:
-      SE -MMDDYY HHMM
+   real-time clock automatically for older models (cpuid < 15).  If
+   maps are not available, use the Primos SE command to set the clock
+   manually after the system boots: 
+        SE -MMDDYY HHMM
 
    -------------
    Usage:  (to load and start an R-mode runfile directly from the Unix FS)
@@ -35,7 +36,7 @@
    -------------
    Usage:  to load SAM.SAVE from Unix FS and run diagnostics from pdev 2466
 
-$ time ./em  -cpuid 5 -ss 14114 -boot SAM.SAVE 2>err
+$ time ./em  -cpuid 5 -boot SAM.SAVE 2>err
 [SAM Rev. 16.2, DTS Release: 0004.A, Copyright (c) 1990, Prime Computer, Inc.]
 
 Enter physical device = 2466
@@ -149,7 +150,10 @@ typedef unsigned int pa_t;            /* physical address */
     crs[KEYS] |= 0100;
 
 /* this is probably incorrect - needs to test 16 more bits for denormal
-   doubles */
+   doubles.
+   NOTE: actually, this behavior is correct: Prime only tested 32 bits
+   of the fraction, even for double precision.  It expected DP floats
+   to be normalized, or mostly normalized. */
 
 #define SETCC_D SETCC_F
 
@@ -165,7 +169,9 @@ typedef unsigned int pa_t;            /* physical address */
 #define CLEARC crs[KEYS] &= 077777
 
 /* EXPCL sets both the C and L bits for shift instructions
-   NOTE: unlike EXPC, this doesn't clear anything! */
+
+   NOTE: unlike EXPC, this doesn't clear anything - bits must be cleared
+   before executing these macros! */
 
 #define EXPCL(onoff) \
   if ((onoff)) crs[KEYS] |= 0120000
@@ -963,8 +969,29 @@ put64r(double value, ea_t ea, ea_t rpring) {
 
 
 fatal(char *msg) {
+  ea_t pcbp, csea;
+  unsigned short first,next,last,this;
+  unsigned short cs[6];
 
   printf("Fatal error: instruction #%d at %o/%o %s: %o %o\nowner=%o %s, keys=%o, modals=%o\n", instcount, prevpc >> 16, prevpc & 0xFFFF, searchloadmap(prevpc,' '), get16(prevpc), get16(prevpc+1), crs[OWNERL], searchloadmap(*(unsigned int *)(crs+OWNER),' '), crs[KEYS], crs[MODALS]);
+  
+  /* dump concealed stack entries */
+
+  if (crs[MODALS] & 010) {   /* process exchange is enabled */
+    pcbp = *(ea_t *)(crs+OWNER);    /* my pcb pointer */
+    first = get16r0(pcbp+PCBCSFIRST);
+    next = get16r0(pcbp+PCBCSNEXT);
+    last = get16r0(pcbp+PCBCSLAST);
+    while (next != first) {
+      this = next-6;
+      csea = MAKEVA(crs[OWNERH]+csoffset, this);
+      *(unsigned int *)(cs+0) = get32r0(csea+0);
+      *(double *)(cs+2) = get64r0(csea+2);
+      printf("Fault: RP=%o/%o, keys=%06o, fcode=%o, faddr=%o/%o\n", cs[0], cs[1], cs[2], cs[3], cs[4], cs[5]);
+      next = this;
+    }
+  }
+
   if (msg)
     printf("%s\n", msg);
   /* should do a register dump, RL dump, PCB dump, etc. here... */
@@ -979,7 +1006,7 @@ warn(char *msg) {
 
 
 /* NOTE: the calf instruction may be running in an outer ring, so
-   accesses to protected data need to use get16r */
+   accesses to protected data need to use get16r0 */
 
 void calf(ea_t ea) {
   ea_t pcbp, stackfp, csea;
@@ -1003,7 +1030,7 @@ void calf(ea_t ea) {
 
   /* make sure ecb specifies zero args (not part of the architecture)
 
-     NOTE: this check needs get16r too because in Rev 19, segment 5
+     NOTE: this check needs get16r0 too because in Rev 19, segment 5
      only has gate access and this read caused an access fault when an
      R-mode I/O instruction occurs under Primos (causing a restricted
      inst fault that is handled in the outer ring). */
@@ -2764,6 +2791,21 @@ lpsw() {
 #endif
 }
 
+
+sssn() {
+  ea_t ea;
+  int i;
+
+  printf("SSSN @ %o/%o\n", RPH, RPL);
+  /* savetraceflags = traceflags = ~TB_MAP;    /*****/
+  TRACE(T_FLOW, " SSSN\n");
+  ea = *(unsigned int *)(crs+XB);
+  for (i=0; i<16; i++) {
+    put16(0, ea+i);
+  }
+}
+
+
 /* C-Pointer conversion macros
 
    EACP: convert Prime effective address to C-Pointer value (the bit offset
@@ -3674,10 +3716,10 @@ For disk boots, the last 3 digits can be:\n\
 
 #if 0
     /* this is for FTN Generic 3 trace */
-    if (SEGNO16(RPH) == 4000 && RPL >= 034750 && RPL <= 034760)
-      traceflags = ~TB_MAP;
+    if (SEGNO16(RPH) == 04000 && RPL >= 034750 && RPL <= 034760)
+      savetraceflags = ~TB_MAP;
     else
-      traceflags = 0;
+      savetraceflags = 0;
 #endif
 
 #if 0
@@ -4345,10 +4387,12 @@ stfa:
 
 	case 000510:
 	  TRACE(T_FLOW, " STTM\n", inst);
-#if 0
-	  RESTRICT();
-#endif
-	  fault(UIIFAULT, RPL, RP);
+	  ea = *(ea_t *)(crs+OWNER);
+	  utempl = get32r0(ea+PCBPET);      /* get PCB elapsed timer */
+	  utempl += crs[TIMERH];            /* add live timer */
+	  ea = *(ea_t *)(crs+XB);
+	  put32(utempl, ea);                /* store process time */
+	  put16(crs[TIMERL], INCVA(ea,2));  /* and live timer residue */
 	  continue;
 
 	case 000511:
@@ -4690,6 +4734,9 @@ irtn:
 	case 000003:
 	  TRACE(T_FLOW, " gen 3?\n");
 	  TRACEA("#%d: %o/%o: Generic instruction 3?\n", instcount, RPH, RPL);
+#if 0
+	  savetraceflags = ~0;
+#endif
 	  continue;
 
 	default:
@@ -5581,14 +5628,17 @@ a1a:
       if (class == 1) {
 	if ((crs[KEYS] & 0016000) == 0010000) {      /* I-mode Generic */
 	  switch (inst) {
-
 	  case 0040300: /* DRN */
+	    warn("IXX I-mode Generic 040300");
 	    break;
 	  case 0040301: /* DRNP */
+	    warn("IXX I-mode Generic 040301");
 	    break;
 	  case 0040302: /* DRNZ */
+	    warn("IXX I-mode Generic 040302");
 	    break;
 	  case 0040310: /* SSSN */
+	    sssn();
 	    break;
 	  default:
 	    TRACE(T_FLOW, " unrecognized I-mode generic class 1 instruction!\n");
@@ -5636,15 +5686,7 @@ a1a:
 
 	  case 00300: 
 	    if (inst == 040310) {
-	      printf("SSSN @ %o/%o\n", RPH, RPL);
-	      /*	      savetraceflags = traceflags = ~TB_MAP;    /*****/
-	      TRACE(T_FLOW, " SSSN\n", inst);
-#if 0
-	      /* NOTE: there is no UII handler for SSSN in higher revs
-		 of Primos, or it isn't setup early enough, and enabling
-		 a UII here causes late-rev Primos boots to fail */
-	      fault(UIIFAULT, RPL, RP);
-#endif
+	      sssn();
 	      break;
 	    }
 	    goto badshift;
@@ -5720,12 +5762,12 @@ a1a:
 	    break;
 
 	  default:
-  badshift:
+badshift:
 	    printf("emulator warning: unrecognized shift instruction %o at %o/%o\n", inst, RPH, RPL);
 	    TRACE(T_FLOW, " unrecognized shift instruction!: %o\n", inst);
 	  }
-	  continue;
 	}
+	continue;
       }
 
       if (class == 2) {
@@ -5879,8 +5921,10 @@ keys = 14200, modals=100177
 	printf(" unrecognized skip instruction %o at %o/%o\n", inst, RPH, RPL);
 	fatal(NULL);
 
-      } else
-	fatal("Coding error: bad generic class");
+      } else {
+	printf("Generic class = %d, inst = '%o\n", class, inst);
+	fatal("Coding error: bad generic class?");
+      }
     }
 
     if ((crs[KEYS] & 0016000) != 0010000) goto nonimode;
@@ -6744,7 +6788,7 @@ keys = 14200, modals=100177
       case 0136:
 	TRACE(T_FLOW, " STCH\n");
 	ea = apea(NULL);
-	if (get16(ea) == (crs[dr*2])) {
+	if (get16(ea) == (crs[dr*2+1])) {
 	  put16(crs[dr*2], ea);
 	  crs[KEYS] |= 0100;       /* set EQ */
 	} else 
