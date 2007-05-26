@@ -344,9 +344,9 @@ int intvec=-1;                       /* currently raised interrupt (if >= zero) 
 
 unsigned short sswitch = 014114;     /* sense switches, set with -ss & -boot*/
 
-/* NOTE: the default cpuid is a 4150: 2 MIPS, 32MB of memory */
+/* NOTE: the default cpuid is a P750: 1 MIPS, 8MB of memory */
 
-unsigned short cpuid = 27;           /* STPM CPU model, set with -cpuid */
+unsigned short cpuid = 5;            /* STPM CPU model, set with -cpuid */
 
 unsigned long instcount=0;           /* global instruction count */
 
@@ -661,10 +661,7 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
   seg = SEGNO32(ea);
   ring = ((rp | ea) >> 29) & 3;  /* current ring | ea ring = access ring */
 
-  /* NOTE: cpu.amgrr expects code executing in seg 0 and data
-     references to seg 0 to go through mapping.  Probably still need
-     to check the mapped I/O bit for DMX I/O requests: there are 4
-     combinations of segmentation and mapped I/O mode bits */
+  /* map virtual address if segmentation is enabled */
 
   if (crs[MODALS] & 4) {
     stlbix = STLBIX(ea);
@@ -1150,8 +1147,15 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
     last = get16r0(pcbp+PCBCSLAST);
     TRACE(T_FAULT, "fault: PX enabled, pcbp=%o/%o, cs first=%o, next=%o, last=%o\n", pcbp>>16, pcbp&0xFFFF, first, next, last);
     if (next > last) {
+#if 1
+      /* this is better for debugging */
+      TRACE(T_FAULT, "fault: Concealed stack wraparound to first");
+      fatal("fault: Concealed stack wraparound to first");
+#else
+      /* this is the normal mode of operation & necessary for DIAG */
       TRACE(T_FAULT, "fault: Concealed stack wraparound to first");
       next = first;
+#endif
     }
     csea = MAKEVA(crs[OWNERH]+csoffset, next);
     put32r0(faultrp, csea);
@@ -1500,7 +1504,7 @@ ea_t apea(unsigned short *bitarg) {
   TRACE(T_EAAP, " AP ea = %o/%o  %s\n", ea_s, ea_w, searchloadmap(ea,' '));
   if (ibr & 004000) {
     if (ea & 0x80000000)
-      fault(POINTERFAULT, ea>>16, 0);
+      fault(POINTERFAULT, ea>>16, 0);    /* XXX: faddr=0? */
     ip = get32(ea);
     if (ip & EXTMASK32)
       bit = get16(INCVA(ea,2)) >> 12;
@@ -1547,7 +1551,7 @@ mathexception(unsigned char extype, unsigned short fcode, ea_t faddr)
       fault(ARITHFAULT, fcode, faddr);
     break;
   case 'd':
-    if (crs[KEYS] & 40)
+    if (crs[KEYS] & 040)
       fault(ARITHFAULT, fcode, faddr);
     break;
   case 'f':
@@ -1749,7 +1753,7 @@ ea_t pclea(unsigned short brsave[6], ea_t rp, unsigned short *bitarg, short *sto
   TRACE(T_PCL, " PCLAP ea = %o/%o, bit=%d\n", ea_s, ea_w, bit);
   if (ibr & 004000) {             /* indirect */
     if (ea & 0x80000000)
-      fault(POINTERFAULT, ea>>16, 0);
+      fault(POINTERFAULT, ea>>16, 0);    /* XXX: faddr=0? */
     iwea = ea;
     ea = get32(iwea) | (RP & RINGMASK32);
     TRACE(T_PCL, " Indirect pointer is %o/%o\n", ea>>16, ea & 0xFFFF);
@@ -1984,8 +1988,8 @@ pcl (ea_t ecbea) {
     TRACE(T_PCL, " stack root in ecb was zero, stack root from caller is %o\n", stackrootseg);
   }
 #if 0
-  /* NOTE: higher revs of Primos establish stacks in segment zero and
-     bomb if this check is enabled */
+  /* NOTE: higher revs of Primos establish stacks in segment zero
+     during coldstart and bomb if this check is enabled */
   if (stackrootseg == 0)
     fatal("Stack base register root segment is zero");
 #endif
@@ -2232,9 +2236,17 @@ pxregsave(unsigned short wait) {
 
   /* if registers aren't owned or are already saved, return */
 
-  if (crs[OWNERL] == 0 || (crs[KEYS] & 1))
+  if (crs[OWNERL] == 0) {
+    TRACE(T_PX, "pxregsave: OWNERL is zero: no save\n");
     return;
+  }
+  if (crs[KEYS] & 1) {
+    TRACE(T_PX, "pxregsave: SD=1: no save\n");
+    return;
+  }
 
+  TRACE(T_PX, "pxregsave: saving registers owned by %o (wait=%d)\n", crs[OWNERL], wait);
+    
   /* NB: I think hardware might save the base registers in a predictable
      location in the PCB register save area, rather than compressed in a
      random order, because IIRC, Primos sometimes looks at a waiting
@@ -2287,22 +2299,86 @@ pxregload (ea_t pcbp) {
 }
 
 
-/* switch to the other register set (2 vs 3) */
+/* selects a register set and sets modals and crs/crsl to that register set.
+   pcbw is OWNERL of the process that will use the register set. */
 
-ors() {
-  unsigned short rsnum;
+ors(unsigned short pcbw) {
+  static short regq[] = {0,1,2,3,4,5,6,7};
+  short i,rx;
+  unsigned short ownerl, currs, rs;
+  short ownedx, freex, savedx;
   unsigned short modals;
 
-  /* only bit 11 of crs in modals is important for register set */
+#define NUREGS 8
 
-  TRACE(T_PX, "ors: current modals = %o, register set = %d\n", crs[MODALS], (crs[MODALS] & 0340)>>5);
-  modals = (crs[MODALS] ^ 040) | 0100;
-  rsnum = 2+((modals & 040) >> 5);
-  TRACE(T_PX, "ors: new modals = %o, register set = %d\n", modals, rsnum);
-  crs = regs.rs16[rsnum];
-  crsl = (void *)crs;
+  currs = (crs[MODALS] & 0340) >> 5;
+  TRACE(T_PX, "ors: currs = %d, modals = %o\n", currs, crs[MODALS]);
+#if 0
+
+  /* this is the code for handling more than 2 register sets.  It is
+     "smarter" than the Prime u-code, so probably doesn't pass DIAG
+     tests.  I haven't tested whether the extra overhead of keeping a
+     LRU queue for register sets is worth it vs. the simpler Prime
+     way.  One problem is that different models had different #'s of
+     registers, and the emulator needs a table of these values.
+     Either that, or it probably could initialize all register sets
+     using the first (user) register set as a template when process
+     exchange is enabled.  (Primos only initializes the number of
+     user register sets that a particular model actually has.) */
+
+  ownedx = freex = savedx = -1;
+  for (rx = NUREGS-1; rx >= 0; rx--) {   /* search LRU first */
+    rs = regq[rx];
+    TRACE(T_PX, "ors: check rs %d: owner=%o/%o, saved=%d\n", rs, regs.sym.userregs[rs][21]>>16, regs.sym.userregs[rs][21] & 0xFFFF, regs.sym.userregs[rs][20] & 1);
+    ownerl = regs.sym.userregs[rs][21] & 0xFFFF;          /* OWNERH/OWNERL */
+
+    /* NOTE: could stick breaks after a rs is found, except that for
+       debug, I wanted to make sure a process never owns 2 register sets */
+
+    if (ownerl == pcbw) {
+      if (ownedx >= 0) 
+	fatal("Process owns more than 1 register set!");
+      ownedx = rx;
+    } else if (ownerl == 0)
+      freex = rx;
+    else if (savedx < 0 && regs.sym.userregs[rs][20] & 1) /* KEYS/MODALS */
+      savedx = rx;
+  }
+  if (ownedx >= 0) {
+    rx = ownedx;
+    TRACE(T_PX, "ors: using owned reg set %d\n", regq[rx]);
+  } else if (freex >= 0) {
+    rx = freex;
+    TRACE(T_PX, "ors: using free reg set %d\n", regq[rx]);
+  } else if (savedx >= 0) {
+    rx = savedx;
+    TRACE(T_PX, "ors: using saved reg set %d\n", regq[rx]);
+  } else {
+    rx = NUREGS-1;                           /* least recently used */
+    TRACE(T_PX, "ors: no reg set found; using %d\n", regq[rx]);
+  }
+  rs = regq[rx];
+  if (rs > NUREGS)
+    fatal("ors: rs chosen is too big");
+  modals = (crs[MODALS] & ~0340) | (rs << 5);
+
+  /* put the register set selected at the front of the queue */
+
+  for (i=rx; i>0; i--)
+    regq[i] = regq[i-1];
+  regq[0] = rs;
+#else
+  modals = crs[MODALS] ^ 040;
+  rs = (modals & 0340) >> 5;
+#endif
+  crsl = regs.sym.userregs[rs];
+  crs = (void *)crsl;
   crs[MODALS] = modals;
-  TRACE(T_PX, "ors: new register set = %d, modals = %o\n", (crs[MODALS] & 0340)>>5, crs[MODALS]);
+  TRACE(T_PX, "ors: rs = %d, reg set in modals = %d, modals = %o\n", rs, (crs[MODALS] & 0340)>>5, crs[MODALS]);
+#if 0
+  if (rs > 1)
+    savetraceflags = ~0;
+#endif
 }
 
 
@@ -2362,8 +2438,10 @@ dispatcher() {
   pcbw = pcbp & 0xFFFF;
   TRACE(T_PX, "disp: process %o/%o selected\n", pcbp>>16, pcbw);
 
-#if 1
-  /* debug tests to verify ready list structure */
+#if 0
+  /* debug tests to verify ready list structure
+     NOTE: this test causes some DIAGS to fail, so has been disabled */
+
   rlp = MAKEVA(crs[OWNERH], regs.sym.pla);
   rlbol = get16r0(rlp);
   if (rlbol != pcbw) {
@@ -2372,7 +2450,8 @@ dispatcher() {
   }
 #if 0
   /* NOTE: if a running process has its priority changed (in the pcb), this
-     test fails */
+     test fails, so it has been disabled  */
+
   if (get16r0(pcbp+PCBLEV) != regs.sym.pla) {
     printf("disp: dispatched process level=%o, != pla=%o\n", get16r0(pcbp+PCBLEV), regs.sym.pla);
     fatal(NULL);
@@ -2380,15 +2459,20 @@ dispatcher() {
 #endif
 #endif
   
-  /* pcbp now points to the process we're going to run.  By
-     definition, this process should not be on any wait lists,
-     so pcb.waitlist(seg) should be zero.  Check it */
+  /* pcbp now points to the process we're going to run (pcbw is the
+     16-bit word number that will go in OWNERL).  By definition, this
+     process should not be on any wait lists, so pcb.waitlist(seg)
+     should be zero.  Check it */
+
+#if 1
+  /* NOTE: CPU.PXT1 can fail with this enabled */
 
   utempa = get16r0(pcbp+PCBWAIT);
   if (utempa != 0) {
     printf("disp: pcb %o/%o selected, but wait segno = %o\n", pcbp>>16, pcbp&0xFFFF, utempa);
     fatal(NULL);
   }
+#endif
 
   /* save RP in current register set before possibly switching */
 
@@ -2440,19 +2524,18 @@ dispatcher() {
 
 #if 1
   if (crs[OWNERL] != pcbw && crs[OWNERL] != 0)
-    ors();
+    ors(pcbw);
 #endif
 
   /* If the selected register set is owned and hasn't been saved, save
      it before taking it */
 
   if (crs[OWNERL] == pcbw) {
-    TRACE(T_PX, "disp: register set already owned by %o - no save\n", crs[OWNERL]);
+    TRACE(T_PX, "disp: reg set already owned by %o: no save or load\n", crs[OWNERL]);
     /* NOTE: call newkeys to make sure amask gets set correctly!  Otherwise, 32R mode programs
        are flaky */
     newkeys(crs[KEYS]);
   } else {
-    TRACE(T_PX, "disp: saving registers owned by %o\n", crs[OWNERL]);
     pxregsave(0);
     pxregload(pcbp);
   }
@@ -2488,18 +2571,33 @@ unready (ea_t waitlist, unsigned short newlink) {
   unsigned int rl;
   ea_t rlp, pcbp;
 
+#if 0
+  /* this fails with rev 23.4:
+Fatal error: instruction #86286965 at 6/15274 UNLOAD+'120: 315 1400
+owner=71600 DUMPCB, keys=14000, modals=37
+unready: pcba mismatch
+  */
   if (regs.sym.pcba != crs[OWNERL])
     fatal("unready: pcba mismatch");
+#endif
 
   pcbp = *(ea_t *)(crs+OWNER);
   rlp = MAKEVA(crs[OWNERH], regs.sym.pla);
   rl = get32r0(rlp);
   bol = rl >> 16;
   eol = rl & 0xFFFF;
+#if 0
+  /* this fails with rev 23.4:
+rlp=240/136, bol=100500, eol=100500, pcbp=240/71600, pla=136, pcba=100500
+Fatal error: instruction #86212270 at 6/15274 UNLOAD+'120: 315 1400
+owner=71600 DUMPCB, keys=14000, modals=77
+unready: I'm not first on the ready list
+  */
   if (bol != (pcbp & 0xFFFF)) {
     printf("rlp=%o/%o, bol=%o, eol=%o, pcbp=%o/%o, pla=%o, pcba=%o\n", rlp>>16, rlp&0xFFFF, bol, eol, pcbp>>16, pcbp&0xFFFF, regs.sym.pla, regs.sym.pcba);
     fatal("unready: I'm not first on the ready list");
   }
+#endif
   if (bol == eol) {
     bol = 0;
     eol = 0;
@@ -2600,10 +2698,17 @@ pwait() {
       fatal("WAIT: count > 1 but bol == 0");
     if (regs.sym.pcba == 0)
       fatal("WAIT: pcba is zero");
+#if 0
+    /* enabling this causes rev 23.4 to fail:
+WAIT: pcba=100500 != ownerl=71600
+Fatal error: instruction #86137885 at 6/15274 UNLOAD+'120: 315 1400
+owner=71600 DUMPCB, keys=14000, modals=77           */
+
     if (regs.sym.pcba != crs[OWNERL]) {
       printf("WAIT: pcba=%o != ownerl=%o\n", regs.sym.pcba, crs[OWNERL]);
       fatal(NULL);
     }
+#endif
     mylev = get16r0(*(ea_t *)(crs+OWNER));
 
     if (bol != 0) {
@@ -2629,7 +2734,7 @@ pwait() {
       }
       put16r0(crs[OWNERL], prevpcbp+PCBLINK);
       put16r0(*(unsigned short *)&count, ea);    /* update count */
-      TRACE(T_PX, " new count=%d, new link for pcb %o=%o, bol=%o\n", prevpcbp&0xffff, crs[OWNERL], bol);
+      TRACE(T_PX, " new count=%d, new link for pcb %o=%o, bol=%o\n", count, prevpcbp&0xffff, crs[OWNERL], bol);
     }
     unready(ea, bol);
     dispatcher();
@@ -2732,11 +2837,11 @@ lpsw() {
   m = get16(INCVA(ea,3));
   if ((m & 0340) != (crs[MODALS] & 0340)) {
     TRACE(T_PX, "LPSW: WARNING: changed current register set: current modals=%o, new modals=%o\n", crs[MODALS], m);
-#if 0
+#if 1
     /* not sure about doing this... */
-    fprintf(stderr, "WARNING: LPSW changed current register set: current modals=%o, new modals=%o\n", crs[MODALS], m);
-    crs = regs.rs16[2+((m & 040) >> 5)];
-    crsl = (void *)crs;
+    printf("WARNING: LPSW changed current register set: current modals=%o, new modals=%o\n", crs[MODALS], m);
+    crsl = regs.sym.userregs[(m & 0340) >> 5];
+    crs = (void *)crsl;
 #endif
   }
 
@@ -2752,6 +2857,9 @@ lpsw() {
     if (domemdump) dumpsegs();
     //traceflags = ~TB_MAP;
   }
+#if 0
+  savetraceflags |= TB_FLOW;    /****/
+#endif
   if (crs[MODALS] & 010) {
     TRACE(T_PX, "Process exchange enabled:\n");
     TRACE(T_PX, "LPSW: PLA=%o, PCBA=%o, PLB=%o, PCBB=%o\n", regs.sym.pla, regs.sym.pcba, regs.sym.plb, regs.sym.pcbb);
@@ -2766,7 +2874,6 @@ lpsw() {
 	utempa = dumppcb(utempa);
     }
 #endif
-    //traceflags = ~TB_MAP;
     if (crs[KEYS] & 2) {
       TRACE(T_PX, "LPSW: before disp, RPH=%o, RPL=%o, keys=%o, modals=%o\n", RPH, RPL, crs[KEYS], crs[MODALS]);
       dispatcher();
@@ -2776,8 +2883,8 @@ lpsw() {
   }
 #if 0
   /* XXX: hack to disable serial number checking if a cpuid > 4 is used.
-     Look for ERA/ANA sequence after illegal shift instruction (SSSN),
-     set the ANA operand to zero. */
+     This code is very rev and/or build dependent; this is for 23.4.
+     Look for ERA/ANA sequence after SSSN, set the ANA operand to zero. */
 
   ea = MAKEVA(014,040747);
   printf("Current value of 14/40747 is: %o\n", get16(ea));
@@ -2799,10 +2906,14 @@ sssn() {
   printf("SSSN @ %o/%o\n", RPH, RPL);
   /* savetraceflags = traceflags = ~TB_MAP;    /*****/
   TRACE(T_FLOW, " SSSN\n");
+#if 1
   ea = *(unsigned int *)(crs+XB);
   for (i=0; i<16; i++) {
     put16(0, ea+i);
   }
+#else
+  fault(UIIFAULT, RPL, RP);
+#endif
 }
 
 
@@ -3216,7 +3327,9 @@ tch (unsigned short *un) {
   }
 }
 
-int add32(unsigned int *a1, unsigned int a2, unsigned int a3) {
+/* NOTE: ea is only used to set faddr should an arithmentic exception occur */
+
+int add32(unsigned int *a1, unsigned int a2, unsigned int a3, ea_t ea) {
 
   unsigned int uorig, uresult;
   unsigned long long utemp;
@@ -3238,13 +3351,13 @@ int add32(unsigned int *a1, unsigned int a2, unsigned int a3) {
     if (*(int *)&uresult >= 0)
       lt = 0200;
     crs[KEYS] = crs[KEYS] | link | eq | lt; /* update now: might fault */
-    mathexception('i', FC_INT_OFLOW, 0);
+    mathexception('i', FC_INT_OFLOW, ea);
   } else if (*(int *)&uresult < 0)
     lt = 0200;
   crs[KEYS] = crs[KEYS] | link | eq | lt;
 }
 
-int add16(unsigned short *a1, unsigned short a2, unsigned short a3) {
+int add16(unsigned short *a1, unsigned short a2, unsigned short a3, ea_t ea) {
 
   unsigned short uorig, uresult;
   unsigned int utemp;
@@ -3266,7 +3379,7 @@ int add16(unsigned short *a1, unsigned short a2, unsigned short a3) {
     if (*(int *)&uresult >= 0)
       lt = 0200;
     crs[KEYS] = crs[KEYS] | link | eq | lt; /* update now: might fault */
-    mathexception('i', FC_INT_OFLOW, 0);
+    mathexception('i', FC_INT_OFLOW, ea);
   } else if (*(int *)&uresult < 0)
     lt = 0200;
   crs[KEYS] = crs[KEYS] | link | eq | lt;
@@ -3275,12 +3388,17 @@ int add16(unsigned short *a1, unsigned short a2, unsigned short a3) {
 adlr(int dr) {
 
   if (crs[KEYS] & 020000)
-    add32(crsl+dr, 1, 0);
+    add32(crsl+dr, 1, 0, 0);
   else {
     crs[KEYS] &= ~0120300;                 /* clear C, L, LT, EQ */
     SETCC_32(crsl[dr]);
   }
 }
+
+/* NOTE: PMA manuals say the range for absolute RF addressing is
+   0-'377, but this does not allow addressing a machine with 8 user
+   register sets.  The range should probably be an emulator config
+   variable, based on the cpuid */
 
 int ldar(ea_t ea) {
   unsigned short utempa;
@@ -3288,7 +3406,12 @@ int ldar(ea_t ea) {
 
   if (ea & 040000) {       /* absolute RF addressing */
     RESTRICT();
-    ea &= 0377;
+
+    if ((ea & 0777) > 0477) {
+      printf("em: LDLR ea '%o is out of range\n", ea);
+      fatal(NULL);
+    }
+    ea &= 0777;
     if (ea == 020)
       result = 1;
     else if (ea == 024)
@@ -3308,7 +3431,11 @@ star(unsigned int val32, ea_t ea) {
 
   if (ea & 040000) {       /* absolute RF addressing */
     RESTRICT();
-    regs.u32[ea & 0377] = val32;
+    if ((ea & 0777) > 0477) {
+      printf("em: STLR ea '%o is out of range; check -cpuid\n", ea);
+      fatal(NULL);
+    }
+    regs.u32[ea & 0777] = val32;
   } else {
     ea &= 037;
     if (ea > 017) RESTRICT();
@@ -3378,28 +3505,49 @@ main (int argc, char **argv) {
 
   /* master clear:
      - clear all registers
-     - register set is 2
+     - user register set is 0
+     - modals:
+     -- interrupts inhibited
+     -- standard interrupt mode
+     -- user register set is 0
+     -- non-mapped I/O
+     -- process exchange disabled
+     -- segmentation disabled
+     -- machine checks disabled
+     - keys:
+     -- C, L, LT, EQ clear
+     -- single precision
+     -- 16S mode
+     -- take fault on FP exception
+     -- no fault on integer or decimal exception
+     -- characters have high bit on
+     -- FP rounding disabled
+     -- not in dispatcher
+     -- register set is not saved
      - set P to '1000
-     - 16S mode, single precision
-     - interrupts and machine checks inhibited
-     - standard interrupt mode
      - all stlb entries are invalid
-     - clear 32K words of memory
+     - all iotlb entries are invalid
+     - clear 64K words of memory
   */
 
   for (i=0; i < 32*REGSETS; i++)
     regs.u32[i] = 0;
-  crs = (void *)regs.rs[2];           /* boot w/register set 3 */
+
+  crs = (void *)regs.sym.userregs[0]; /* first user register set */
   crsl = (void *)crs;
-  /* NOTE: interrupts should be disabled (0100000 in modals) */
-  crs[MODALS] = 0100;
+  
+  crs[MODALS] = 0;                    /* interrupts inhibited */
   newkeys(0);
-  RPL = 01000;
+  RP = 01000;
   for (i=0; i < STLBENTS; i++)
     stlb[i].valid = 0;
   for (i=0; i < IOTLBENTS; i++)
     iotlb[i].valid = 0;
+#if 0
   bzero(mem, sizeof(mem));
+#else
+  bzero(mem, 64*1024*2);              /* zero first 64K words */
+#endif
 
   verbose = 0;
   domemdump = 0;
@@ -3418,7 +3566,7 @@ main (int argc, char **argv) {
       verbose = 2;
     else if (strcmp(argv[i],"-v") == 0)
       verbose = 1;
-    else if (strcmp(argv[i],"-map") == 0) {
+    else if ((strcmp(argv[i],"-map") == 0) || (strcmp(argv[i],"-maps") == 0)) {
       while (i+1 < argc && argv[i+1][0] != '-')
 	readloadmap(argv[++i]);
     } else if (strcmp(argv[i],"-memdump") == 0)
@@ -3504,8 +3652,10 @@ main (int argc, char **argv) {
 	    traceprocs[numtraceprocs].ecb = 0;
 	    numtraceprocs++;
 	  }
-	} else
+	} else {
 	  fprintf(stderr,"Unrecognized trace flag: %s\n", argv[i]);
+	  printf("Unrecognized trace flag: %s\n", argv[i]);
+	}
       }
     else if (strcmp(argv[i],"-boot") == 0) {
       boot = 1;
@@ -3517,8 +3667,10 @@ main (int argc, char **argv) {
 	  bootarg = argv[i];
       }
 
-    } else
+    } else {
       fprintf(stderr,"Unrecognized argument: %s\n", argv[i]);
+      printf("Unrecognized argument: %s\n", argv[i]);
+    }
   }
 
   /* finish setting up tracing after all options are read, ie, maps */
@@ -3528,6 +3680,7 @@ main (int argc, char **argv) {
   else
     TRACEA("Tracing enabled for all users\n");
   savetraceflags = traceflags;
+  TRACEA("Trace flags = 04x%x\n", savetraceflags);
   for (i=0; i<numtraceprocs; i++) {
     for (j=0; j<numsyms; j++) {
       if (strcasecmp(mapsym[j].symname, traceprocs[i].name) == 0 && mapsym[j].symtype == 'e') {
@@ -3691,7 +3844,12 @@ For disk boots, the last 3 digits can be:\n\
   while (1) {
 
 #if 0
-      /* NOTE: doing something like this causes Primos to do a controlled
+    if (instcount > 10300000)
+      savetraceflags = ~0;
+#endif
+
+#if 0
+  /* NOTE: doing something like this causes Primos to do a controlled
 	 shutdown, flushing disk buffers, etc. */
       RPH = 07777;
 #endif
@@ -3814,7 +3972,6 @@ For disk boots, the last 3 digits can be:\n\
 	}
       }
       crs[MODALS] &= 077777;   /* inhibit interrupts */
-      //intvec = -1;
     }
     if (inhcount)
       inhcount--;
@@ -4073,10 +4230,12 @@ stfa:
 	  if (numtraceprocs > 0 && TRACEUSER)
 	    for (i=0; i<numtraceprocs; i++)
 	      if (*(int *)(crs+SB) == traceprocs[i].sb) {
-		printf("Disabled trace for %s at sb '%o/%o\n", traceprocs[i].name, crs[SBH], crs[SBL]);
-		savetraceflags = 0;
 		traceprocs[i].sb = -1;
 		fflush(tracefile);
+		if (traceprocs[i].oneshot) {
+		  printf("Disabled trace for %s at sb '%o/%o\n", traceprocs[i].name, crs[SBH], crs[SBL]);
+		  savetraceflags = 0;
+		}
 		break;
 	      }
 	  continue;
@@ -4319,8 +4478,8 @@ stfa:
 	  if (crsl[FLR1] & 0x8000)
 	    zea2 |= EXTMASK32;
 	  zch2 = crs[A];
-	  TRACE(T_INST, " ea=%o/%o, len=%d, fill=%o (%c)\n", zea2>>16, zea2&0xffff, GETFLR(1), zch2, zch2&0x7f);
-	  //printf("ZFIL: ea=%o/%o, len=%d\n", zea2>>16, zea2&0xffff, GETFLR(1));
+	  TRACE(T_INST, " ea=%o/%o, len=%d, fill=%o (%c)\n", zea2>>16, zea2&0xffff, zlen2, zch2, zch2&0x7f);
+	  //printf("ZFIL: ea=%o/%o, len=%d\n", zea2>>16, zea2&0xffff, zlen2);
 	  zclen2 = 0;
 	  while (zlen2) {
 	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch2);
@@ -4341,7 +4500,7 @@ stfa:
 	  zea2 = crsl[FAR1];
 	  if (crsl[FLR1] & 0x8000)
 	    zea2 |= EXTMASK32;
-	  TRACE(T_INST, " ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, GETFLR(0), zea2>>16, zea2&0xffff, GETFLR(1));
+	  TRACE(T_INST, " ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
 	  zresult = 0100;                /* assume equal */
 	  zclen1 = 0;
 	  zclen2 = 0;
@@ -4365,25 +4524,116 @@ stfa:
 	  }
 	  crs[KEYS] = (crs[KEYS] & ~0300) | zresult;
 	  continue;
+
+	case 001110:
+	  TRACE(T_FLOW, " ZTRN\n");
+	  zlen1 = GETFLR(1);
+	  zlen2 = zlen1;
+	  utempl = zlen1;
+	  zea1 = crsl[FAR0];
+	  if (crsl[FLR0] & 0x8000)
+	    zea1 |= EXTMASK32;
+	  zea2 = crsl[FAR1];
+	  if (crsl[FLR1] & 0x8000)
+	    zea2 |= EXTMASK32;
+	  TRACE(T_INST, " ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
+	  zclen1 = 0;
+	  zclen2 = 0;
+	  ea = *(ea_t *)(crs+XB);
+	  while (zlen2) {
+	    ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+	    utempa = get16(INCVA(ea,zch1/2));
+	    if (zch1 & 1)
+	      zch2 = utempa & 0xFF;
+	    else
+	      zch2 = utempa >> 8;
+	    TRACE(T_INST, " zch1=%o (%c), zch2=%o (%c)\n", zch1, zch1&0x7f, zch2, zch2&0x7f);
+	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch2);
+	  }
+	  PUTFLR(1, 0);
+	  arfa(0, utempl);
+	  arfa(1, utempl);
+	  continue;
+
+	case 001111:
+	  TRACE(T_FLOW, " ZED\n");
+	  zlen1 = GETFLR(0);
+	  zlen2 = 128*1024;      /* XXX: not sure about max length of result */
+	  zea1 = crsl[FAR0];
+	  if (crsl[FLR0] & 0x8000)
+	    zea1 |= EXTMASK32;
+	  zea2 = crsl[FAR1];
+	  if (crsl[FLR1] & 0x8000)
+	    zea2 |= EXTMASK32;
+	  TRACE(T_INST, " ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
+	  if (crs[KEYS] & 020)
+	    zspace = 040;
+	  else
+	    zspace = 0240;
+	  zclen1 = 0;
+	  zclen2 = 0;
+	  ea = *(ea_t *)(crs+XB);
+	  for (i=0; i < 32767; i++) {     /* do edit pgms have a size limit? */
+	    utempa = get16(INCVA(ea, i));
+	    m = utempa & 0xFF;
+	    switch ((utempa >> 8) & 3) {
+	    case 0:  /* copy M chars */
+	      while (m && zlen1) {
+		ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+		ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+		m--;
+	      }
+	      while (m) {
+		ZPUTC(zea2, zlen2, zcp2, zclen2, zspace);
+		m--;
+	      }
+	      break;
+
+	    case 1:  /* insert character M */
+	      ZPUTC(zea2, zlen2, zcp2, zclen2, m);
+	      break;
+
+	    case 2:  /* skip M characters */
+	      if (m >= zlen1)
+		zlen1 = 0;
+	      else while (m) {
+		ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+		m--;
+	      }
+	      break;
+		
+	    case 3:  /* insert M blanks */
+	      while (m) {
+		ZPUTC(zea2, zlen2, zcp2, zclen2, zspace);
+		m--;
+	      }
+	      break;
+
+	    default:
+	      fatal("ZED em bug");
+	    }
+	    if (utempa & 0x8000)
+	      break;
+	  }
+	  continue;
 #endif
 
-	/* 001100 = XAD
-	   001101 = XMV
-	   001102 = XCM
-	   001104 = XMP
-	   001107 = XDV
+	/* 001100 = XAD*
+	   001101 = XMV*
+	   001102 = XCM*
+	   001104 = XMP*
+	   001107 = XDV*
 	   001110 = ZTRN
 	   001111 = ZED
-	   001112 = XED
+	   001112 = XED*
 	   001114 = ZMV
 	   001115 = ZMVD
 	   001116 = ZFIL
 	   001117 = ZCM
-	   001145 = XBTD
-	   001146 = XDTB
-	*/
+	   001145 = XBTD*
+	   001146 = XDTB*
 
-	/* OS/restricted instructions */
+	   * = These are not yet implemented */
 
 	case 000510:
 	  TRACE(T_FLOW, " STTM\n", inst);
@@ -4395,11 +4645,17 @@ stfa:
 	  put16(crs[TIMERL], INCVA(ea,2));  /* and live timer residue */
 	  continue;
 
+	/* OS/restricted instructions */
+
 	case 000511:
 	  TRACE(T_FLOW, " RTS\n", inst);
 	  RESTRICT();
-	  //traceflags = ~TB_MAP;
-	  fault(UIIFAULT, RPL, RP);
+	  tempa = crs[TIMERH];
+	  templ = tempa - *(short *)(crs+A);
+	  ea = *(ea_t *)(crs+OWNER);
+	  templ += get32r0(ea+PCBPET);
+	  put32r0(templ, ea+PCBPET);
+	  crs[TIMERH] = crs[A];
 	  continue;
 
 	case 000315:
@@ -4428,9 +4684,9 @@ stfa:
 	  *(ea_t *)(crs+L) = stex(*(unsigned int *)(crs+L));
 	  continue;
 
-	/* NOTE: L contains target virtual address.  How does 
-	   LIOT use the target virtual address to "help invalidate
-	   the cache"? */
+	/* NOTE: L contains target virtual address, which is used to
+	   determine which pages of cache to invalidate.  Since this
+	   emulator does not have a memory cache, L is unused. */
 
 	case 000044:
 	  TRACE(T_FLOW, " LIOT\n");
@@ -4507,7 +4763,7 @@ stfa:
 	case 001700:
 	case 001701:
 	  TRACE(T_FLOW, " DBGILL\n", inst);
-	  fault(ILLINSTFAULT, RPL, 0);
+	  fault(ILLINSTFAULT, RPL, RP);
 	  fatal(NULL);
 
 	/* JW: I think 1702 is an invalid opcode that Prime uses as
@@ -4520,8 +4776,11 @@ stfa:
 
 	case 001702:
 	  TRACE(T_FLOW, " 1702?\n", inst);
-	  fatal("Primos software assertion failure");
-	  continue;
+	  if (RP & RINGMASK32)
+	    fault(ILLINSTFAULT, RPL, RP);
+	  else
+	    fatal("Primos software assertion failure");
+	  fatal(NULL);  /* just in case of a bogus return (coding error) */
 
 	case 000601:
 	  TRACE(T_FLOW, " IRTN\n", inst);
@@ -4588,6 +4847,10 @@ irtn:
 
 	case 001010:                 /* E32I */
 	  TRACE(T_FLOW, " E32I\n");
+
+	  /* NOTE: this fault needs to occur on older models even in
+	     Ring 0, so the RESTRICT() macro can't be used here */
+
 	  if (cpuid < 4)
 	    fault(RESTRICTFAULT, 0, 0);
 	  else
@@ -4733,13 +4996,24 @@ irtn:
 
 	case 000003:
 	  TRACE(T_FLOW, " gen 3?\n");
-	  TRACEA("#%d: %o/%o: Generic instruction 3?\n", instcount, RPH, RPL);
 #if 0
+	  /* After looking at the simh Honeywell 315/516 simulator, I decided that
+	     instruction 3 must be some kind of no-op on the Prime.  I did verify
+	     that it is a legal instruction and doesn't generate a UII fault, even
+	     though it is not documented anywhere that I could find. */
+
+	  TRACEA("#%d: %o/%o: Generic instruction 3?\n", instcount, RPH, RPL);
 	  savetraceflags = ~0;
 #endif
 	  continue;
 
 	default:
+	  if (001100 <= inst && inst <= 001146) {
+	    TRACE(T_FLOW, " X/Z UII %o\n", inst);
+	    fault(UIIFAULT, RPL, RP);
+	    continue;
+	  }
+
 	  for (i=0; i<GEN0TABSIZE; i++) {
 	    if (inst == gen0tab[i]) {
 	      TRACE(T_FLOW, " %s\n", gen0nam[i]);
@@ -4749,17 +5023,10 @@ irtn:
 	  if (i < GEN0TABSIZE)
 	    continue;
 
-	  if (001100 <= inst && inst <= 001146) {
-	    //savetraceflags = ~TB_MAP;
-	    TRACE(T_FLOW, " X/Z UII %o\n", inst);
-	    fault(UIIFAULT, RPL, RP);
-	    continue;
-	  }
-
 	  TRACEA(" unrecognized generic class 0 instruction!\n");
 	  printf("#%d: %o/%o: Unrecognized generic class 0 instruction '%o!\n", instcount, RPH, RPL, inst);
 	  //traceflags = ~TB_MAP;
-	  fault(UIIFAULT, RPL, 0);
+	  fault(UIIFAULT, RPL, RP);
 	  fatal(NULL);
 	}
       }
@@ -5015,12 +5282,12 @@ irtn:
 	case 0141206:
 	  TRACE(T_FLOW, " A1A\n");
 a1a:
-	  add16(crs+A, 1, 0);
+	  add16(crs+A, 1, 0, 0);
 	  continue;
 
 	case 0140304:
 	  TRACE(T_FLOW, " A2A\n");
-	  add16(crs+A, 2, 0);
+	  add16(crs+A, 2, 0, 0);
 	  continue;
 
 	case 0141216:
@@ -5033,12 +5300,12 @@ a1a:
 
 	case 0140110:
 	  TRACE(T_FLOW, " S1A\n");
-	  add16(crs+A, 0xFFFF, 0);
+	  add16(crs+A, 0xFFFF, 0, 0);
 	  continue;
 
 	case 0140310:
 	  TRACE(T_FLOW, " S2A\n");
-	  add16(crs+A, 0xFFFE, 0);
+	  add16(crs+A, 0xFFFE, 0, 0);
 	  continue;
 
 	case 0141050:
@@ -5617,9 +5884,9 @@ a1a:
 	     whether an instruction is illegal or unimplemented */
 
 	  if (inst == 0141700)
-	    fault(ILLINSTFAULT, RPL, 0);
+	    fault(ILLINSTFAULT, RPL, RP);
 	  else
-	    fault(UIIFAULT, RPL, 0);
+	    fault(UIIFAULT, RPL, RP);
 	  fatal(NULL);
 	}	
       }
@@ -5929,7 +6196,7 @@ keys = 14200, modals=100177
 
     if ((crs[KEYS] & 0016000) != 0010000) goto nonimode;
 #ifndef OSX
-    fault(ILLINSTFAULT, RPL, 0);
+    fault(ILLINSTFAULT, RPL, RP);
 #endif
 
     /* branch and register generic instructions don't have ea, so they
@@ -6291,22 +6558,22 @@ keys = 14200, modals=100177
 
       case 0130:
 	TRACE(T_FLOW, " DH1\n");
-	add16(crs+dr*2, 0xFFFF, 0);
+	add16(crs+dr*2, 0xFFFF, 0, 0);
 	break;
 
       case 0131:
 	TRACE(T_FLOW, " DH2\n");
-	add16(crs+dr*2, 0xFFFE, 0);
+	add16(crs+dr*2, 0xFFFE, 0, 0);
 	break;
 
       case 0124:
 	TRACE(T_FLOW, " DR1\n");
-	add32(crsl+dr, 0xFFFFFFFF, 0);
+	add32(crsl+dr, 0xFFFFFFFF, 0, 0);
 	break;
 
       case 0125:
 	TRACE(T_FLOW, " DR2\n");
-	add32(crsl+dr, 0xFFFFFFFE, 0);
+	add32(crsl+dr, 0xFFFFFFFE, 0, 0);
 	break;
 
       case 0100:
@@ -6389,12 +6656,12 @@ keys = 14200, modals=100177
 
       case 0126:
 	TRACE(T_FLOW, " IH1\n");
-	add16(crs+dr*2, 1, 0);
+	add16(crs+dr*2, 1, 0, 0);
 	break;
 
       case 0127:
 	TRACE(T_FLOW, " IH2\n");
-	add16(crs+dr*2, 2, 0);
+	add16(crs+dr*2, 2, 0, 0);
 	break;
 
       case 0070:
@@ -6424,12 +6691,12 @@ keys = 14200, modals=100177
 
       case 0122:
 	TRACE(T_FLOW, " IR1\n");
-	add32(crsl+dr, 1, 0);
+	add32(crsl+dr, 1, 0, 0);
 	break;
 
       case 0123:
 	TRACE(T_FLOW, " IR2\n");
-	add32(crsl+dr, 2, 0);
+	add32(crsl+dr, 2, 0, 0);
 	break;
 
       case 0064:
@@ -6484,7 +6751,7 @@ keys = 14200, modals=100177
 
       case 0003:
 	TRACE(T_FLOW, " LEQ\n");
-	SETCC_32(crs[dr]);
+	SETCC_32(crsl[dr]);
 	crs[dr*2] = LCEQ;
 	break;
 
@@ -6835,7 +7102,7 @@ keys = 14200, modals=100177
 
       case 0175:
 	TRACE(T_FLOW, " TRFL 1\n");
-	PUTFLR(0, crsl[dr]);
+	PUTFLR(1, crsl[dr]);
 	break;
 
 
@@ -6848,7 +7115,7 @@ keys = 14200, modals=100177
 
       default:
 	warn("IXX 030");
-	fault(ILLINSTFAULT, RPL, 0);
+	fault(ILLINSTFAULT, RPL, RP);
       }
       continue;
     }
@@ -6859,7 +7126,7 @@ keys = 14200, modals=100177
 
     case 000:
       warn("I-mode generic class 0?");
-      fault(ILLINSTFAULT, RPL, 0);
+      fault(ILLINSTFAULT, RPL, RP);
 
     case 001:
       TRACE(T_FLOW, " L\n");
@@ -6875,7 +7142,7 @@ keys = 14200, modals=100177
 	utempl = immu32;
       else
         utempl = get32(ea);
-      add32(crsl+dr, utempl, 0);
+      add32(crsl+dr, utempl, 0, ea);
       continue;
 
     case 003:
@@ -6919,30 +7186,36 @@ keys = 14200, modals=100177
 
     case 006:  /* Special MR FP format */
       /* DFC, DFL, FC, FL */
-      warn("IXX 006");
       switch (dr) {
       case 0:
       case 2:
 	dr &= 2;
 	TRACE(T_INST, " FL\n");
+	warn("IXX 006 FL");
 	break;
 
       case 1:
       case 3:
 	dr &= 2;
 	TRACE(T_INST, " DFL\n");
+	if (*(int *)&ea < 0)
+	  *(double *)(crsl+FAC0+dr) = *(double *)&immu64;
+	else
+	  *(double *)(crsl+FAC0+dr) = get64(ea);
 	break;
 
       case 4:
       case 6:
 	dr &= 2;
 	TRACE(T_INST, " FC\n");
+	warn("IXX 006 FC");
 	break;
 
       case 5:
       case 7:
 	dr &= 2;
 	TRACE(T_INST, " DFC\n");
+	warn("IXX 006 DFC");
 	break;
 
       default:
@@ -6952,7 +7225,7 @@ keys = 14200, modals=100177
 
     case 007:
       warn("I-mode opcode 007?");
-      fault(ILLINSTFAULT, RPL, 0);
+      fault(ILLINSTFAULT, RPL, RP);
 
     case 010:                            /* register generic branch */
       fatal("I-mode RGBR?");
@@ -6972,7 +7245,7 @@ keys = 14200, modals=100177
 	utempa = (immu32 >> 16);
       else
         utempa = get16(ea);
-      add16(crs+dr*2, utempa, 0);
+      add16(crs+dr*2, utempa, 0, ea);
       continue;
 
     case 013:
@@ -7019,26 +7292,60 @@ keys = 14200, modals=100177
       continue;
 
     case 016:  /* Special MR FP format */
-      /* DFA, DFST, FA, FST */
-      warn("IXX 016");
+      /* FST, DFST, FA, DFA */
+      switch (dr) {
+      case 0:
+      case 2:
+	dr &= 2;
+	TRACE(T_INST, " FST\n");
+	warn("IXX 016 FST");
+	break;
+
+      case 1:
+      case 3:
+	dr &= 2;
+	TRACE(T_INST, " DFST\n");
+	if (*(int *)&ea >= 0)
+	  put64(*(double *)(crsl+FAC0+dr), ea);
+	else {
+	  warn("I-mode immediate DFST?");
+	  fault(ILLINSTFAULT, RPL, RP);
+	}
+	break;
+
+      case 4:
+      case 6:
+	dr &= 2;
+	TRACE(T_INST, " FA\n");
+	warn("IXX 016 FA");
+	break;
+
+      case 5:
+      case 7:
+	dr &= 2;
+	TRACE(T_INST, " DFA\n");
+	warn("IXX 016 DFA");
+	break;
+
+      default:
+	fatal("I-mode 016 switch?");
+      }
       continue;
 
     case 017:
       warn("I-mode opcode 017?");
-      fault(ILLINSTFAULT, RPL, 0);
+      fault(ILLINSTFAULT, RPL, RP);
 
     case 020:
       warn("I-mode generic class 1?");
-      fault(ILLINSTFAULT, RPL, 0);
+      fault(ILLINSTFAULT, RPL, RP);
 
     case 021:
       TRACE(T_FLOW, " ST\n");
-      if (*(int *)&ea >= 0)
+      if (*(int *)&ea < 0)
+	crsl[(inst >> 2) & 7] = crsl[dr];
+      else
 	put32(crsl[dr],ea);
-      else {
-	warn("I-mode immediate ST?");
-	fault(ILLINSTFAULT, RPL, 0);
-      }
       continue;
 
     case 022:
@@ -7047,7 +7354,7 @@ keys = 14200, modals=100177
 	utempl = immu32;
       else
         utempl = get32(ea);
-      add32(crsl+dr, ~utempl, 1);
+      add32(crsl+dr, ~utempl, 1, ea);
       continue;
 
     case 023:
@@ -7083,7 +7390,7 @@ keys = 14200, modals=100177
 
     case 025:
       warn("I-mode opcode 025?");
-      fault(ILLINSTFAULT, RPL, 0);
+      fault(ILLINSTFAULT, RPL, RP);
 
     case 026:  /* Special MR FP format */
       /* DFM, DFS, FM, FS */
@@ -7092,7 +7399,7 @@ keys = 14200, modals=100177
 
     case 027:
       warn("I-mode opcode 027?");
-      fault(ILLINSTFAULT, RPL, 0);
+      fault(ILLINSTFAULT, RPL, RP);
 
     case 030:  /* register generic */
       fatal("I-mode RGEN?");
@@ -7111,7 +7418,7 @@ keys = 14200, modals=100177
 	utempa = (immu32 >> 16);
       else
         utempa = get16(ea);
-      add16(crs+dr*2, ~utempa, 1);
+      add16(crs+dr*2, ~utempa, 1, ea);
       continue;
 
     case 033:
@@ -7142,16 +7449,16 @@ keys = 14200, modals=100177
 
     case 037:
       warn("I-mode opcode 037?");
-      fault(ILLINSTFAULT, RPL, 0);
+      fault(ILLINSTFAULT, RPL, RP);
 
     case 040:  /* generic class 2, overlays skip group */
       warn("I-mode generic class 2?");
-      fault(ILLINSTFAULT, RPL, 0);
+      fault(ILLINSTFAULT, RPL, RP);
 
     case 041:
       TRACE(T_FLOW, " I\n");
       utempl = crsl[dr];
-      if (*(int *)&ea < 0) {
+      if (*(int *)&ea < 0) {   /* register-to-register form */
 	crsl[dr] = immu32;
 	crsl[(inst >> 2) & 7] = utempl;
       } else {
@@ -7231,9 +7538,6 @@ keys = 14200, modals=100177
       case 1:
 imodepcl:
 	TRACE(T_FLOW|T_PCL, " PCL %s\n", searchloadmap(ea, 'e'));
-
-	/* NOTE: see duplicated code under V-mode PCL! */
-
 	//TRACE(T_FLOW|T_PCL, "#%d %o/%o: PCL %o/%o\n", instcount, RPH, RPL-2, ea>>16, ea&0xFFFF);
 	if (numtraceprocs > 0 && TRACEUSER)
 	  for (i=0; i<numtraceprocs; i++)
@@ -7279,17 +7583,17 @@ imodepcl:
 	break;
 
       default:
-	fault(ILLINSTFAULT, RPL, 0);
+	fault(ILLINSTFAULT, RPL, RP);
       }
       continue;
 
     case 047:
       warn("I-mode opcode 047?");
-      fault(ILLINSTFAULT, RPL, 0);
+      fault(ILLINSTFAULT, RPL, RP);
 
     case 050:
       warn("I-mode opcode 050?");
-      fault(ILLINSTFAULT, RPL, 0);
+      fault(ILLINSTFAULT, RPL, RP);
 
     case 051:
       TRACE(T_FLOW, " IH\n");
@@ -7380,17 +7684,17 @@ imodepcl:
 	break;
 
       default:
-	fault(ILLINSTFAULT, RPL, 0);
+	fault(ILLINSTFAULT, RPL, RP);
       }
       continue;
 
     case 057:
       warn("I-mode opcode 057?");
-      fault(ILLINSTFAULT, RPL, 0);
+      fault(ILLINSTFAULT, RPL, RP);
 
     case 060:
       warn("I-mode generic class 3?");
-      fault(ILLINSTFAULT, RPL, 0);
+      fault(ILLINSTFAULT, RPL, RP);
 
     case 061:
       TRACE(T_FLOW, " C\n");
@@ -7434,13 +7738,14 @@ imodepcl:
 	crsl[dr] = ea;
       else {
 	warn("Immediate mode EAR?");
-	fault(ILLINSTFAULT, RPL, 0);
+	fault(ILLINSTFAULT, RPL, RP);
       }
       continue;
 
     case 064:
-      warn("I-mode opcode 064?");
-      fault(ILLINSTFAULT, RPL, 0);
+      TRACE(T_FLOW, " MIA\n");
+      fault(UIIFAULT, RPL, RP);
+      continue;
 
     case 065:
       TRACE(T_FLOW, " LIP\n");
@@ -7471,17 +7776,17 @@ imodepcl:
 	break;
 
       default:
-	fault(ILLINSTFAULT, RPL, 0);
+	fault(ILLINSTFAULT, RPL, RP);
       }
       continue;
 
     case 067:
       warn("I-mode opcode 067?");
-      fault(ILLINSTFAULT, RPL, 0);
+      fault(ILLINSTFAULT, RPL, RP);
 
     case 070:
       warn("I-mode opcode 070?");
-      fault(ILLINSTFAULT, RPL, 0);
+      fault(ILLINSTFAULT, RPL, RP);
 
     case 071:
       TRACE(T_FLOW, " CH\n");
@@ -7524,11 +7829,16 @@ imodepcl:
       continue;
 
     case 074:
-      warn("I-mode opcode 074?");
-      fault(ILLINSTFAULT, RPL, 0);
+      TRACE(T_FLOW, " MIB\n");
+      fault(UIIFAULT, RPL, RP);
+      continue;
 
     case 075:
       TRACE(T_FLOW, " AIP\n");
+      if (*(int *)&ea > 0) {
+	warn("Immediate mode AIP?");
+	fault(ILLINSTFAULT, RPL, RP);
+      }
       utempl = crsl[dr] + get32(ea);
       if (utempl & 0x80000000)
 	fault(POINTERFAULT, utempl>>16, ea);
@@ -7562,13 +7872,13 @@ imodepcl:
 	break;
 
       default:
-	fault(ILLINSTFAULT, RPL, 0);
+	fault(ILLINSTFAULT, RPL, RP);
       }
       continue;
 
     case 077:
       warn("I-mode opcode 077");
-      fault(ILLINSTFAULT, RPL, 0);
+      fault(ILLINSTFAULT, RPL, RP);
     }
     fatal("I-mode fall-through?");
 
@@ -7687,7 +7997,7 @@ nonimode:
       m = get16(ea);
       if ((crs[KEYS] & 050000) != 040000) {     /* V/I mode or SP */
 	TRACE(T_FLOW, " ADD ='%o/%d\n", m, *(short *)&m);
-	add16(crs+A, m, 0);
+	add16(crs+A, m, 0, ea);
       } else {                                  /* R-mode and DP */
 	TRACE(T_FLOW, " DAD\n");
 	crs[B] += get16(INCVA(ea,1));
@@ -7718,7 +8028,7 @@ nonimode:
       m = get16(ea);
       if ((crs[KEYS] & 050000) != 040000) {
 	TRACE(T_FLOW, " SUB ='%o/%d\n", m, *(short *)&m);
-	add16(crs+A, ~m, 1);
+	add16(crs+A, ~m, 1, ea);
       } else {
 	TRACE(T_FLOW, " DSB\n");
 	crs[B] -= get16(INCVA(ea,1));
@@ -7868,6 +8178,14 @@ nonimode:
       continue;
 
     case 01603:
+
+      /* DIAG CPU.FAULT uses this instruction in R-mode to triggger a
+	 UII fault, so this instruction (unlike most) checks the keys.
+	 This is a general problem with all instructions: they don't
+	 ensure the instruction is legal in the current mode */
+
+      if (!(crs[KEYS] & 010000))          /* V/I mode */
+	fault(UIIFAULT, RPL, RP);
       templ = get32(ea);
       TRACE(T_FLOW, " MPL ='%o/%d\n", templ, *(int *)&templ);
       *(long long *)(crs+L) = (long long)(*(int *)(crs+L)) * (long long)templ;
@@ -7944,7 +8262,7 @@ nonimode:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	utempl = get32(ea);
 	TRACE(T_FLOW, " SBL ='%o/%d\n", utempl2, *(int *)&utempl2);
-	add32(crsl+GR2, ~utempl, 1);
+	add32(crsl+GR2, ~utempl, 1, ea);
       } else {
 	TRACE(T_FLOW, " JGE\n");
 	if (*(short *)(crs+A) >= 0)
@@ -7990,7 +8308,7 @@ nonimode:
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	utempl = get32(ea);
 	TRACE(T_FLOW, " ADL ='%o/%d\n", utempl, *(int *)&utempl);
-	add32(crsl+GR2, utempl, 0);
+	add32(crsl+GR2, utempl, 0, ea);
       } else {
 	TRACE(T_FLOW, " JLT\n");
 	if (*(short *)(crs+A) < 0)
@@ -8372,8 +8690,7 @@ nonimode:
 
 /* here for PIO instructions: OCP, SKS, INA, OTA.  The instruction
    word is passed in as an argument to handle EIO (Execute I/O) in
-   V/I modes.
-*/
+   V/I modes. */
 
 pio(unsigned int inst) {
   int class;

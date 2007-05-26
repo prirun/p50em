@@ -1,4 +1,4 @@
-#define REGSETS 8
+#define REGSETS 10
 
 /* these are 16-bit offsets into crs (current register set) */
 
@@ -116,7 +116,7 @@
       unsigned int dswstat;
       unsigned int dswpb,rsavptr;
       unsigned short regdmx[64];
-      unsigned int userregs[32*(REGSETS-2)];
+      unsigned int userregs[REGSETS-2][32];
     } sym;
   } regs;
 
