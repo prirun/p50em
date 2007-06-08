@@ -2,7 +2,6 @@
 
 inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32, unsigned long long *immu64) {
 
-#ifdef OSX
   int tm, sr, br, ring;
   unsigned short d;
   int temp32;
@@ -113,7 +112,4 @@ inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32, unsign
     fatal("ea32i: tm out of range!");
   }
   fatal("ea32i: main switch fall through");
-#else
-  fatal("ea32i: not implemented");
-#endif
 }

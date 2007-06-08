@@ -95,6 +95,7 @@ OK:
 #include <errno.h>
 #include <setjmp.h>
 #include <sys/time.h>
+#include <signal.h>
 
 /* In SR modes, Prime CPU registers are mapped to memory locations
    0-'37, but only 0-7 are user accessible.  In the post-P300
@@ -149,11 +150,9 @@ typedef unsigned int pa_t;            /* physical address */
   else if (*(int *)(crs+FLTH) == 0) \
     crs[KEYS] |= 0100;
 
-/* this is probably incorrect - needs to test 16 more bits for denormal
-   doubles.
-   NOTE: actually, this behavior is correct: Prime only tested 32 bits
-   of the fraction, even for double precision.  It expected DP floats
-   to be normalized, or mostly normalized. */
+/* NOTE: Prime only tested 32 bits of the fraction, even for double
+   precision.  It expected DP floats to be normalized, or mostly
+   normalized. */
 
 #define SETCC_D SETCC_F
 
@@ -177,6 +176,7 @@ typedef unsigned int pa_t;            /* physical address */
   if ((onoff)) crs[KEYS] |= 0120000
 
 #define SETCL crs[KEYS] |= 0120000
+#define CLEARCL crs[KEYS] &= ~0120000
 
 #define SETL(onoff) \
   if ((onoff)) crs[KEYS] |= 020000; \
@@ -197,6 +197,8 @@ typedef unsigned int pa_t;            /* physical address */
 #define BLS  if  (crs[KEYS] & 020000) RPL = iget16(RP); else RPL++
 #define BXNE if (crs[X] != 0) RPL = iget16(RP); else RPL++
 #define BYNE if (crs[Y] != 0) RPL = iget16(RP); else RPL++
+#define BHNE(r) if (crs[(r)*2] != 0) RPL = iget16(RP); else RPL++;
+#define BRNE(r) if (crsl[(r)]  != 0) RPL = iget16(RP); else RPL++;
 
 /* expressions for logicize instructions */
 
@@ -357,11 +359,15 @@ unsigned int instpermsec = 2000;     /* initial assumption for inst/msec */
 jmp_buf jmpbuf;                      /* for longjumps to the fetch loop */
 
 /* The standard Prime physical memory limit on early machines is 8MB.
-   Later machines have higher memory capacities, up to 512M, using 
+   Later machines have higher memory capacities, up to 1024MB, using 
    32-bit page tables. 
-   NOTE: rev 20 is limited to 32MB on all machines. */
 
-#define MEMSIZE 16*1024*1024   /* 32 MB */
+   NOTE: 
+   - rev 20 is limited to a max of 32MB
+   - rev 23.4 is limited to a max of 128MB
+ */
+
+#define MEMSIZE 256*1024*1024   /* 128 MB */
 unsigned short mem[MEMSIZE];   /* system's physical memory */
 
 #define MAKEVA(seg,word) ((((int)(seg))<<16) | (word))
@@ -1686,7 +1692,11 @@ ea_t stex(unsigned int extsize) {
 }
 
 /* for PRTN, load values into temps first so that if any faults occur,
-   PRTN can be restarted */
+   PRTN can be restarted
+
+   XXX: the order of this look wrong - stack free pointer shouldn't
+   be updated if a fault occurs fetching base registers
+ */
 
 void prtn() {
   unsigned short stackrootseg;
@@ -3034,7 +3044,7 @@ arfa(int n, int val) {
 
 unsigned int lrs(unsigned int val, short scount) {
 
-  crs[KEYS] &= ~0120000;             /* clear C,L */
+  CLEARCL;
   if (scount <= 32) {
     EXPCL(val & bitmask32[33-scount]);
     return (*(int *)&val) >> scount;
@@ -3048,7 +3058,7 @@ unsigned int lrs(unsigned int val, short scount) {
 unsigned int lls(unsigned int val, short scount) {
   int templ;
 
-  crs[KEYS] &= ~0120000;              /* clear C,L */
+  CLEARCL;
   if (scount < 32) {
     templ = 0x80000000;
     templ = templ >> scount;         /* create mask */
@@ -3064,7 +3074,7 @@ unsigned int lls(unsigned int val, short scount) {
 
 unsigned int lll(unsigned int val, short scount) {
 
-  crs[KEYS] &= ~0120000;              /* clear C,L */
+  CLEARCL;
   if (scount <= 32) {
     EXPCL(val & bitmask32[scount]);
     return val << scount;
@@ -3074,7 +3084,7 @@ unsigned int lll(unsigned int val, short scount) {
 
 unsigned int lrl(unsigned int val, short scount) {
 
-  crs[KEYS] &= ~0120000;             /* clear C,L */
+  CLEARCL;
   if (scount <= 32) {
     EXPCL(val & bitmask32[33-scount]);
     return val >> scount;
@@ -3086,7 +3096,7 @@ unsigned int lrl(unsigned int val, short scount) {
 
 unsigned short arl (unsigned short val, short scount) {
 
-  crs[KEYS] &= ~0120000;              /* clear C,L */
+  CLEARCL;
   if (scount <= 16) {
     EXPCL(val & bitmask16[17-scount]);
     return val >> scount;
@@ -3097,7 +3107,7 @@ unsigned short arl (unsigned short val, short scount) {
 
 unsigned short all (unsigned short val, short scount) {
 
-  crs[KEYS] &= ~0120000;              /* clear C,L */
+  CLEARCL;
   if (scount <= 16) {
     EXPCL(val & bitmask16[scount]);
     return val << scount;
@@ -3110,7 +3120,7 @@ unsigned short als (unsigned short val, short scount) {
 
   short tempa;
 
-  crs[KEYS] &= ~0120000;              /* clear C,L */
+  CLEARCL;
   if (scount <= 15) {
     tempa = 0100000;
     tempa = tempa >> scount;         /* create mask */
@@ -3126,7 +3136,7 @@ unsigned short als (unsigned short val, short scount) {
 
 unsigned short ars (unsigned short val, short scount) {
 
-  crs[KEYS] &= ~0120000;              /* clear C,L */
+  CLEARCL;
   if (scount <= 16) {
     EXPCL(val & bitmask16[17-scount]);
     return (*(short *)&val) >> scount;
@@ -3141,7 +3151,7 @@ unsigned short ars (unsigned short val, short scount) {
 
 unsigned int lrr(unsigned int val, short scount) {
 
-  crs[KEYS] &= ~0120000;              /* clear C,L */
+  CLEARCL;
   if (scount > 32)
     scount = scount - 32;
   EXPCL(val & bitmask32[33-scount]);
@@ -3150,7 +3160,7 @@ unsigned int lrr(unsigned int val, short scount) {
 
 unsigned int llr(unsigned int val, short scount) {
 
-  crs[KEYS] &= ~0120000;              /* clear C,L */
+  CLEARCL;
   if (scount > 32)
     scount = scount - 32;
   EXPCL(val & bitmask32[scount]);
@@ -3161,7 +3171,7 @@ unsigned int llr(unsigned int val, short scount) {
 
 unsigned int alr(unsigned short val, short scount) {
 
-  crs[KEYS] &= ~0120000;              /* clear C,L */
+  CLEARCL;
   scount = ((scount-1)%16)+1;         /* make scount 1-16 */
   EXPCL(val & bitmask16[scount]);
   return (val << scount) | (val >> (16-scount));
@@ -3169,7 +3179,7 @@ unsigned int alr(unsigned short val, short scount) {
 
 unsigned int arr(unsigned short val, short scount) {
 
-  crs[KEYS] &= ~0120000;              /* clear C,L */
+  CLEARCL;
   scount = ((scount-1)%16)+1;         /* make scount 1-16 */
   EXPCL(val & bitmask16[17-scount]);
   return (val >> scount) | (val << (16-scount));
@@ -3327,7 +3337,7 @@ tch (unsigned short *un) {
   }
 }
 
-/* NOTE: ea is only used to set faddr should an arithmentic exception occur */
+/* NOTE: ea is only used to set faddr should an arithmetic exception occur */
 
 int add32(unsigned int *a1, unsigned int a2, unsigned int a3, ea_t ea) {
 
@@ -3432,7 +3442,7 @@ star(unsigned int val32, ea_t ea) {
   if (ea & 040000) {       /* absolute RF addressing */
     RESTRICT();
     if ((ea & 0777) > 0477) {
-      printf("em: STLR ea '%o is out of range; check -cpuid\n", ea);
+      printf("em: STLR ea '%o is out of range; this -cpuid may not be supported by this version of software\n", ea);
       fatal(NULL);
     }
     regs.u32[ea & 0777] = val32;
@@ -3450,7 +3460,7 @@ main (int argc, char **argv) {
 
   int boot;                            /* true if reading a boot record */
   char *bootarg;                       /* argument to -boot, if any */
-  char bootfile[8];                    /* boot file to load (optional) */
+  char bootfile[16];                   /* boot file to load (optional) */
   int bootfd=-1;                       /* initial boot file fd */
   int bootctrl, bootunit;              /* boot device controller and unit */
   int bootskip=0;                      /* skip this many bytes on boot dev */
@@ -3543,11 +3553,7 @@ main (int argc, char **argv) {
     stlb[i].valid = 0;
   for (i=0; i < IOTLBENTS; i++)
     iotlb[i].valid = 0;
-#if 0
-  bzero(mem, sizeof(mem));
-#else
   bzero(mem, 64*1024*2);              /* zero first 64K words */
-#endif
 
   verbose = 0;
   domemdump = 0;
@@ -3701,6 +3707,11 @@ main (int argc, char **argv) {
   if ((26 <= cpuid && cpuid <= 29) || cpuid >= 35)
     csoffset = 1;
 
+  /* the emulator has occasionally exited to command level; try
+     ignoring SIGPIPE to see if that is the problem */
+
+  signal (SIGPIPE, SIG_IGN);
+
   /* initialize all devices */
 
   for (i=0; i<64; i++)
@@ -3709,8 +3720,6 @@ main (int argc, char **argv) {
       fprintf(stderr, "emulator: device '%o failed initialization - device removed\n", i);
     }
 
-
-  os_init();
 
   /* if a filename follows -boot, load and execute this R-mode runfile
      image.  For example, -boot *DOS64 would load *DOS64 from the Unix
@@ -3750,6 +3759,8 @@ main (int argc, char **argv) {
       rvec[1] = rvec[0]+1040-1;         /* read 1 disk block */
       /* setup DMA register '20 (address only) for the next boot record */
       regs.sym.regdmx[041] = 03000;
+      if (globdisk(bootfile, sizeof(bootfile), bootctrl, bootunit) != 0)
+	fatal("Can't find disk boot device file");
 
     } else if ((sswitch & 0x7) == 5) {  /* tape boot */
       bootctrl = 014;
@@ -3758,6 +3769,7 @@ main (int argc, char **argv) {
       bootskip = 4;                     /* to skip .TAP header */
       /* setup DMA register '20 (address only) for the next boot record */
       regs.sym.regdmx[041] = 0200+2355;;
+      snprintf(bootfile, sizeof(bootfile), "dev%ou%d", bootctrl, bootunit);
 
     } else {
       printf("\
@@ -3785,7 +3797,6 @@ For disk boots, the last 3 digits can be:\n\
       exit(1);
     }
 
-    snprintf(bootfile, sizeof(bootfile), "dev%ou%d", bootctrl, bootunit);
     TRACEA("Boot file is %s\n", bootfile);
     if ((bootfd=open(bootfile, O_RDONLY)) == -1) {
       perror("Error opening boot device file");
@@ -4251,7 +4262,7 @@ stfa:
 	  continue;
 
 	case 000001:
-	  TRACE(T_FLOW, " NOP\n");
+	  TRACE(T_FLOW, " NOP 1\n");
 	  continue;
 
 	case 000715:
@@ -5929,7 +5940,7 @@ a1a:
 	    if (crs[KEYS] & 010000) {          /* V/I mode */
 	      crsl[GR2] = lrs(crsl[GR2], scount);
 	    } else {
-	      crs[KEYS] &= ~0120000;           /* clear C,L */
+	      CLEARCL;
 	      utempa = crs[B] & 0x8000;        /* save B bit 1 */
 	      if (scount <= 31) {
 		templ = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
@@ -5983,7 +5994,7 @@ a1a:
 	    if (crs[KEYS] & 010000)                /* V/I mode */
 	      crsl[GR2] = lls(crsl[GR2], scount);
 	    else {
-	      crs[KEYS] &= ~0120000;              /* clear C,L */
+	      CLEARCL;
 	      utempa = crs[B] & 0x8000;            /* save B bit 1 */
 	      if (scount < 31) {
 		utempl = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
@@ -6002,7 +6013,7 @@ a1a:
 		*(unsigned int *)(crs+A) = utempa;
 	      }
 	    }
-	    if (crs[KEYS] & 0100000)
+	    if ((crs[KEYS] & 0100400) == 0100400)
 	      mathexception('i', FC_INT_OFLOW, 0);
 	    break;
 
@@ -6019,7 +6030,7 @@ a1a:
 	  case 01500: /* ALS */
 	    TRACE(T_FLOW, " ALS %d\n", scount);
 	    crs[A] = als(crs[A], scount);
-	    if (crs[KEYS] & 0100000)
+	    if ((crs[KEYS] & 0100400) == 0100400)
 	      mathexception('i', FC_INT_OFLOW, 0);
 	    break;
 
@@ -6041,7 +6052,7 @@ badshift:
 	TRACE(T_INST, " skip group\n");
 
 	if (inst == 0101000) {
-	  TRACE(T_FLOW, " NOP\n");
+	  TRACE(T_FLOW, " NOP-SKP\n");
 	  continue;
 	}
 
@@ -6195,9 +6206,6 @@ keys = 14200, modals=100177
     }
 
     if ((crs[KEYS] & 0016000) != 0010000) goto nonimode;
-#ifndef OSX
-    fault(ILLINSTFAULT, RPL, RP);
-#endif
 
     /* branch and register generic instructions don't have ea, so they
        are tested outside the main switch, before an ea is computed */
@@ -6319,109 +6327,73 @@ keys = 14200, modals=100177
       case 0130:
 	TRACE(T_FLOW, " BRI1\n");
 	crsl[dr]++;
-	if (crsl[dr] != 0)
-	  RPL = iget16(RP);
-	else
-	  RPL++;
+	BRNE(dr);
 	break;
 
       case 0131:
 	TRACE(T_FLOW, " BRI2\n");
 	crsl[dr] += 2;
-	if (crsl[dr] != 0)
-	  RPL = iget16(RP);
-	else
-	  RPL++;
+	BRNE(dr);
 	break;
 
       case 0132:
 	TRACE(T_FLOW, " BRI4\n");
 	crsl[dr] += 4;
-	if (crsl[dr] != 0)
-	  RPL = iget16(RP);
-	else
-	  RPL++;
+	BRNE(dr);
 	break;
 
       case 0134:
 	TRACE(T_FLOW, " BRD1\n");
 	crsl[dr]--;
-	if (crsl[dr] != 0)
-	  RPL = iget16(RP);
-	else
-	  RPL++;
+	BRNE(dr);
 	break;
 
       case 0135:
 	TRACE(T_FLOW, " BRD2\n");
 	crsl[dr] -= 2;
-	if (crsl[dr] != 0)
-	  RPL = iget16(RP);
-	else
-	  RPL++;
+	BRNE(dr);
 	break;
 
       case 0136:
 	TRACE(T_FLOW, " BRD4\n");
 	crsl[dr] -= 4;
-	if (crsl[dr] != 0)
-	  RPL = iget16(RP);
-	else
-	  RPL++;
+	BRNE(dr);
 	break;
 
       case 0140:
 	TRACE(T_FLOW, " BHI1\n");
 	crs[dr*2]++;
-	if (crs[dr*2] != 0)
-	  RPL = iget16(RP);
-	else
-	  RPL++;
+	BHNE(dr);
 	break;
 
       case 0141:
 	TRACE(T_FLOW, " BHI2\n");
 	crs[dr*2] += 2;
-	if (crs[dr*2] != 0)
-	  RPL = iget16(RP);
-	else
-	  RPL++;
+	BHNE(dr);
 	break;
 
       case 0142:
 	TRACE(T_FLOW, " BHI4\n");
 	crs[dr*2] += 4;
-	if (crs[dr*2] != 0)
-	  RPL = iget16(RP);
-	else
-	  RPL++;
+	BHNE(dr);
 	break;
 
       case 0144:
 	TRACE(T_FLOW, " BHD1\n");
 	crs[dr*2]--;
-	if (crs[dr*2] != 0)
-	  RPL = iget16(RP);
-	else
-	  RPL++;
+	BHNE(dr);
 	break;
 
       case 0145:
 	TRACE(T_FLOW, " BHD2\n");
 	crs[dr*2] -= 2;
-	if (crs[dr*2] != 0)
-	  RPL = iget16(RP);
-	else
-	  RPL++;
+	BHNE(dr);
 	break;
 
       case 0146:
 	TRACE(T_FLOW, " BHD4\n");
 	crs[dr*2] -= 4;
-	if (crs[dr*2] != 0)
-	  RPL = iget16(RP);
-	else
-	  RPL++;
+	BHNE(dr);
 	break;
 
       default:
@@ -6955,7 +6927,7 @@ keys = 14200, modals=100177
 	if (crs[dr*2] & 0x8000)
 	  SETCL;
 	else
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	  CLEARCL;
 	crs[dr*2] = crs[dr*2] << 1;
 	break;
 
@@ -6964,7 +6936,7 @@ keys = 14200, modals=100177
 	if (crs[dr*2] & 0x4000)
 	  SETCL;
 	else
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	  CLEARCL;
 	crs[dr*2] = crs[dr*2] << 2;
 	break;
 
@@ -6973,7 +6945,7 @@ keys = 14200, modals=100177
 	if (crs[dr*2] & 0x0001)
 	  SETCL;
 	else
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	  CLEARCL;
 	crs[dr*2] = crs[dr*2] >> 1;
 	break;
 
@@ -6982,7 +6954,7 @@ keys = 14200, modals=100177
 	if (crs[dr*2] & 0x0002)
 	  SETCL;
 	else
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	  CLEARCL;
 	crs[dr*2] = crs[dr*2] >> 2;
 	break;
 
@@ -6991,7 +6963,7 @@ keys = 14200, modals=100177
 	if (crsl[dr] & 0x80000000)
 	  SETCL;
 	else
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	  CLEARCL;
 	crsl[dr] = crsl[dr] << 1;
 	break;
 
@@ -7000,7 +6972,7 @@ keys = 14200, modals=100177
 	if (crsl[dr] & 0x40000000)
 	  SETCL;
 	else
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	  CLEARCL;
 	crsl[dr] = crsl[dr] << 2;
 	break;
 
@@ -7009,7 +6981,7 @@ keys = 14200, modals=100177
 	if (crsl[dr] & 0x00000001)
 	  SETCL;
 	else
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	  CLEARCL;
 	crsl[dr] = crsl[dr] >> 1;
 	break;
 
@@ -7018,7 +6990,7 @@ keys = 14200, modals=100177
 	if (crsl[dr] & 0x00000002)
 	  SETCL;
 	else
-	  crs[KEYS] &= ~0120000;              /* clear C,L */
+	  CLEARCL;
 	crsl[dr] = crsl[dr] >> 2;
 	break;
 
@@ -7125,8 +7097,8 @@ keys = 14200, modals=100177
     switch (opcode) {
 
     case 000:
-      warn("I-mode generic class 0?");
-      fault(ILLINSTFAULT, RPL, RP);
+      /* this should have been handled already! */
+      fatal("I-mode generic class 0?");
 
     case 001:
       TRACE(T_FLOW, " L\n");
@@ -7180,7 +7152,7 @@ keys = 14200, modals=100177
 	crs[dr*2] = arl(crs[dr*2], scount);
 	break;
       default:
-	fatal("SHL?");
+	fatal("I-mode SHL switch?");
       }
       continue;
 
@@ -7228,6 +7200,7 @@ keys = 14200, modals=100177
       fault(ILLINSTFAULT, RPL, RP);
 
     case 010:                            /* register generic branch */
+      /* this should have been handled already! */
       fatal("I-mode RGBR?");
 
     case 011:
@@ -7272,12 +7245,12 @@ keys = 14200, modals=100177
       switch ((ea >> 14) & 3) {
       case 0:
 	crsl[dr] = lls(crsl[dr], scount);
-	if (crs[KEYS] & 0100400)
+	if ((crs[KEYS] & 0100400) == 0100400)
 	  mathexception('i', FC_INT_OFLOW, 0);
 	break;
       case 1:
 	crs[dr*2] = als(crs[dr*2], scount);
-	if (crs[KEYS] & 0100400)
+	if ((crs[KEYS] & 0100400) == 0100400)
 	  mathexception('i', FC_INT_OFLOW, 0);
 	break;
       case 2:
@@ -7337,8 +7310,8 @@ keys = 14200, modals=100177
       fault(ILLINSTFAULT, RPL, RP);
 
     case 020:
-      warn("I-mode generic class 1?");
-      fault(ILLINSTFAULT, RPL, RP);
+      /* this should have been handled already! */
+      fatal("I-mode generic class 1?");
 
     case 021:
       TRACE(T_FLOW, " ST\n");
@@ -7384,7 +7357,7 @@ keys = 14200, modals=100177
 	crs[dr*2] = arr(crs[dr*2], scount);
 	break;
       default:
-	fatal("ROT?");
+	fatal("I-mode ROT switch?");
       }
       continue;
 
@@ -7402,6 +7375,7 @@ keys = 14200, modals=100177
       fault(ILLINSTFAULT, RPL, RP);
 
     case 030:  /* register generic */
+      /* this should have been handled already! */
       fatal("I-mode RGEN?");
 
     case 031:
@@ -7452,8 +7426,8 @@ keys = 14200, modals=100177
       fault(ILLINSTFAULT, RPL, RP);
 
     case 040:  /* generic class 2, overlays skip group */
-      warn("I-mode generic class 2?");
-      fault(ILLINSTFAULT, RPL, RP);
+      /* this should have been handled already! */
+      fatal("I-mode generic class 2?");
 
     case 041:
       TRACE(T_FLOW, " I\n");
@@ -7693,8 +7667,8 @@ imodepcl:
       fault(ILLINSTFAULT, RPL, RP);
 
     case 060:
-      warn("I-mode generic class 3?");
-      fault(ILLINSTFAULT, RPL, RP);
+      /* this should have been handled already! */
+      fatal("I-mode generic class 3?");
 
     case 061:
       TRACE(T_FLOW, " C\n");
@@ -7835,11 +7809,11 @@ imodepcl:
 
     case 075:
       TRACE(T_FLOW, " AIP\n");
-      if (*(int *)&ea > 0) {
-	warn("Immediate mode AIP?");
-	fault(ILLINSTFAULT, RPL, RP);
-      }
-      utempl = crsl[dr] + get32(ea);
+      if (*(int *)&ea < 0)
+	utempl = immu32;
+      else
+	utempl = get32(ea);
+      utempl += crsl[dr];
       if (utempl & 0x80000000)
 	fault(POINTERFAULT, utempl>>16, ea);
       /* IXX: ISG says C & L are set, ring needs to be weakened */
@@ -8657,6 +8631,10 @@ nonimode:
       TRACE(T_FLOW, " LDLR '%06o\n", ea & 0xFFFF);
       *(int *)(crs+L) = ldar(ea);
       continue;
+
+    case 0502:
+      TRACE(T_FLOW, " QFxx '%06o\n", ea & 0xFFFF);
+      fault(UIIFAULT, RPL, RP);
 
     case 01401:
       TRACE(T_FLOW, " EIO\n");

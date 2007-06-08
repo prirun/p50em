@@ -77,6 +77,7 @@
 #include <netinet/in.h>
 #include <time.h>
 #include <sys/file.h>
+#include <glob.h>
 
 /* this macro is used when I/O is successful.  In VI modes, it sets
    the EQ condition code bit.  In SR modes, it does a skip */
@@ -493,10 +494,18 @@ readasr:
 	devpoll[device] = instpermsec*100;
       IOSKIP;
     } else if (func == 1) {       /* write control word */
+      TRACEA("OTA 4, func %d, A='%o/%d\n", func, crs[A], *(short *)(crs+A));
       IOSKIP;
     } else if (04 <= func && func <= 07) {  /* write control register 1/2 */
+      TRACEA("OTA 4, func %d, A='%o/%d\n", func, crs[A], *(short *)(crs+A));
       IOSKIP;
+    } else if (func == 012) {
+      TRACEA("OTA 4, func %d, A='%o/%d\n", func, crs[A], *(short *)(crs+A));
+      /* NOTE: does this in rev 23 when system is shutdown with '4110 in A */
+      IOSKIP;
+
     } else if (func == 013) {
+      TRACEA("OTA 4, func %d, A='%o/%d\n", func, crs[A], *(short *)(crs+A));
       /* NOTE: does this in rev 20 on settime command (set clock on VCP?) */
       IOSKIP;
 
@@ -519,6 +528,8 @@ readasr:
 	vcptime[6] = BCD2(tms->tm_sec);
 	vcptime[7] = 0;
 	vcptimeix = 0;
+      } else {
+	TRACEA("OTA 4, func '%o, A='%o/%d\n", func, crs[A], *(short *)(crs+A));
       }
       IOSKIP;
     } else {
@@ -1436,6 +1447,28 @@ int devcp (int class, int func, int device) {
 }
 
 
+/* helper function to return a disk's file name given a controller and unit */
+
+int globdisk (char *devfile, int size, int device, int unit) {
+  glob_t g;
+  int globerr;
+
+  snprintf(devfile, size, "dev%ou%d.*", device, unit);
+  if ((globerr=glob(devfile, GLOB_ERR|GLOB_NOSORT, NULL, &g)) != 0) {
+    fprintf(stderr,"globdisk: glob returned %d opening %s\n", globerr, devfile);
+    return -1;
+  }
+  if (g.gl_pathc != 1) {
+    fprintf(stderr,"globdisk: %d matches for %s\n", g.gl_pathc, devfile);
+    return -1;
+  }
+  strncpy(devfile, g.gl_pathv[0], size);
+  devfile[size-1] = 0;
+  TRACE(T_INST|T_DIO, " filename for dev '%o unit %d is %s\n", device, unit, devfile);
+  return 0;
+}
+
+
 /* disk controller at '26 and '27
 
   NOTES:
@@ -1469,13 +1502,48 @@ int devcp (int class, int func, int device) {
 
 int devdisk (int class, int func, int device) {
 
+  /* static structure for disk file suffixes and config data */
+
+#define NUMGEOM 24
+
+  static struct {
+    short model;
+    char suffix[5];
+    short heads;
+    short spt;
+    short maxtrack;
+  } geom[NUMGEOM] = {
+     1,  "80M",  5,   9,  823,
+     1, "300M", 19,   9,  823,
+     0,  "CMD", 20,   9,  823,
+     4,  "68M",  3,   9, 1119,
+     5, "158M",  7,   9, 1119,
+     6, "160M", 10,   9,  821,
+     7, "675M", 40,   9,  841,
+     7, "600M", 40,   9,  841,
+     9, "315M", 19,   9,  823,   /* MODEL_4475 */
+    10,  "84M",  5,   8, 1015,   /* MODEL_4714 */
+    11,  "60M",  4,   7, 1020,   /* MODEL_4711 */
+    12, "120M",  8,   7, 1020,   /* MODEL_4715 */
+    13, "496M", 24,  14,  711,   /* MODEL_4735 */
+    14, "258M", 17,   6, 1220,   /* MODEL_4719 */
+    15, "770M", 23,  19,  848,   /* MODEL_4845 */
+    17, "328A", 12,   8, 1641,   /* MODEL_4721 */
+    17, "328B", 31, 254,   20,   /* MODEL_4721 (7210 SCSI controller) */
+    18, "817M", 15,  19, 1379,   /* MODEL_4860 */
+    19, "673M", 31, 254,   42,   /* MODEL_4729 */
+    20, "213M", 31, 254,   14,   /* MODEL_4730 */
+    22, "421M", 31, 254,   26,   /* MODEL_4731 */
+    23, "1.3G", 31, 254,   82,   /* MODEL_4732 */
+    24, "1G",   31, 254,   65,   /* MODEL_4734 */
+    25, "2G",   31, 254,  122,   /* MODEL_4736 */
+};
+
 #define S_HALT 0
 #define S_RUN 1
 #define S_INT 2
 
-/* this should be 8, but not sure how it is supported on controllers */
-
-#define MAXDRIVES 4
+#define MAXDRIVES 8
 #define HASHMAX 4451
 
 #if 0
@@ -1494,9 +1562,11 @@ int devdisk (int class, int func, int device) {
     short dmanch;                          /* number of dma channels-1 */
     struct {
       int rtfd;                            /* read trace file descriptor */
-      unsigned short theads;               /* total heads (cfg file) */
-      unsigned short spt;                  /* sectors per track */
-      unsigned short curtrack;             /* current head position */
+      short heads;                         /* total heads */
+      short spt;                           /* sectors per track */
+      short maxtrack;                      /* cylinder limit */
+      short curtrack;                      /* current head position */
+      short wp;                            /* true if write protected */
       int devfd;                           /* Unix device file descriptor */
       int readnum;                         /* increments on each read */
       unsigned char** modrecs;             /* hash table of modified records */
@@ -1513,23 +1583,23 @@ int devdisk (int class, int func, int device) {
   unsigned short dmareg;
   unsigned int dmaaddr;
   unsigned char *hashp;
+  int lockkey;
 
-
-  /* NOTE: this iobuf size looks suspicious; probably should be 2080 bytes,
+  /* NOTE: this iobuf size looks suspicious; probably should be 1040 words,
      the largest disk record size, and there probably should be some checks
      that no individual DMA exceeds this size, that no individual disk
      read or write exceeds 1040 words.  Maybe it's 4096 bytes because this
      is the largest DMA transfer request size... */
 
-  unsigned short iobuf[4096];             /* local I/O buf (for mapped I/O) */
+  unsigned short iobuf[1040];             /* local I/O buf (for mapped I/O) */
   unsigned short *iobufp;
   unsigned short access;
   short dmanw, dmanw1, dmanw2;
   unsigned int utempl;
   char ordertext[8];
-  int theads, spt, phyra, phyra2;
+  int phyra;
   int nb;                   /* number of bytes returned from read/write */
-  char devfile[8];
+  char devfile[16];
   char rtfile[16];          /* read trace file name */
   int rtnw;                 /* total number of words read (all channels) */
 
@@ -1547,9 +1617,11 @@ int devdisk (int class, int func, int device) {
       dc[i].usel = -1;
       for (u=0; u<MAXDRIVES; u++) {
 	dc[i].unit[u].rtfd = -1;
-	dc[i].unit[u].theads = 40;
-	dc[i].unit[u].spt = 9;
-	dc[i].unit[u].curtrack = 0;
+	dc[i].unit[u].heads = -1;
+	dc[i].unit[u].spt = -1;
+	dc[i].unit[u].maxtrack = -1;
+	dc[i].unit[u].curtrack = -1;
+	dc[i].unit[u].wp = -1;
 	dc[i].unit[u].devfd = -1;
 	dc[i].unit[u].readnum = -1;
 	dc[i].unit[u].modrecs = NULL;
@@ -1653,7 +1725,7 @@ int devdisk (int class, int func, int device) {
 	dc[device].status &= ~076000;             /* clear bits 2-6 */
 	m2 = get16io(dc[device].oar++);
 	recsize = m & 017;
-	track = m1 & 01777;
+	track = m1 & 03777;
 	rec = m2 >> 8;   /* # records for format, rec # for R/W */
 	head = m2 & 077;
 	u = dc[device].usel;
@@ -1679,6 +1751,7 @@ int devdisk (int class, int func, int device) {
 	  dc[device].status |= 4;      /* illegal seek */
 	  break;
 	}
+	/* XXX: could check for head > max head on drive here... */
 	if (dc[device].unit[u].devfd == -1) {
 	  TRACE(T_INST|T_DIO, " Device '%o unit %d not ready\n", device, u);
 	  dc[device].status = 0100001;
@@ -1689,8 +1762,9 @@ int devdisk (int class, int func, int device) {
 
 	  /* translate head/track/sector to drive record address */
 
-	  phyra = (track*dc[device].unit[u].theads*dc[device].unit[u].spt) + head*9 + rec;
+	  phyra = (track*dc[device].unit[u].heads*dc[device].unit[u].spt) + head*dc[device].unit[u].spt + rec;
 	  TRACE(T_INST|T_DIO,  " Unix ra=%d, byte offset=%d\n", phyra, phyra*2080);
+	  /* XXX: check for phyra > 1032444, which is > 2GB max file size */
 
 	  /* does this record exist in the disk unit hash table?  If it does,
 	     we'll do I/O to the hash entry.  If it doesn't, then for read,
@@ -1711,6 +1785,7 @@ int devdisk (int class, int func, int device) {
 	    if (order == 5) {        /* read */
 #endif
 	      if (lseek(dc[device].unit[u].devfd, phyra*2080, SEEK_SET) == -1) {
+		fprintf(stderr,"devdisk: seek error, phyra=%d\n", phyra);
 		perror("Unable to seek drive file");
 		fatal(NULL);
 	      }
@@ -1732,6 +1807,14 @@ int devdisk (int class, int func, int device) {
 	    dmareg = dc[device].dmachan << 1;
 	    dmanw = regs.sym.regdmx[dmareg];
 	    dmanw = -(dmanw>>4);
+	    if (dmanw > 1040) {
+	      warn("disk I/O limited to 1040 words");
+	      dmanw = 1040;
+	    }
+	    if (dmanw < 0) {
+	      warn("disk I/O size < 0; set to 0");
+	      dmanw = 0;
+	    }
 	    dmaaddr = ((regs.sym.regdmx[dmareg] & 3)<<16) | regs.sym.regdmx[dmareg+1];
 	    TRACE(T_INST|T_DIO,  " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dc[device].dmanch, dc[device].dmachan, regs.sym.regdmx[dmareg], dc[device].dmachan+1, dmaaddr, dmanw);
 	    
@@ -1788,48 +1871,82 @@ int devdisk (int class, int func, int device) {
 	  track = 0;
 	  dc[device].status &= ~4;   /* clear bit 14: seek error */
 	} else {
-	  track = m1 & 01777;
+	  track = m1 & 03777;
 	}
 	TRACE(T_INST|T_DIO, " seek track %d, restore=%d, clear=%d\n", track, (m1 & 0100000) != 0, (m1 & 040000) != 0);
+	if (track > dc[device].unit[u].maxtrack) {
+	  fprintf(stderr," Device '%o, seek to track %d > cylinder limit of %d\n", device, track, dc[device].unit[u].maxtrack);
+	  dc[device].status |= 4;    /* set bit 14: seek error */
+	  track = -1;
+	}
 	dc[device].unit[u].curtrack = track;
 	break;
 
       case 4: /* DSEL = Select unit */
-	u = (m1 & 017);            /* get unit bits */
+	u = (m1 & 0377);            /* get unit bits */
+	dc[device].usel = -1;      /* de-select */
 	if (u == 0) {
-	  dc[device].usel = -1;    /* de-select */
 	  TRACE(T_INST|T_DIO, " de-select\n");
 	  break;
 	}
 	dc[device].status &= ~3;  /* clear 15-16: select err + unavailable */
-	if (u != 1 && u != 2 && u != 4 && u != 8) {
+	if (u == 1) u = 0;
+	else if (u == 2) u = 1;
+	else if (u == 4) u = 2;
+	else if (u == 8) u = 3;
+	else if (u == 16) u = 4;
+	else if (u == 32) u = 5;
+	else if (u == 64) u = 6;
+	else if (u == 128) u = 7;
+	else {
 	  fprintf(stderr," Device '%o, bad select '%o\n", device, u);
-	  dc[device].usel = -1;    /* de-select */
-	  dc[device].status != 2;  /* set bit 15: select error */
+	  dc[device].status |= 0100002;  /* set bit 15: select error */
 	  break;
 	}
-	u = u >> 1;                /* unit => 0/1/2/4 */
-	if (u == 4) u = 3;         /* unit => 0/1/2/3 */
 	TRACE(T_INST|T_DIO, " select unit %d\n", u);
 	dc[device].usel = u;
 	if (dc[device].unit[u].devfd == -1) {
-	  snprintf(devfile,sizeof(devfile),"dev%ou%d", device, u);
-	  TRACE(T_INST|T_DIO, " filename for dev '%o unit %d is %s\n", device, u, devfile);
-	  /* NOTE: add O_CREAT to allow creating new drives on the fly */
-	  if ((dc[device].unit[u].devfd = open(devfile, O_RDWR, 0770)) == -1) {
-	    fprintf(stderr,"em: unable to open disk device file %s for device '%o unit %d; flagging \n", devfile, device, u);
-	    dc[device].status = 0100001;    /* not ready */
-	  } else {
-#ifdef DISKSAFE
-	    if (flock(dc[device].unit[u].devfd, LOCK_SH+LOCK_NB) == -1)
-	      fatal("Disk drive file is in use");
-	    dc[device].unit[u].modrecs = calloc(HASHMAX, sizeof(void *));
-	    //fprintf(stderr," Device '%o, unit %d, modrecs=%p\n", device, u, dc[device].unit[u].modrecs);
-#else
-	    if (flock(dc[device].unit[u].devfd, LOCK_EX+LOCK_NB) == -1)
-	      fatal("Disk drive file is in use");
-#endif
+	  if (globdisk(devfile, sizeof(devfile), device, u) != 0) {
+	    dc[device].status |= 0100001;  /* set bit 16: not ready */
+	    break;
 	  }
+	  if ((dc[device].unit[u].devfd = open(devfile, O_RDWR)) == -1) {
+	    if ((dc[device].unit[u].devfd = open(devfile, O_RDONLY)) == -1) {
+	      fprintf(stderr, "em: unable to open disk device file %s for device '%o unit %d; flagging \n", devfile, device, u);
+	      dc[device].status = 0100001;    /* not ready */
+	      break;
+	    } else {
+	      lockkey = LOCK_SH;
+	      dc[device].unit[u].wp = 1;
+	    }
+	  } else {
+	    lockkey = LOCK_EX;
+	    dc[device].unit[u].wp = 0;
+	  }
+	  /* determine geometry from disk file suffix */
+	  for (i=0; i < NUMGEOM; i++)
+	    if (strcasestr(devfile, geom[i].suffix)) {
+	      dc[device].unit[u].heads = geom[i].heads;
+	      dc[device].unit[u].spt = geom[i].spt;
+	      dc[device].unit[u].maxtrack = geom[i].maxtrack;
+	      break;
+	    }
+	  if (i == NUMGEOM) {
+	    fprintf(stderr, "em: unknown geometry for %s\n", devfile);
+	    close(dc[device].unit[u].devfd);
+	    dc[device].unit[u].devfd = -1;
+	    dc[device].status = 0100001;    /* not ready */
+	    break;
+	  }
+#ifdef DISKSAFE
+	  if (flock(dc[device].unit[u].devfd, LOCK_SH+LOCK_NB) == -1)
+	    fatal("Disk drive file is in use");
+	  dc[device].unit[u].modrecs = calloc(HASHMAX, sizeof(void *));
+	  //fprintf(stderr," Device '%o, unit %d, modrecs=%p\n", device, u, dc[device].unit[u].modrecs);
+#else
+	  if (flock(dc[device].unit[u].devfd, lockkey+LOCK_NB) == -1)
+	    fatal("Disk drive file is in use");
+#endif
 	}
 	break;
 
