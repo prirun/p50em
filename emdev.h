@@ -255,11 +255,12 @@ int devnone (int class, int func, int device) {
 
 int devasr (int class, int func, int device) {
 
+  static initialized = 0;
   static FILE *conslog;
   static int ttydev;
   static int ttyflags;
   static int needflush;     /* true if data has been written but not flushed */
-  static struct termios terminfo;
+  static struct termios origterminfo, terminfo;
   static fd_set fds;
   static short vcptime[8] = {7*0, 1};
   static short vcptimeix;
@@ -276,7 +277,14 @@ int devasr (int class, int func, int device) {
 
   switch (class) {
 
-  case -1:
+  case -2:    /* cleanup */
+    if (!initialized) return;
+    if (tcsetattr(ttydev, TCSANOW, &origterminfo) == -1)
+      perror(" unable to reset tty attributes");
+    fclose(conslog);
+    break;
+
+  case -1:    /* initialize */
     setsid();
     ttydev = open("/dev/tty", O_RDWR, 0);
     if (ttydev < 0) {
@@ -292,6 +300,10 @@ int devasr (int class, int func, int device) {
       perror(" unable to get tty attributes");
       fatal(NULL);
     }
+    
+    /* save initial terminal setup to restore when exiting */
+
+    origterminfo = terminfo;
 
     /* NOTE: some of these are not restored by the host OS after the
        emulator is suspended (VSUSP) then restarted, eg, the VSUSP and
@@ -322,10 +334,22 @@ int devasr (int class, int func, int device) {
       fatal(NULL);
     }
     setvbuf(conslog, NULL, _IOLBF, 0);
+    initialized = 1;
     return 0;
 
   case 0:
     TRACE(T_INST, " OCP '%02o%02o\n", func, device);
+    if (func == 010)       /* enable full duplex */
+      terminfo.c_lflag &= ~ECHO;
+    else if (func == 012)  /* enable "echoplex" */
+      terminfo.c_lflag |= ECHO;
+    if (func == 010 | func == 012) {
+      if (tcsetattr(ttydev, TCSANOW, &terminfo) == -1) {
+	perror(" unable to set tty attributes");
+	fatal(NULL);
+      }
+    } else
+      TRACEA("devasr: unrecognized OCP '%02o%02o\n", func, device);
     break;
 
   case 1:
@@ -352,8 +376,8 @@ int devasr (int class, int func, int device) {
 	timeout.tv_sec = 0;        /* yes, can't delay */
       else {
 	timeout.tv_sec = 1;        /* single user: okay to delay */
-#if 1
-	fflush(tracefile);         /* hack to flush for 32i testing */
+#if 0
+	fflush(tracefile);         /* hack to flush for testing */
 #endif
       }
       timeout.tv_usec = 0;
@@ -413,6 +437,7 @@ readasr:
 	}
       } else if (n == 1) {
 	if (ch == '') {
+	  printf("Trace owner = %o/%o\n", crs[OWNER], crs[OWNERL]);
 	  if (savetraceflags == 0) {
 	    TRACEA("\nTRACE ENABLED:\n\n");
 	    savetraceflags = ~TB_MAP;
@@ -625,21 +650,24 @@ int mtread (int fd, unsigned short *iobuf, int nw, int fw, int *mtstat) {
     n = read(fd, buf, 4);
     TRACE(T_TIO, " mtread read foward, %d bytes for reclen\n", n);
     if (n == 0) {                   /* now we're at EOT */
-      *mtstat |= 0x20;
+      if (*mtstat & 0x8)            /* were we at BOT? */
+	*mtstat |= 0x200;           /* yes, return error */
+      else
+	*mtstat |= 0x20;            /* no, return EOT */
       return 0;
     }
     *mtstat &= ~8;                   /* not at BOT now */
 readerr:
     if (n == -1) {
       perror("Error reading from tape file");
-      *mtstat = 0;                   /* take drive offline */
+      *mtstat |= 0x200;              /* raw error */
       return 0;
     }
     if (n < 4) {
       fprintf(stderr," only read %d bytes for reclen\n", n);
 fmterr:
       warn("Tape file isn't in .TAP format");
-      *mtstat = 0;
+      *mtstat |= 0x200;              /* raw error */
       return 0;
     }
     reclen = buf[0] | (buf[1]<<8) | (buf[2]<<16) | (buf[3]<<24);
@@ -650,11 +678,11 @@ fmterr:
     }
     if (reclen == 0xFFFF) {        /* hit EOT mark */
 
-      /* NOTE: simh says to backup here, probably to wipe out EOT if
-       more data is written.  IMO, EOT should never be written to
-       simulated tape files. */
+      /* NOTE: simh .tap doc says to backup here, probably to wipe out
+       EOT if more data is written.  IMO, EOT should never be written
+       to simulated tape files. */
 
-      if (lseek(fd, -4, SEEK_CUR) == -1) {
+      if ((n=lseek(fd, -4, SEEK_CUR)) == -1) {
 	perror("em: unable to backspace over EOT");
 	goto readerr;
       }
@@ -662,7 +690,7 @@ fmterr:
       return 0;
     }
     if (reclen & 0x8000) {         /* record marked in error */
-      /* NOTE: simh may have non-zero record length here... */
+      /* NOTE: .tap may have non-zero record length here... */
       *mtstat |= 0xB600;           /* set all error bits */;
       return 0;
     }
@@ -695,7 +723,7 @@ fmterr:
       if (n == -1) goto readerr;
       if (n != bytestoread) goto fmterr;
       if (bytestoread != reclen) {     /* skip the rest of the record */
-	if (lseek(fd, reclen-bytestoread, SEEK_CUR) == -1) {
+	if ((n=lseek(fd, reclen-bytestoread, SEEK_CUR)) == -1) {
 	  fprintf(stderr,"em: unable to handle large record\n");
 	  goto readerr;
 	}
@@ -718,7 +746,7 @@ fmterr:
     /* spacing backward, see if we're at BOT */
 
     if ((*mtstat & 8) || (lseek(fd, 0, SEEK_CUR) == 0)) {
-      *mtstat |= 8;                    /* yep, at BOT */
+      *mtstat = (*mtstat | 8) & ~0x20;;   /* at BOT, not EOT */
       return 0;
     }
 
@@ -782,10 +810,11 @@ int devmt (int class, int func, int device) {
 
   static unsigned short mtvec = 0114;          /* interrupt vector */
   static unsigned short dmxchan = 0;           /* dmx channel number */
-  static unsigned short datareg = 0;           /* data holding register */
-  static unsigned short ready = 0;             /* true if datareg valid */
+  static unsigned short datareg = 0;           /* INA 00 data register */
+  static unsigned short ready = 0;             /* true if INA 00 ready */
+  static unsigned short busy = 0;              /* true if MPC busy */
   static unsigned short enabled = 0;           /* interrupts enabled */
-  static unsigned short interrupting = 0;      /* true if interrupt pending */
+  static unsigned short interrupting = 0;      /* 1 if pending, 2 if active */
   static unsigned short usel = 0;              /* last unit selected */
   static struct {
     int fd;                           /* tape file descriptor */
@@ -796,8 +825,8 @@ int devmt (int class, int func, int device) {
   int u;
   char devfile[8];
 
-  /* the largest rec size Primos ever supported is 16K bytes, plus 8
-   bytes for the 4-byte .TAP format record length at the beginning &
+  /* the largest rec size Primos ever supported is 8K halfwords, plus
+   4 words for the 4-byte .TAP format record length at the beginning &
    end of each record */
 
 #define MAXTAPEWORDS 8*1024
@@ -805,13 +834,13 @@ int devmt (int class, int func, int device) {
   unsigned short iobuf[MAXTAPEWORDS+4]; /* 16-bit WORDS! */
   unsigned short *iobufp;
   unsigned short dmxreg;                /* DMA/C register address */
-  unsigned short tempdmxchan;           /* temp to incr during xfer */
   short dmxnch;                         /* number of DMX channels - 1 */
-  unsigned short dmxaddr;
+  unsigned int dmxaddr;
   unsigned long dmcpair;
   short dmxnw, dmxtotnw;
   int i,n;
   char reclen[4];
+  unsigned short ioword;
 
   switch (class) {
 
@@ -830,23 +859,24 @@ int devmt (int class, int func, int device) {
       ;
 
     } else if (func == 014) {             /* ack interrupt */
-      /* this is a hack because Primos acks interrupts immediately after
-	 OTA 01 (due to a tape controller bug) */
-      if (interrupting)
-	interrupting--;
+      interrupting = 0;
 
     } else if (func == 015) {             /* set interrupt mask */
       enabled = 1;
-
+      if (interrupting == 1)              /* if interrupt is pending */
+	devpoll[device] = 10;             /* try to interrupt soon */
+      
     } else if (func == 016) {             /* reset interrupt mask */
       enabled = 0;
 
     } else if (func == 017) {             /* initialize */
-      mtvec = 014;
+      mtvec = 0114;
       dmxchan = 0;
       datareg = 0;
       interrupting = 0;
+      enabled = 0;
       ready = 0;
+      busy = 1;
       usel = 0;
 
     } else {
@@ -861,9 +891,12 @@ int devmt (int class, int func, int device) {
       if (ready)
 	IOSKIP;
     } else if (func == 01) {               /* skip if not busy */
-      IOSKIP;
+      if (busy)                            /* return busy once after init */
+	busy = 0;
+      else
+	IOSKIP;
     } else if (func == 04) {               /* skip if not interrupting */
-      if (!interrupting)
+      if (interrupting != 2)
 	IOSKIP;
     } else {
       printf("Unimplemented SKS device '%02o function '%02o\n", device, func);
@@ -872,13 +905,22 @@ int devmt (int class, int func, int device) {
     break;
 
   case 2:
+
+    /* according to version 0 controller docs, INA '014 should only
+       respond ready one time after an OTA '0214, and should respond
+       not ready otherwise (ie, the INA doesn't skip).  But, this
+       causes Primos to lock up, spinning in an INA '014 loop, so the
+       emulator returns 0 on subsequent INA's */
+
     TRACE(T_INST|T_TIO, " INA '%02o%02o\n", func, device);
     if (func == 0) {
-#if 0
-      if (!ready) warn("INA 00 on tape device w/o matching OTA!");
-#endif
-      crs[A] = datareg;
-      datareg = 0;
+      if (!ready) {
+	TRACE(T_INST|T_TIO, "INA 0 on tape device w/o matching OTA!\n");
+	crs[A] = 0;
+      } else {
+	TRACE(T_INST|T_TIO, "  INA 0 returns '%06o 0x%04x\n", datareg, datareg);
+	crs[A] = datareg;
+      }
       ready = 0;
       IOSKIP;
 
@@ -891,14 +933,14 @@ int devmt (int class, int func, int device) {
   case 3:
     TRACE(T_INST|T_TIO, " OTA '%02o%02o, A='%06o %04x\n", func, device, crs[A], crs[A]);
 
-#if 0
-    /* don't accept any OTA's if we're interrupting */
+    if (func != 0)
+      busy = 0;
 
-    if (interrupting)
-      break;
-#endif
+    if (func == 00) {
+      datareg = crs[A];
+      IOSKIP;
 
-    if (func == 01) {
+    } else if (func == 01) {
 
       /* here's the hard part where everything happens... decode unit first */
 
@@ -929,6 +971,7 @@ int devmt (int class, int func, int device) {
 	unit[u].firstwrite = 1;
 	snprintf(devfile,sizeof(devfile),"dev%ou%d", device, u);
 	TRACE(T_TIO, " filename for tape dev '%o unit %d is %s\n", device, u, devfile);
+	/* XXX: add code for read-protected tapes */
 	if ((unit[u].fd = open(devfile, O_RDWR, 0770)) == -1) {
 	  fprintf(stderr,"em: unable to open tape device file %s for device '%o unit %d for read/write\n", devfile, device, u);
 	  IOSKIP;
@@ -940,7 +983,7 @@ int devmt (int class, int func, int device) {
       /* "select only" is ignored.  On a real tape controller, this
        blocks (I think) if the previous tape operation is in progress */
 
-      if (crs[A] & 0x8000) {
+      if ((crs[A] & 0xFFF00) == 0x8000) {
 	TRACE(T_TIO, " select only\n");
 	IOSKIP;
 	break;
@@ -951,16 +994,9 @@ int devmt (int class, int func, int device) {
 
       unit[u].mtstat &= 0x00EC;
 
-      /* for rewind, read, write, & space, setup a completion
-	 interrupt if controller interrupts are enabled.  NOTE: there
-	 is a race condition here.  Immediately following OTA 01,
-	 Primos clears pending interrupts because of an old tape
-	 controller bug.  To get around this, "interrupting" is a
-	 counter and is set to 2 so that when Primos clears
-	 interrupts, the counter is decremented in this driver, but
-	 the interrupt will still occur later */
+      /* for rewind, read, write, & space, setup a completion interrupt */
 
-      interrupting = 2;
+      interrupting = 1;
       devpoll[device] = 10;
 
       if ((crs[A] & 0x00E0) == 0x0020) {       /* rewind */
@@ -970,7 +1006,7 @@ int devmt (int class, int func, int device) {
 	  perror("Unable to rewind tape drive file");
 	  fatal(NULL);
 	}
-	unit[u].mtstat = 0x00C8;    /* Ready, Online, BOT */
+	unit[u].mtstat = 0x00D0;    /* Ready, Online, Rewinding */
 	IOSKIP;
 	break;
       }
@@ -1032,6 +1068,7 @@ int devmt (int class, int func, int device) {
 	 iobuf and the length returned by mtwrite reflects that */
 
       if (crs[A] & 0x10) {         /* write record */
+	TRACE(T_TIO, " write record\n");
 	dmxtotnw = 0;
 	iobufp = iobuf+2;
       } else {
@@ -1048,16 +1085,13 @@ int devmt (int class, int func, int device) {
 	  dmcpair = get32io(dmxreg);    /* fetch begin/end pair */
 	  dmxaddr = dmcpair>>16;
 	  dmxnw = (dmcpair & 0xffff) - dmxaddr + 1;
-	  TRACE(T_INST|T_TIO,  " DMC channels: ['%o]='%o, ['%o]='%o, nwords=%d\n", dmxreg, dmxaddr, dmxreg+1, (dmcpair & 0xffff), dmxnw);
+	  TRACE(T_INST|T_TIO,  " DMC channels: ['%o]='%o, ['%o]='%o, nwords=%d", dmxreg, dmxaddr, dmxreg+1, (dmcpair & 0xffff), dmxnw);
 	} else {                        /* DMA */
 	  dmxreg = dmxreg << 1;
 	  dmxnw = regs.sym.regdmx[dmxreg];
-	  if (dmxnw <= 0)
-	    dmxnw = -(dmxnw>>4);
-	  else
-	    dmxnw = -((dmxnw>>4) ^ 0xF000);
-	  dmxaddr = regs.sym.regdmx[dmxreg+1];
-	  TRACE(T_INST|T_TIO,  " DMA channels: ['%o]='%o, ['%o]='%o, nwords=%d\n", dmxreg, regs.sym.regdmx[dmxreg], dmxreg+1, dmxaddr, dmxnw);
+	  dmxnw = -((dmxnw>>4) | 0xF000);
+	  dmxaddr = ((regs.sym.regdmx[dmxreg] & 3)<<16) | regs.sym.regdmx[dmxreg+1];
+	  TRACE(T_INST|T_TIO, " DMA channels: ['%o]='%o, ['%o]='%o/%o, nwords=%d", dmxreg, regs.sym.regdmx[dmxreg], dmxreg+1, dmxaddr>>16, dmxaddr&0xffff, dmxnw);
 	}
 	if (dmxnw < 0) {            /* but is legal for >32K DMC transfer... */
 	  printf("devmt: requested negative DMX of size %d\n", dmxnw);
@@ -1067,22 +1101,32 @@ int devmt (int class, int func, int device) {
 	  if (dmxtotnw+dmxnw > MAXTAPEWORDS)
 	    fatal("Tape write is too big");
 	  for (i=0; i < dmxnw; i++) {
-	    *iobufp++ = get16io(dmxaddr+i);
+	    ioword = get16io(dmxaddr+i);
+	    if (i%10 == 0)
+	      TRACE(T_TIO, "\n %04d: ", i);
+	    TRACE(T_TIO, " %03o %03o", (unsigned)ioword>>8, ioword&0xff);
+	    *iobufp++ = ioword;
 	  }
+	  TRACE(T_TIO, "\n");
 	  dmxtotnw = dmxtotnw + dmxnw;
 	} else {
 	  if (dmxnw > dmxtotnw)
 	    dmxnw = dmxtotnw;
 	  for (i=0; i < dmxnw; i++) {
-	    put16io(*iobufp++, dmxaddr+i);
+	    ioword = *iobufp++;
+	    if (i%10 == 0)
+	      TRACE(T_TIO, "\n %04d: ", i);
+	    TRACE(T_TIO, " %03o %03o", (unsigned)ioword>>8, ioword&0xff);
+	    put16io(ioword, dmxaddr+i);
 	  }
+	  TRACE(T_TIO, "\n");
 	  dmxtotnw = dmxtotnw - dmxnw;
 	}
-	TRACE(T_TIO, " read/wrote %d words\n", dmxnw);
-	if (dmxchan & 0x0800) {         /* DMC */
+	TRACE(T_TIO, " transferred %d words\n", dmxnw);
+	if (dmxchan & 0x0800) {                    /* if DMC... */
 	  put16io(dmxaddr+dmxnw, dmxreg);          /* update starting address */
-	} else {
-	  regs.sym.regdmx[dmxreg] += dmxnw<<4;     /* increment # words */
+	} else {                                   /* if DMA...
+	  regs.sym.regdmx[dmxreg] += (dmxnw<<4);   /* increment # words */
 	  regs.sym.regdmx[dmxreg+1] += dmxnw;      /* increment address */
 	}
 
@@ -1097,7 +1141,6 @@ int devmt (int class, int func, int device) {
       /* for write record, do the write */
 
       if (crs[A] & 0x10) {             /* write record */
-	TRACE(T_TIO, " write record\n");
 	n = dmxtotnw*2;
 	reclen[0] = n & 0xFF;
 	reclen[1] = n>>8 & 0xFF;
@@ -1116,23 +1159,30 @@ int devmt (int class, int func, int device) {
       break;
 	
     } else if (func == 02) {
-      TRACE(T_TIO,  "  setup INA, A='%06o, 0x%04x\n", crs[A], crs[A]);
-      if (crs[A] & 0x8000)
+      ready = 1;
+      if (crs[A] & 0x8000) {      /* status word 1 */
 	datareg = unit[usel].mtstat;
-      else if (crs[A] & 0x4000)
-	datareg = 0114;           /* device ID */
+	
+	/* if the tape was rewinding, return rewinding status once, then
+	   change it to BOT */
+
+	if (datareg & 0x10)
+	  unit[usel].mtstat = unit[usel].mtstat & ~0x10 | 0x8;
+      } else if (crs[A] & 0x4000)
+	datareg = 0214;           /* device ID */
       else if (crs[A] & 0x2000)
 	datareg = dmxchan;
       else if (crs[A] & 0x1000)
 	datareg = mtvec;
+      else if (crs[A] & 0x800)
+	datareg = 0;              /* status word 2 */
       else {
 	TRACE(T_TIO, "  Bad OTA '02 to tape drive, A='%06o, 0x$04x\n", crs[A], crs[A]);
-	if (enabled) {
-	  interrupting = 1;
-	  devpoll[device] = 10;
-	}
+	datareg = 0;
+	interrupting = 1;
+	devpoll[device] = 10;
       }
-      TRACE(T_TIO,  "  datareg='%06o, 0x%04x\n", datareg, datareg);
+      TRACE(T_TIO,  "  setup INA 0, datareg='%06o, 0x%04x\n", datareg, datareg);
       IOSKIP;
 
     } else if (func == 03) {                /* power on */
@@ -1141,37 +1191,39 @@ int devmt (int class, int func, int device) {
 
     } else if (func == 05) {                /* illegal - DIAG */
       TRACE(T_TIO,  " illegal DIAG OTA '05\n");
-      if (enabled) {
-	interrupting = 1;
-	devpoll[device] = 10;
-	IOSKIP;
-      }
+      interrupting = 1;
+      devpoll[device] = 10;
+      IOSKIP;
 
     } else if (func == 014) {               /* set DMX channel */
       dmxchan = crs[A];
       TRACE(T_TIO,  " dmx channel '%o, 0x%04x\n", dmxchan, dmxchan);
       IOSKIP;
 
+    } else if (func == 015) {               /* start u-code test */
+      TRACE(T_TIO,  " u-code test\n");
+      IOSKIP;
+
     } else if (func == 016) {               /* set interrupt vector */
       mtvec = crs[A];
-      TRACE(T_TIO,  " interrupt vector '%o\n", mtvec);
+      TRACE(T_TIO,  " set int vec '%o\n", mtvec);
       IOSKIP;
 
     } else {
       printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
-      fatal(NULL);
     }
     break;
 
   case 4:
     TRACE(T_TIO,  " POLL device '%02o, enabled=%d, interrupting=%d\n", device, enabled, interrupting);
-    if (enabled && interrupting) {
-      if (intvec == -1) {
+    if (enabled && (interrupting == 1)) {
+      devpoll[device] = 100;         /* assume interrupt will be deferred */
+      if (intvec == -1 && (crs[MODALS] & 0100000) && inhcount == 0) {
 	TRACE(T_TIO,  " CPU interrupt to vector '%o\n", mtvec);
 	intvec = mtvec;
+	devpoll[device] = 0;
+	interrupting = 2;
       }
-      /* HACK: keep interrupting because of Primos/controller race bug */
-      devpoll[device] = 100;
     }
   }
 }
@@ -1867,15 +1919,15 @@ int devdisk (int class, int func, int device) {
 	  dc[device].status |= 2;      /* select error (right?)... */
 	  break;
 	}
+	dc[device].status &= ~4;   /* clear bit 14: seek error */
 	if (m1 & 0100000) {
 	  track = 0;
-	  dc[device].status &= ~4;   /* clear bit 14: seek error */
 	} else {
 	  track = m1 & 03777;
 	}
 	TRACE(T_INST|T_DIO, " seek track %d, restore=%d, clear=%d\n", track, (m1 & 0100000) != 0, (m1 & 040000) != 0);
 	if (track > dc[device].unit[u].maxtrack) {
-	  fprintf(stderr," Device '%o, seek to track %d > cylinder limit of %d\n", device, track, dc[device].unit[u].maxtrack);
+	  fprintf(stderr," Device '%o, unit %d, seek to track %d > cylinder limit of %d\n", device, u, track, dc[device].unit[u].maxtrack);
 	  dc[device].status |= 4;    /* set bit 14: seek error */
 	  track = -1;
 	}

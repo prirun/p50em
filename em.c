@@ -1,12 +1,14 @@
 /* Pr1me Computer emulator, Jim Wilcoxson (prirun@gmail.com), April 4, 2005
-   Copyright (C) 2005, Jim Wilcoxson (prirun@gmail.com).  All Rights Reserved.
+   Copyright (C) 2005-2007, Jim Wilcoxson.  All Rights Reserved.
 
    Emulates a Prime Computer system by:
    - booting from a Prime disk image (normal usage)
    - booting from a Prime MAGSAV tape
    - restoring a Prime R-mode .save image from the host file system
 
-   This is a project in development, so please don't publish it.
+   This is a project in development, so please don't publish it or
+   make it available for others to use.
+
    Comments, suggestions, corrections, and general notes that you're
    interested in a Prime emulation project are welcome and
    appreciated.
@@ -115,6 +117,11 @@ OK:
 typedef unsigned int ea_t;            /* effective address */
 typedef unsigned int pa_t;            /* physical address */
 
+/* procs needing forward declarations */
+
+void fault(unsigned short fvec, unsigned short fcode, ea_t faddr);
+
+
 /* the live program counter register is aka microcode scratch register TR7 */
 
 #define RP regs.sym.tr7
@@ -184,7 +191,7 @@ typedef unsigned int pa_t;            /* physical address */
 #define SETC crs[KEYS] |= 0100000
 #define CLEARC crs[KEYS] &= 077777
 
-/* XEXPC, XSETC, XCLEARC are stuubs to indicate that the C-bit may not be set correctly */
+/* XEXPC, XSETC, XCLEARC are stubs to indicate that the C-bit may not be set correctly */
 
 #define XEXPC   EXPC
 #define XCLEARC CLEARC
@@ -367,7 +374,7 @@ int intvec=-1;                       /* currently raised interrupt (if >= zero) 
 /* NOTE: Primos II gives "NOT FOUND" on STARTUP 2460 command if sense
    switches are set to 014114.  But DIAGS like this setting. :( */
 
-unsigned short sswitch = 014114;     /* sense switches, set with -ss & -boot*/
+unsigned short sswitch = 014114;     /* sense switches, set with -ss & -boot */
 
 /* NOTE: the default cpuid is a P750: 1 MIPS, 8MB of memory */
 
@@ -387,11 +394,17 @@ jmp_buf jmpbuf;                      /* for longjumps to the fetch loop */
 
    NOTE: 
    - rev 20 is limited to a max of 32MB
-   - rev 23.4 is limited to a max of 128MB
+   - rev 23.4 is limited to a max of 512MB
+
+   "memlimit" is set with the -mem argument, taking an argument which is
+   the desired memory limit in MB.  Setting a memory limit is useful to
+   speed up system boots and diagnostics during emulator testing.
  */
 
-#define MEMSIZE 256*1024*1024   /* 128 MB */
-unsigned short mem[MEMSIZE];   /* system's physical memory */
+#define MEMSIZE 512/2*1024*1024  /* 512 MB */
+
+unsigned short mem[MEMSIZE];     /* system's physical memory */
+int memlimit;                    /* user's desired memory limit (-mem) */
 
 #define MAKEVA(seg,word) ((((int)(seg))<<16) | (word))
 
@@ -413,7 +426,7 @@ typedef struct {
   char access[4];             /* ring n access rights */
   unsigned short procid;      /* process id for segments >= '4000 */
   unsigned short seg;         /* segment number */
-  unsigned int ppn;           /* physical page number (15 bits = 64MB limit) */
+  unsigned int ppn;           /* physical page number */
   unsigned short *pmep;       /* pointer to page table flag word */
   unsigned long load_ic;      /* instruction where STLB was loaded (for debug) */
 } stlbe_t;
@@ -426,7 +439,7 @@ stlbe_t stlb[STLBENTS];
 
 typedef struct {
   char valid;                 /* 1 if IOTLB entry is valid, zero otherwise */
-  unsigned int ppn;           /* physical page (16 bits = 128MB limit) */
+  unsigned int ppn;           /* physical page number */
 } iotlbe_t;
 
 iotlbe_t iotlb[IOTLBENTS];
@@ -498,6 +511,7 @@ ea_t tnoua_ea=0, tnou_ea=0;
 int verbose;                         /* -v (not used anymore) */
 int domemdump;                       /* -memdump arg */
 int pmap32bits;                      /* true if 32-bit page maps */
+int pmap32mask;                      /* mask for 32-bit page maps */
 int csoffset;                        /* concealed stack segment offset */
 int tport;                           /* -tport option (incoming terminals) */
 int nport;                           /* -nport option (PNC/Ringnet) */
@@ -657,8 +671,6 @@ char *searchloadmap(int addr, char type) {
 #define WACC 3
 #define XACC 4
 
-void fault(unsigned short fvec, unsigned short fcode, ea_t faddr);
-
 
 /* NOTE: this is the 6350 STLB hash function, giving a 9-bit index 0-511 */
 
@@ -720,7 +732,15 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
       if (pmap32bits) {
 	pmaddr = ptaddr + 2*PAGENO(ea);
 	pte = mem[pmaddr];
-	ppn = mem[pmaddr+1];
+
+	/* this is probably correct (don't have any references) for
+	   the 53xx and later machines that support more than 128MB of
+	   physical memory, but it can't be used for earlier machines
+	   like the 9950 or they can't run older software (rev 19 for
+	   example).  Need to have a mask for each CPU type to make it
+	   technically correct. */
+
+	ppn = ((mem[pmaddr] & pmap32mask) << 16) | mem[pmaddr+1];
       } else {
 	pmaddr = ptaddr + PAGENO(ea);
 	pte = mem[pmaddr];
@@ -763,11 +783,12 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
     pa = (stlbp->ppn << 10) | (ea & 0x3FF);
     TRACE(T_MAP,"        for ea %o/%o, stlbix=%d, pa=%o	loaded at #%d\n", ea>>16, ea&0xffff, stlbix, pa, stlbp->load_ic);
   } else {
+    /* XXX: this test looks bogus and should be removed, but causes boot failures related to disk I/O if removed */
     pa = ea & (MEMSIZE-1);
   }
-  if (pa <= MEMSIZE)
+  if (pa < memlimit)
     return pa;
-  printf(" map: Memory address %o (%o/%o) is out of range!\n", ea, ea>>16, ea & 0xffff);
+  printf(" map: Memory address '%o (%o/%o) is out of range 0-'%o!\n", ea, ea>>16, ea & 0xffff, memlimit-1);
   fatal(NULL);
   /* NOTE: could also take a missing memory check here... */
 }
@@ -994,10 +1015,52 @@ put64r(double value, ea_t ea, ea_t rpring) {
 }
 
 
+/* I/O device map table, containing function pointers to handle device I/O */
+
+int devpoll[64] = {0};
+
+#include "emdev.h"
+
+#if 0
+
+/* this is the "full system" controller configuration */
+
+int (*devmap[64])(int, int, int) = {
+  /* '0x */ devnone,devnone,devnone,devnone,devasr,devnone,devnone,devpnc,
+  /* '1x */ devnone,devnone,devnone,devnone,devmt,devamlc, devamlc, devamlc,
+  /* '2x */ devcp,devnone,devdisk,devdisk,devdisk,devdisk,devdisk,devdisk,
+  /* '3x */ devnone,devnone,devamlc,devnone,devnone,devamlc,devnone,devnone,
+  /* '4x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '5x */ devnone,devnone,devamlc,devamlc,devamlc,devnone,devnone,devnone,
+  /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
+
+#else
+
+/* this is the "minimum system" controller configuration */
+
+int (*devmap[64])(int, int, int) = {
+  /* '0x */ devnone,devnone,devnone,devnone,devasr,devnone,devnone,devpnc,
+#if 1
+  /* '1x */ devnone,devnone,devnone,devnone,devmt,devnone, devnone, devnone,
+#else
+  /* '1x */ devnone,devnone,devnone,devnone,devnone,devnone, devnone, devnone,
+#endif
+  /* '2x */ devcp,devnone,devnone,devnone,devnone,devnone,devdisk,devnone,
+  /* '3x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '4x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '5x */ devnone,devnone,devnone,devnone,devamlc,devnone,devnone,devnone,
+  /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
+#endif
+
+
+
 fatal(char *msg) {
   ea_t pcbp, csea;
   unsigned short first,next,last,this;
   unsigned short cs[6];
+  int i;
 
   printf("Fatal error: instruction #%d at %o/%o %s: %o %o\nowner=%o %s, keys=%o, modals=%o\n", instcount, prevpc >> 16, prevpc & 0xFFFF, searchloadmap(prevpc,' '), get16(prevpc), get16(prevpc+1), crs[OWNERL], searchloadmap(*(unsigned int *)(crs+OWNER),' '), crs[KEYS], crs[MODALS]);
   
@@ -1021,7 +1084,13 @@ fatal(char *msg) {
   if (msg)
     printf("%s\n", msg);
   /* should do a register dump, RL dump, PCB dump, etc. here... */
-  close(tracefile);
+
+  /* call all devices with a request to terminate */
+
+  for (i=0; i<64; i++)
+    devmap[i](-2, 0, i);
+
+  fclose(tracefile);
   exit(1);
 }
 
@@ -1239,47 +1308,6 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
   longjmp(jmpbuf, 1);
   fatal("fault: returned after longjmp\n");
 }
-
-
-/* I/O device map table, containing function pointers to handle device I/O */
-
-int devpoll[64] = {0};
-
-#include "emdev.h"
-
-#if 0
-
-/* this is the "full system" controller configuration */
-
-int (*devmap[64])(int, int, int) = {
-  /* '0x */ devnone,devnone,devnone,devnone,devasr,devnone,devnone,devpnc,
-  /* '1x */ devnone,devnone,devnone,devnone,devmt,devamlc, devamlc, devamlc,
-  /* '2x */ devcp,devnone,devdisk,devdisk,devdisk,devdisk,devdisk,devdisk,
-  /* '3x */ devnone,devnone,devamlc,devnone,devnone,devamlc,devnone,devnone,
-  /* '4x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
-  /* '5x */ devnone,devnone,devamlc,devamlc,devamlc,devnone,devnone,devnone,
-  /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
-  /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
-
-#else
-
-/* this is the "minimum system" controller configuration */
-
-int (*devmap[64])(int, int, int) = {
-  /* '0x */ devnone,devnone,devnone,devnone,devasr,devnone,devnone,devpnc,
-#if 1
-  /* '1x */ devnone,devnone,devnone,devnone,devmt,devnone, devnone, devnone,
-#else
-  /* '1x */ devnone,devnone,devnone,devnone,devnone,devnone, devnone, devnone,
-#endif
-  /* '2x */ devcp,devnone,devnone,devnone,devnone,devnone,devdisk,devnone,
-  /* '3x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
-  /* '4x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
-  /* '5x */ devnone,devnone,devnone,devnone,devamlc,devnone,devnone,devnone,
-  /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
-  /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
-#endif
-
 
 
 /* 16S Addressing Mode */
@@ -1700,8 +1728,6 @@ ea_t stex(unsigned int extsize) {
   stackrootseg = get16((*(unsigned int *)(crs+SB))+1);
   stackrootp = MAKEVA(stackrootseg,0);
   stackfp = get32(stackrootp);
-  if (stackfp == 0)
-    fatal("stex: stack free pointer is zero");
 
   /* find a stack segment where this extension will fit */
 
@@ -1956,7 +1982,7 @@ pcl (ea_t ecbea) {
   ea_t ea;
   ea_t rp;                    /* return pointer */
   short stackrootseg;
-  short stacksize;
+  unsigned short stacksize;
   short store;                /* true if store bit set on AP */
   short storedargs;           /* # of arguments that have been stored */
   short lastarg;              /* true if "last" bit seen in PCL arglist */
@@ -2831,18 +2857,6 @@ nfy(unsigned short inst) {
   }
 
   scount = scount-1;
-#if 0
-  /* NOTE: shouldn't have to do this if everything is working right, but with
-     PRIMOS we get:
-CFatal error: instruction #81929908 at 6/54311: 315 4400
-WAIT: count == 1 but bol != 0
-keys = 14200, modals=137CFatal error: instruction #81929908 at 6/54311: 315 4400
-WAIT: count == 1 but bol != 0
-keys = 14200, modals=137
-  */
-  if (scount <= 0)
-    bol = 0;
-#endif
   utempl = (scount<<16) | bol;
   put32r0(utempl, ea);           /* update the semaphore */
 
@@ -3446,7 +3460,7 @@ int ldar(ea_t ea) {
     RESTRICT();
 
     if ((ea & 0777) > 0477) {
-      printf("em: LDLR ea '%o is out of range\n", ea);
+      printf("em: LDLR ea '%o is out of range for this CPU model\n", ea);
       fatal(NULL);
     }
     ea &= 0777;
@@ -3470,7 +3484,7 @@ star(unsigned int val32, ea_t ea) {
   if (ea & 040000) {       /* absolute RF addressing */
     RESTRICT();
     if ((ea & 0777) > 0477) {
-      printf("em: STLR ea '%o is out of range; this -cpuid may not be supported by this version of software\n", ea);
+      printf("em: STLR ea '%o is out of range for this cpu model.\nThis -cpuid may not be supported by this version of software\nTry a lower -cpuid", ea);
       fatal(NULL);
     }
     regs.u32[ea & 0777] = val32;
@@ -3499,9 +3513,7 @@ main (int argc, char **argv) {
   long long templl,templl1,templl2;
   unsigned long long utempll, utempll1, utempll2;
   unsigned int utempl,utempl1,utempl2,utempl3,utempl4;
-  float tempf,tempf1,tempf2;
   double tempd,tempd1,tempd2;
-  unsigned short tempda[4],tempda1[4];
   ea_t tempea;
   ea_t ea;                             /* final MR effective address */
   ea_t earp;                           /* RP to use for eff address calcs */
@@ -3515,7 +3527,7 @@ main (int argc, char **argv) {
   int nw,nw2;
   unsigned short rvec[9];    /* SA, EA, P, A, B, X, keys, dummy, dummy */
   unsigned short inst;
-  unsigned short m,m1,m2;
+  unsigned short m,m2;
   unsigned short qtop,qbot,qseg,qmask,qtemp;
   ea_t qea;
   short scount;                          /* shift count */
@@ -3526,15 +3538,27 @@ main (int argc, char **argv) {
   unsigned long immu32;
   unsigned long long immu64;
   short fcode;
-  long long frac64;
-  int exp32;
   unsigned short zresult, zclen1, zclen2, zaccess;
   unsigned int zlen1, zlen2;
   ea_t zea1, zea2;
   unsigned char zch1, zch2, *zcp1, *zcp2, zspace;
+  unsigned char xsc, xfc, xsign, xsig;
+
+  /* Prime ASCII constants for decimal instructions */
+
+#define XPLUS 0253
+#define XMINUS 0255
+#define XZERO 0260
+#define XONE 0261
+#define XJ 0312
+#define XRBRACE 0375
 
   struct timeval boot_tv;
   struct timezone tz;
+
+  /* ignore SIGPIPE signals (sockets) or they'll kill the emulator */
+
+  signal (SIGPIPE, SIG_IGN);
 
   /* open trace log */
 
@@ -3591,9 +3615,11 @@ main (int argc, char **argv) {
   bootarg = NULL;
   bootfile[0] = 0;
   pmap32bits = 0;
+  pmap32mask = 0;
   csoffset = 0;
   tport = 0;
   nport = 0;
+  memlimit = MEMSIZE;
 
   /* check args */
 
@@ -3616,21 +3642,33 @@ main (int argc, char **argv) {
     } else if (strcmp(argv[i],"-cpuid") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
-	cpuid = templ;
+	if (0 <= templ && templ <= 44)
+	  cpuid = templ;
+	else
+	  fatal("-cpuid arg range is 0 to 44\n");
       } else
-	fprintf(stderr,"-cpuid needs an argument\n");
+	fatal("-cpuid needs an argument\n");
+    } else if (strcmp(argv[i],"-mem") == 0) {
+      if (i+1 < argc && argv[i+1][0] != '-') {
+	sscanf(argv[++i],"%d", &templ);
+	if (1 <= templ && templ < 1024)
+	  memlimit = templ*1024*1024/2;
+	else
+	  fatal("-mem arg range is 1 to 1024 (megabytes)\n");
+      } else
+	fatal("-mem needs an argument\n");
     } else if (strcmp(argv[i],"-tport") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
 	tport = templ;
       } else
-	fprintf(stderr,"-tport needs an argument\n");
+	fatal("-tport needs an argument\n");
     } else if (strcmp(argv[i],"-nport") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
 	nport = templ;
       } else
-	fprintf(stderr,"-nport needs an argument\n");
+	fatal("-nport needs an argument\n");
     } else if (strcmp(argv[i],"-trace") == 0)
       while (i+1 < argc && argv[i+1][0] != '-') {
 	i++;
@@ -3704,8 +3742,8 @@ main (int argc, char **argv) {
       }
 
     } else {
-      fprintf(stderr,"Unrecognized argument: %s\n", argv[i]);
       printf("Unrecognized argument: %s\n", argv[i]);
+      fatal(NULL);
     }
   }
 
@@ -3727,20 +3765,19 @@ main (int argc, char **argv) {
 	break;
       }
     }
-    if (j == numsyms)
+    if (j == numsyms) {
       fprintf(stderr,"Can't find procedure %s in load maps for tracing.\n", traceprocs[i].name);
+      printf("Can't find procedure %s in load maps for tracing.\n", traceprocs[i].name);
+    }
   }
     
   /* set some vars after the options have been read */
 
   pmap32bits = (cpuid == 15 || cpuid == 18 || cpuid == 19 || cpuid == 24 || cpuid >= 26);
+  if (cpuid == 33 || cpuid == 37 || cpuid == 39 || cpuid >= 43)
+    pmap32mask = 0x3;
   if ((26 <= cpuid && cpuid <= 29) || cpuid >= 35)
     csoffset = 1;
-
-  /* the emulator has occasionally exited to command level; try
-     ignoring SIGPIPE to see if that is the problem */
-
-  signal (SIGPIPE, SIG_IGN);
 
   /* initialize all devices */
 
@@ -4288,7 +4325,7 @@ stfa:
 
 	case 001015:
 	  TRACE(T_FLOW, " TAK\n");
-	  newkeys(crs[A] & 0177774);
+	  newkeys(crs[A] & 0177770);
 	  continue;
 
 	case 000001:
@@ -4384,7 +4421,22 @@ stfa:
 	  calf(ea);
 	  continue;
 
-	/* Decimal and character instructions */
+	/* Decimal and character instructions
+
+           IMPORTANT NOTE: when using the ZGETC and ZPUTC macros, 
+	   be sure to use curly braces, ie,
+
+	   Instead of:
+
+	     if (cond)
+	       ZPUTC ...
+	       
+	   use:
+
+	     if (cond) {
+	       ZPUTC ...
+             }
+	*/
 
 #define ZGETC(zea, zlen, zcp, zclen, zch) \
   if (zclen == 0) { \
@@ -4417,7 +4469,7 @@ stfa:
     else \
       zea = (zea & 0xEFFF0000) | ((zea+0x400) & 0xFC00); \
   } \
-  *zcp = zch; \
+  *zcp = (zch); \
   zcp++; \
   zclen--; \
   zlen--
@@ -4657,6 +4709,182 @@ stfa:
 	      break;
 	  }
 	  continue;
+
+	case 001112:
+
+	  /* XED has some support for chars w/o parity by checking the
+	     keys before setting the zero suppress character, but it's
+	     not clear if it should ignore all character parity */
+
+	  TRACE(T_FLOW, " XED\n");
+	  zlen1 = zlen2 = 128*1024;
+	  zea1 = crsl[FAR0];
+	  if (crsl[FLR0] & 0x8000)
+	    zea1 |= EXTMASK32;
+	  zea2 = crsl[FAR1];
+	  if (crsl[FLR1] & 0x8000)
+	    zea2 |= EXTMASK32;
+	  zclen1 = 0;
+	  zclen2 = 0;
+	  TRACE(T_INST, " ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
+	  if (crs[KEYS] & 020)
+	    xsc = 040;
+	  else
+	    xsc = 0240;
+	  xfc = 0;
+	  ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+	  //printf("xed: first char = '%o\n", zch1);
+	  xsign = (zch1 == XMINUS);
+	  xsig = 0;
+	  ea = *(ea_t *)(crs+XB);
+	  for (i=0; i < 32767; i++) {     /* do edit pgms have a size limit? */
+	    utempa = get16(INCVA(ea, i));
+	    m = utempa & 0xFF;
+	    //printf("\nxed: %d: opcode = %o, m=%o\n", i, (utempa>>8) & 037, m);
+	    switch ((utempa >> 8) & 037) {
+	    case 0:  /* Zero Suppress */
+	      while (m) {
+		ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+		if (!xsig)
+		  if (zch1 == XZERO)
+		    zch1 = xsc;
+		  else {
+		    xsig = 1;
+		    if (xfc) {
+		      ZPUTC(zea2, zlen2, zcp2, zclen2, xfc);
+		    }
+		  }
+		ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+		m--;
+	      }
+	      break;
+
+	    case 1:  /* insert character M */
+	      ZPUTC(zea2, zlen2, zcp2, zclen2, m);
+	      break;
+
+	    case 2:  /* set supression character */
+	      xsc = m;
+	      break;
+		
+	    case 3:  /* insert character */
+	      if (xsig)
+		zch1 = m;
+	      else
+		zch1 = xsc;
+	      ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+	      break;
+
+	    case 4:  /* insert digits */
+	      if (!xsig && xfc) {
+		ZPUTC(zea2, zlen2, zcp2, zclen2, xfc);
+	      }
+	      while (m) {
+		ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+		ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+		m--;
+	      }
+	      xsig = 1;
+	      break;
+
+	    case 5:  /* insert char if minus */
+	      if (xsign)
+		zch1 = m;
+	      else
+		zch1 = xsc;
+	      ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+	      break;
+
+	    case 6:  /* insert char if plus */
+	      if (!xsign)
+		zch1 = m;
+	      else
+		zch1 = xsc;
+	      ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+	      break;
+
+	    case 7:  /* set floating char */
+	      xfc = m;
+	      break;
+
+	    case 010:  /* set floating if plus */
+	      if (!xsign)
+		xfc = m;
+	      else
+		xfc = xsc;
+	      break;
+
+	    case 011:  /* set floating if minus */
+	      if (xsign)
+		xfc = m;
+	      else
+		xfc = xsc;
+	      break;
+
+	    case 012:  /* set floating to sign */
+	      if (xsign)
+		xfc = XMINUS;
+	      else
+		xfc = XPLUS;
+	      break;
+
+	    case 013:  /* jump if zero */
+	      if (crs[A])
+		i += m;
+	      break;
+
+	    case 014:  /* fill with suppress */
+	      while (m) {
+		ZPUTC(zea2, zlen2, zcp2, zclen2, xsc);
+		m--;
+	      }
+	      break;
+
+	    case 015:  /* set significance */
+	      if (!xsig && xfc) {
+		ZPUTC(zea2, zlen2, zcp2, zclen2, xfc);
+	      }
+	      xsig = 1;
+	      break;
+
+	    case 016:  /* insert sign */
+	      if (xsign)
+		zch1 = XMINUS;
+	      else
+		zch1 = XPLUS;
+	      ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+	      break;
+
+	    case 017:  /* suppress digits */
+	      while (m) {
+		ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+		if (zch1 == XZERO)
+		  zch1 = xsc;
+		ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+		m--;
+	      }
+	      break;
+
+	    case 020:  /* embed sign */
+	      while (m) {
+		ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+		if (xsign)
+		  if (zch1 == XZERO)
+		    zch1 = XRBRACE;
+		  else
+		    zch1 = zch1-XONE+XJ;
+		ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+		m--;
+	      }
+	      break;
+
+	    default:
+	      warn("xed: unrecognized subprogram opcode ignored");
+	    }
+	    if (utempa & 0x8000)
+	      break;
+	  }
+	  continue;
 #endif
 
 	/* 001100 = XAD*
@@ -4666,7 +4894,7 @@ stfa:
 	   001107 = XDV*
 	   001110 = ZTRN
 	   001111 = ZED
-	   001112 = XED*
+	   001112 = XED
 	   001114 = ZMV
 	   001115 = ZMVD
 	   001116 = ZFIL
@@ -4718,7 +4946,9 @@ stfa:
 	    
 	case 001212:
 	case 001213:
-	  fatal("Unrecognized NFY instruction");
+	  warn("Unrecognized NFY instruction");
+	  fault(ILLINSTFAULT, RPL, RP);
+	  continue;
 
 	case 001315:
 	  TRACE(T_FLOW, " STEX\n");
@@ -5675,12 +5905,13 @@ a1a:
 
 	case 0140534:
 	  TRACE(T_FLOW, " FRN\n");
+	  CLEARC;
 	  frn(crsl+FAC1);
 	  continue;
 
 	case 0140574:
 	  TRACE(T_FLOW, " DFCM\n");
-	  dfcm(crs+FLTH);
+	  dfcm(crsl+FAC1);
 	  continue;
 
 	case 0141000:
@@ -5690,7 +5921,7 @@ a1a:
 
 	case 0140530:
 	  TRACE(T_FLOW, " FCM\n");
-	  dfcm(crs+FLTH);
+	  dfcm(crsl+FAC1);
 	  continue;
 
 	case 0140510:
@@ -6565,6 +6796,7 @@ keys = 14200, modals=100177
 
       case 0107:
 	TRACE(T_FLOW, " FRN\n");
+	CLEARC;
 	frn(crsl+FAC0+dr);
 	break;
 
@@ -7185,27 +7417,21 @@ keys = 14200, modals=100177
       case 6:
 	dr &= 2;
 	TRACE(T_INST, " FC\n");
-	CLEARCC;
-	if (*(int *)&ea < 0) {
-	  if (!prieee8(&immu64, &tempd2))
-	    mathexception('f', FC_SFP_OFLOW, ea);
-	} else
-	  tempd2 = prieee4(get32(ea));
-	if (prieee8(crsl+FAC0+dr, &tempd1))
-	  if (tempd1 == tempd2)
-	    SETEQ;
-	  else if (tempd1 < tempd2)
-	    SETLT;
-	  else
-	    ;
+	if (*(int *)&ea < 0)
+	  utempl = ((immu64 >> 32) & 0xffffff00) | (immu64 & 0xff);
 	else
-	  mathexception('f', FC_SFP_OFLOW, ea);
+	  utempl = get32(ea);
+	fcs(crsl+FAC0+dr, utempl);
 	break;
 
       case 5:
       case 7:
 	dr &= 2;
 	TRACE(T_INST, " DFC\n");
+	if (*(int *)&ea >= 0)
+	  *(double *)&immu64 = get64(ea);
+	dfcs(crsl+FAC0+dr, immu64);
+#if 0
 	CLEARCC;
 	if (*(int *)&ea < 0)
 	  tempd2 = *(double *)&immu64;
@@ -7220,7 +7446,33 @@ keys = 14200, modals=100177
 	    ;
 	else
 	  mathexception('f', FC_DFP_OFLOW, ea);
-	break;
+#endif
+#if 0
+      /* this is the "compare signs, exponents, fraction" method.
+	 See similar code in V-mode DFCS */
+
+      CLEARCC;
+      if (*(int *)&ea < 0)
+	utempll = immu64;
+      else
+	*(double *)&utempll = get64(ea);
+      CLEARCC;
+      if ((crsl[FAC0+dr] & 0x80000000) == (*(unsigned int *)&utempll & 0x80000000)) {
+	m = utempll & 0xffff;              /* m = operand exponent */
+	m2 = crsl[FAC0+dr+1] & 0xffff;     /* m2 = FAC exponent */
+	if (m2 == m)
+	  if (crsl[FAC0+dr] == *(unsigned int *)&utempll)
+	    SETEQ;
+	  else if (*(int *)(crsl+FAC0+dr) < *(int *)&utempll)
+	    SETLT;
+	  else
+	    ;                                /* FAC > mem: next instruction */
+	else if (*(short *)&m2 < *(short *)&m)
+	  SETLT;
+      } else if (crsl[FAC0+dr] & 0x80000000)    /* FAC < mem */
+	SETLT;
+#endif
+      break;
 
       default:
 	warn("I-mode 006 switch?");
@@ -7304,14 +7556,15 @@ keys = 14200, modals=100177
       case 2:
 	dr &= 2;
 	TRACE(T_INST, " FST\n");
-	if (*(int *)&ea >= 0)
-	  if ((crsl[FAC0+dr+1] & 0xFF00) == 0) {
-	    /* XXX: round here if enabled in keys */
+	CLEARC;
+	if (*(int *)&ea >= 0) {
+	  if (crs[KEYS] & 010)
+	    frn(crsl+FAC0+dr);
+	  if ((crsl[FAC0+dr+1] & 0xFF00) == 0)
 	    put32((crsl[FAC0+dr] & 0xFFFFFF00) | (crsl[FAC0+dr+1] & 0xFF), ea);
-	    CLEARC;
-	  } else
+	  else
 	    mathexception('f', FC_SFP_STORE, ea);
-	else {
+	} else {
 	  warn("I-mode immediate FST?");
 	  fault(ILLINSTFAULT, RPL, RP);
 	}
@@ -7333,31 +7586,47 @@ keys = 14200, modals=100177
       case 6:
 	dr &= 2;
 	TRACE(T_INST, " FA\n");
-	if (*(int *)&ea < 0) {
-	  if (!prieee8(&immu64, &tempd2))
-	    mathexception('f', FC_SFP_OFLOW, ea);
+	CLEARC;
+	if (*(int *)&ea >= 0) {
+	  immu64 = get32(ea);
+	  immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
+	}
+	if (*(int *)&immu64)
+	  if (*(int *)(crsl+FAC0+dr)) {
+	    tempa1 = crsl[FAC0+dr+1] & 0xffff;
+	    tempa2 = immu64 & 0xffff;
+	    if (abs(tempa1-tempa2) < 48)
+	      if (prieee8(crsl+FAC0+dr, &tempd1) && prieee8(&immu64, &tempd2)) {
+		*(double *)(crsl+FAC0+dr) = ieeepr8(tempd1+tempd2);
+		XCLEARC;   /* XXX: test overflow */
+	      } else
+		mathexception('f', FC_SFP_OFLOW, ea);
+	  else if (tempa1 < tempa2)
+	    *(double *)(crsl+FAC0+dr) = *(double *)&immu64;
 	} else
-	  tempd2 = prieee4(get32(ea));
-	if (prieee8(crsl+FAC0+dr, &tempd1)) {
-	  *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1+tempd2);
-	  XCLEARC;
-	} else
-	  mathexception('f', FC_DFP_OFLOW, ea);
+	    *(double *)(crsl+FAC0+dr) = *(double *)&immu64;
+	else if (*(int *)(crsl+FAC0+dr) == 0)
+	  *(double *)(crsl+FAC0+dr) = 0.0;
 	break;
 
       case 5:
       case 7:
 	dr &= 2;
 	TRACE(T_INST, " DFA\n");
-	if (*(int *)&ea < 0)
-	  tempd2 = *(double *)&immu64;
-	else
-	  tempd2 = get64(ea);
-	if (prieee8(crsl+FAC0+dr, &tempd1) && prieee8(&tempd2, &tempd2)) {
-	  *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1+tempd2);
-	  XCLEARC;
-	} else
-	  mathexception('f', FC_DFP_OFLOW, ea);
+	CLEARC;
+	if (*(int *)&ea >= 0)
+	  *(double *)&immu64 = get64(ea);
+	if (*(int *)&immu64)
+	  if (*(int *)(crsl+FAC0+dr))
+	    if (prieee8(crsl+FAC0+dr, &tempd1) && prieee8(&immu64, &tempd2)) {
+	      *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1+tempd2);
+	      XCLEARC;   /* XXX: test overflow */
+	    } else
+	      mathexception('f', FC_DFP_OFLOW, ea);
+	  else
+	    *(double *)(crsl+FAC0+dr) = *(double *)&immu64;
+	else if (*(int *)(crsl+FAC0+dr) == 0)
+	  *(double *)(crsl+FAC0+dr) = 0.0;
 	break;
 
       default:
@@ -7434,62 +7703,95 @@ keys = 14200, modals=100177
       case 2:
 	dr &= 2;
 	TRACE(T_INST, " FS\n");
-	if (*(int *)&ea < 0) {
-	  if (!prieee8(&immu64, &tempd2))
-	    mathexception('f', FC_SFP_OFLOW, ea);
-	} else
-	  tempd2 = prieee4(get32(ea));
-	if (prieee8(crsl+FAC0+dr, &tempd1)) {
-	  *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1-tempd2);
-	  XCLEARC;
-	} else
-	  mathexception('f', FC_SFP_OFLOW, ea);
+	CLEARC;
+	if (*(int *)&ea >= 0) {
+	  immu64 = get32(ea);
+	  immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
+	}
+	if (*(int *)&immu64)
+	  if (*(int *)(crsl+FAC0+dr)) {
+	    tempa1 = crsl[FAC0+dr+1] & 0xffff;
+	    tempa2 = immu64 & 0xffff;
+	    if (abs(tempa1-tempa2) < 48)
+	      if (prieee8(crsl+FAC0+dr, &tempd1) && prieee8(&immu64, &tempd2)) {
+		*(double *)(crsl+FAC0+dr) = ieeepr8(tempd1-tempd2);
+		XCLEARC;   /* XXX: test overflow */
+	      } else
+		mathexception('f', FC_SFP_OFLOW, ea);
+	    else if (tempa1 < tempa2) {
+	      *(double *)(crsl+FAC0+dr) = *(double *)&immu64;
+	      dfcm(crsl+FAC0+dr);
+	    }
+	  } else {
+	    *(double *)(crsl+FAC0+dr) = *(double *)&immu64;
+	    dfcm(crsl+FAC0+dr);
+	  }
+	else if (*(int *)(crsl+FAC0+dr) == 0)
+	  *(double *)(crsl+FAC0+dr) = 0.0;
 	break;
 
       case 1:
       case 3:
 	dr &= 2;
 	TRACE(T_INST, " DFS\n");
-	if (*(int *)&ea < 0)
-	  tempd2 = *(double *)&immu64;
-	else
-	  tempd2 = get64(ea);
-	if (prieee8(crsl+FAC0+dr, &tempd1) && prieee8(&tempd2, &tempd2)) {
-	  *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1-tempd2);
-	  XCLEARC;
-	} else
-	  mathexception('f', FC_DFP_OFLOW, ea);
+	CLEARC;
+	if (*(int *)&ea >= 0)
+	  *(double *)&immu64 = get64(ea);
+	if (*(int *)&immu64)
+	  if (*(int *)(crsl+FAC0+dr))
+	    if (prieee8(crsl+FAC0+dr, &tempd1) && prieee8(&immu64, &tempd2)) {
+	      *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1-tempd2);
+	      XCLEARC;   /* XXX: test overflow */
+	    } else
+	      mathexception('f', FC_DFP_OFLOW, ea);
+	  else {
+	    *(double *)(crsl+FAC0+dr) = *(double *)&immu64;
+	    dfcm(crsl+FAC0+dr);
+	  }
+	else if (*(int *)(crsl+FAC0+dr) == 0)
+	  *(double *)(crsl+FAC0+dr) = 0.0;
 	break;
 
       case 4:
       case 6:
 	dr &= 2;
 	TRACE(T_INST, " FM\n");
-	if (*(int *)&ea < 0) {
-	  if (!prieee8(&immu64, &tempd2))
-	    mathexception('f', FC_SFP_OFLOW, ea);
-	} else
-	  tempd2 = prieee4(get32(ea));
-	if (prieee8(crsl+FAC0+dr, &tempd1)) {
-	  *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1*tempd2);
-	  XCLEARC;
-	} else
-	  mathexception('f', FC_SFP_OFLOW, ea);
+	CLEARC;
+	if (*(int *)(crsl+FAC0+dr)) {
+	  if (*(int *)&ea >= 0) {
+	    immu64 = get32(ea);
+	    immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
+	  }
+	  if (*(int *)&immu64)
+	    if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC0+dr, &tempd1)) {
+	      *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1*tempd2);
+	      XCLEARC;   /* XXX: test overflow */
+	    } else
+	      mathexception('f', FC_SFP_OFLOW, ea);
+	  else            /* operand = 0.0: no multiply */
+	    *(double *)(crsl+FAC0+dr) = 0.0;
+	} else            /* clean up (maybe) dirty zero */
+	  *(double *)(crsl+FAC0+dr) = 0.0;
 	break;
 
       case 5:
       case 7:
 	dr &= 2;
 	TRACE(T_INST, " DFM\n");
-	if (*(int *)&ea < 0)
-	  tempd2 = *(double *)&immu64;
-	else
-	  tempd2 = get64(ea);
-	if (prieee8(crsl+FAC0+dr, &tempd1) && prieee8(&tempd2, &tempd2)) {
-	  *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1*tempd2);
-	  XCLEARC;
+	CLEARC;
+	if (*(int *)(crsl+FAC0+dr)) {
+	  if (*(int *)&ea >= 0)
+	    *(double *)&immu64 = get64(ea);
+	  if (*(int *)&immu64)
+	    if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC0+dr, &tempd1)) {
+	      *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1*tempd2);
+	      XCLEARC;   /* XXX: test overflow */
+	    } else
+	      mathexception('f', FC_DFP_OFLOW, ea);
+	  else             /* operand = 0.0: no multiply */
+	    *(double *)(crsl+FAC0+dr) = 0.0;
 	} else
-	  mathexception('f', FC_DFP_OFLOW, ea);
+	  *(double *)(crsl+FAC0+dr) = 0.0;
 	break;
 
       default:
@@ -7551,37 +7853,42 @@ keys = 14200, modals=100177
       case 2:
 	dr &= 2;
 	TRACE(T_INST, " FD\n");
-	if (*(int *)&ea < 0) {
-	  if (!prieee8(&immu64, &tempd2))
-	    mathexception('f', FC_SFP_OFLOW, ea);
-	} else
-	  tempd2 = prieee4(get32(ea));
-	if (tempd2 != 0.0)
-	  if (prieee8(crsl+FAC0+dr, &tempd1)) {
-	    *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1/tempd2);
-	    XCLEARC;
-	  } else
-	    mathexception('f', FC_SFP_OFLOW, ea);
-	else
-	  mathexception('f', FC_SFP_ZDIV, ea);
+	CLEARC;
+	if (*(int *)(crsl+FAC0+dr)) {
+	  if (*(int *)&ea >= 0) {
+	    immu64 = get32(ea);
+	    immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
+	  }
+	  if (*(int *)&immu64)
+	    if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC0+dr, &tempd1)) {
+	      *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1/tempd2);
+	      XCLEARC;   /* XXX: test overflow */
+	    } else
+	      mathexception('f', FC_SFP_OFLOW, ea);
+	  else            /* operand = 0.0 */
+	    mathexception('f', FC_SFP_ZDIV, ea);
+	} else            /* clean up (maybe) dirty zero */
+	  *(double *)(crsl+FAC0+dr) = 0.0;
 	break;
 
       case 1:
       case 3:
 	dr &= 2;
 	TRACE(T_INST, " DFD\n");
-	if (*(int *)&ea < 0)
-	  tempd2 = *(double *)&immu64;
-	else
-	  tempd2 = get64(ea);
-	if (prieee8(crsl+FAC0+dr, &tempd1) && prieee8(&tempd2, &tempd2))
-	  if (tempd2 != 0.0) {
-	    *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1/tempd2);
-	    XCLEARC;
-	  } else
-	    mathexception('f', FC_DFP_OFLOW, ea);
-	else
-	  mathexception('f', FC_DFP_ZDIV, ea);
+	CLEARC;
+	if (*(int *)(crsl+FAC0+dr)) {
+	  if (*(int *)&ea >= 0)
+	    *(double *)&immu64 = get64(ea);
+	  if (*(int *)&immu64)
+	    if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC0+dr, &tempd1)) {
+	      *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1/tempd2);
+	      XCLEARC;   /* XXX: test overflow */
+	    } else
+	      mathexception('f', FC_DFP_OFLOW, ea);
+	  else
+	    mathexception('f', FC_DFP_ZDIV, ea);
+	} else
+	  *(double *)(crsl+FAC0+dr) = 0.0;
 	break;
 
       case 4:  /* QFLD */
@@ -7901,13 +8208,11 @@ imodepcl:
       continue;
 
     case 065:
-      /* XXX: DIAG test CPU.AMGRR for cpuid=26 indicates IP needs to
-	 be weakened */
       TRACE(T_FLOW, " LIP\n");
       utempl = get32(ea);
       if (utempl & 0x80000000)
 	fault(POINTERFAULT, utempl>>16, ea);
-      crsl[dr] = utempl;
+      crsl[dr] = utempl | (RP & RINGMASK32);  /* CPU.AMGRR, cpuid=26+ */
       continue;
 
     case 066:  /* I-mode special MR: DM, JSXB */
@@ -8551,43 +8856,51 @@ nonimode:
 
     case 00601:
       TRACE(T_FLOW, " FAD\n");
-      tempd2 = prieee4(get32(ea));
-      if (prieee8(crs+FLTH, &tempd1)) {
-	*(double *)(crs+FLTH) = ieeepr8(tempd1+tempd2);
-	XCLEARC;
-      } else
-	mathexception('f', FC_SFP_OFLOW, ea);
+      CLEARC;
+      immu64 = get32(ea);
+      immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
+      if (*(int *)&immu64)
+	if (*(int *)(crsl+FAC1)) {
+	  tempa1 = crs[FEXP];
+	  tempa2 = immu64 & 0xffff;
+	  if (abs(tempa1-tempa2) < 48)
+	    if (prieee8(crsl+FAC1, &tempd1) && prieee8(&immu64, &tempd2)) {
+	      *(double *)(crsl+FAC1) = ieeepr8(tempd1+tempd2);
+	      XCLEARC;   /* XXX: test overflow */
+	    } else
+	      mathexception('f', FC_SFP_OFLOW, ea);
+	  else if (tempa1 < tempa2)
+	    *(double *)(crsl+FAC1) = *(double *)&immu64;
+	} else
+	  *(double *)(crsl+FAC1) = *(double *)&immu64;
+      else if (*(int *)(crsl+FAC1) == 0)
+	*(double *)(crsl+FAC1) = 0.0;
       continue;
 
     /* this is implemented as a subtract on some models */
 
     case 01101:
       TRACE(T_FLOW, " FCS\n");
-      CLEARCC;
-      tempd2 = prieee4(get32(ea));
-      if (prieee8(crs+FLTH, &tempd1)) {
-	if (tempd1 == tempd2) {
-	  RPL++;
-	  SETEQ;
-	} else if (tempd1 < tempd2) {
-	  RPL += 2;
-	  SETLT;
-	}
-      } else
-	mathexception('f', FC_SFP_OFLOW, ea);
+      templ = get32(ea);
+      RPL += fcs(crsl+FAC1, templ);
       continue;
 
     case 01701:
       TRACE(T_FLOW, " FDV\n");
-      tempd2 = prieee4(get32(ea));
-      if (prieee8(crs+FLTH, &tempd1))
-	if (tempd2 != 0.0) {
-	  *(double *)(crs+FLTH) = ieeepr8(tempd1/tempd2);
-	  XCLEARC;
-	} else
+      CLEARC;
+      if (*(int *)(crsl+FAC1)) {
+	immu64 = get32(ea);
+	immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
+	if (*(int *)&immu64)
+	  if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC1, &tempd1)) {
+	    *(double *)(crsl+FAC1) = ieeepr8(tempd1/tempd2);
+	    XCLEARC;   /* XXX: test overflow */
+	  } else
+	    mathexception('f', FC_SFP_OFLOW, ea);
+	else            /* operand = 0.0 */
 	  mathexception('f', FC_SFP_ZDIV, ea);
-      else
-	mathexception('f', FC_SFP_OFLOW, ea);
+      } else            /* clean up (maybe) dirty zero */
+	*(double *)(crsl+FAC1) = 0.0;
       continue;
 
     case 0201:
@@ -8599,48 +8912,88 @@ nonimode:
 
     case 01601:
       TRACE(T_FLOW, " FMP\n");
-      tempd2 = prieee4(get32(ea));
-      if (prieee8(crs+FLTH, &tempd1)) {
-	*(double *)(crs+FLTH) = ieeepr8(tempd1*tempd2);
-	XCLEARC;
-      } else
-	mathexception('f', FC_SFP_OFLOW, ea);
+      CLEARC;
+      if (*(int *)(crsl+FAC1)) {
+	immu64 = get32(ea);
+	immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
+	if (*(int *)&immu64)
+	  if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC1, &tempd1)) {
+	    *(double *)(crsl+FAC1) = ieeepr8(tempd1*tempd2);
+	    XCLEARC;   /* XXX: test overflow */
+	  } else
+	    mathexception('f', FC_SFP_OFLOW, ea);
+	else            /* operand = 0.0: no multiply */
+	  *(double *)(crsl+FAC1) = 0.0;
+      } else            /* clean up (maybe) dirty zero */
+	*(double *)(crsl+FAC1) = 0.0;
       continue;
 
     case 00701:
       TRACE(T_FLOW, " FSB\n");
-      tempd2 = prieee4(get32(ea));
-      if (prieee8(crs+FLTH, &tempd1)) {
-	*(double *)(crs+FLTH) = ieeepr8(tempd1-tempd2);
-	XCLEARC;
-      } else
-	mathexception('f', FC_SFP_OFLOW, ea);
+      CLEARC;
+      immu64 = get32(ea);
+      immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
+      if (*(int *)&immu64)
+	if (*(int *)(crsl+FAC1)) {
+	  tempa1 = crs[FEXP];
+	  tempa2 = immu64 & 0xffff;
+	  if (abs(tempa1-tempa2) < 48)
+	    if (prieee8(crsl+FAC1, &tempd1) && prieee8(&immu64, &tempd2)) {
+	      *(double *)(crsl+FAC1) = ieeepr8(tempd1-tempd2);
+	      XCLEARC;   /* XXX: test overflow */
+	    } else
+	      mathexception('f', FC_SFP_OFLOW, ea);
+	  else if (tempa1 < tempa2) {
+	    *(double *)(crsl+FAC1) = *(double *)&immu64;
+	    dfcm(crsl+FAC1);
+	  }
+	} else {
+	  *(double *)(crsl+FAC1) = *(double *)&immu64;
+	  dfcm(crsl+FAC1);
+	}
+      else if (*(int *)(crsl+FAC1) == 0)
+	*(double *)(crsl+FAC1) = 0.0;
       continue;
 
     case 0401:
       TRACE(T_FLOW, " FST\n");
-      if ((crsl[FAC1+1] & 0xFF00) == 0) {
-	/* XXX: round here if enabled in keys */
+      CLEARC;
+      if (crs[KEYS] & 010)
+	frn(crsl+FAC1);
+      if ((crsl[FAC1+1] & 0xFF00) == 0)
 	put32((crsl[FAC1] & 0xFFFFFF00) | (crsl[FAC1+1] & 0xFF), ea);
-	CLEARC;
-      } else
+      else
 	mathexception('f', FC_SFP_STORE, ea);
       continue;
 
     case 0602:
       TRACE(T_FLOW, " DFAD\n");
-      XCLEARC;
-      tempd2 = get64(ea);
-      if (prieee8(crs+FLTH, &tempd1) && prieee8(&tempd2, &tempd2))
-	*(double *)(crs+FLTH) = ieeepr8(tempd1+tempd2);
-      else
-	mathexception('f', FC_DFP_OFLOW, ea);
+      CLEARC;
+      *(double *)&immu64 = get64(ea);
+      if (*(int *)&immu64)
+	if (*(int *)(crsl+FAC1))
+	  if (prieee8(crsl+FAC1, &tempd1) && prieee8(&immu64, &tempd2)) {
+	    *(double *)(crsl+FAC1) = ieeepr8(tempd1+tempd2);
+	    XCLEARC;   /* XXX: test overflow */
+	  } else
+	    mathexception('f', FC_DFP_OFLOW, ea);
+	else
+	  *(double *)(crsl+FAC1) = *(double *)&immu64;
+      else if (*(int *)(crsl+FAC1) == 0)
+	*(double *)(crsl+FAC1) = 0.0;
       continue;
 
     case 01102:
       TRACE(T_FLOW,  " DFCS\n");
-      CLEARCC;
-#if 1
+      *(double *)&templl = get64(ea);
+      RPL += dfcs(crsl+FAC1, templl);
+#if 0
+      /* the subtract method for DFCS doesn't work so well.  Some
+	 Prime software (DSM for example) used DFCS to compare 8-byte
+	 ASCII strings for equal or not equal.  These strings will not
+	 convert to IEEE floating point and comparisons tend to
+	 fail. */
+
       tempd2 = get64(ea);
       if (prieee8(crs+FLTH, &tempd1) && prieee8(&tempd2, &tempd2)) {
 	if (tempd1 == tempd2) {
@@ -8652,38 +9005,44 @@ nonimode:
 	}
       } else
 	mathexception('f', FC_DFP_OFLOW, ea);
-#else
-      m = get16(ea);
-      if ((crs[FLTH] & 0x8000) == (m & 0x8000)) {
-	m1 = get16(INCVA(ea,3));
-	if (m1 == crs[FEXP]) {
-	  if (m == crs[FLTH]) {
-	    utempl = get32(INCVA(ea,1));
-	    if ((unsigned int)((crs[FLTL]<<16) | crs[FLTD]) == utempl)
-	      RPL += 1;
-	    /* XXX: does this next test need to be reversed for negative numbers? */
-	    else if ((unsigned int)((crs[FLTL]<<16) | crs[FLTD]) < utempl)
-	      RPL += 2;
-	  } else if (crs[FLTH] < m)
+#endif
+#if 0
+      /* this is the "compare signs, exponents, fraction" method.
+	 See similar code in I-mode DFC */
+
+      utempl = get32(ea);
+      if ((crsl[FAC1] & 0x80000000) == (utempl & 0x80000000)) {
+	m = get16(INCVA(ea,3));              /* m = FAC exponent */
+	if (crs[FEXP] == m)
+	  if (crsl[FAC1] == utempl)
+	    RPL += 1;
+	  else if (*(int *)(crsl+FAC1) < *(int *)&utempl)
 	    RPL += 2;
-	} else if (crs[FEXP] < m1)       /* this line breaks CPU.FLOAT.V */
+	  else
+	    ;                                /* FAC > mem: next instruction */
+	else if (*(short *)(crs+FEXP) < *(short *)&m)
 	  RPL += 2;
-      } else if (crs[FLTH] & 0x8000)    /* DAC < mem */
+      } else if (crsl[FAC1] & 0x80000000)    /* FAC < mem */
 	RPL += 2;
 #endif
       continue;
 
     case 01702:
       TRACE(T_FLOW, " DFDV\n");
-      tempd2 = get64(ea);
-      if (prieee8(crs+FLTH, &tempd1) && prieee8(&tempd2, &tempd2))
-	if (tempd2 != 0.0) {
-	  *(double *)(crs+FLTH) = ieeepr8(tempd1/tempd2);
-	  XCLEARC;
-	} else
+      CLEARC;
+      if (*(int *)(crsl+FAC1)) {
+	if (*(int *)&ea >= 0)
+	  *(double *)&immu64 = get64(ea);
+	if (*(int *)&immu64)
+	  if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC1, &tempd1)) {
+	    *(double *)(crsl+FAC1) = ieeepr8(tempd1/tempd2);
+	    XCLEARC;   /* XXX: test overflow */
+	  } else
+	    mathexception('f', FC_DFP_OFLOW, ea);
+	else
 	  mathexception('f', FC_DFP_ZDIV, ea);
-      else
-	mathexception('f', FC_DFP_OFLOW, ea);
+      } else
+	*(double *)(crsl+FAC1) = 0.0;
       continue;
 
     case 0202:
@@ -8693,22 +9052,38 @@ nonimode:
 
     case 01602:
       TRACE(T_FLOW, " DFMP\n");
-      tempd2 = get64(ea);
-      if (prieee8(crs+FLTH, &tempd1) && prieee8(&tempd2, &tempd2)) {
-	*(double *)(crs+FLTH) = ieeepr8(tempd1*tempd2);
-	XCLEARC;
+      CLEARC;
+      if (*(int *)(crsl+FAC1)) {
+	*(double *)&immu64 = get64(ea);
+	if (*(int *)&immu64)
+	  if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC1, &tempd1)) {
+	    *(double *)(crsl+FAC1) = ieeepr8(tempd1*tempd2);
+	    XCLEARC;   /* XXX: test overflow */
+	  } else
+	    mathexception('f', FC_DFP_OFLOW, ea);
+	else             /* operand = 0.0: no multiply */
+	  *(double *)(crsl+FAC1) = 0.0;
       } else
-	mathexception('f', FC_DFP_OFLOW, ea);
+	*(double *)(crsl+FAC1) = 0.0;
       continue;
 
     case 0702:
       TRACE(T_FLOW, " DFSB\n");
-      tempd2 = get64(ea);
-      if (prieee8(crs+FLTH, &tempd1) && prieee8(&tempd2, &tempd2)) {
-	*(double *)(crs+FLTH) = ieeepr8(tempd1-tempd2);
-	XCLEARC;
-      } else
-	mathexception('f', FC_DFP_OFLOW, ea);
+      CLEARC;
+      *(double *)&immu64 = get64(ea);
+      if (*(int *)&immu64)
+	if (*(int *)(crsl+FAC1))
+	  if (prieee8(crsl+FAC1, &tempd1) && prieee8(&immu64, &tempd2)) {
+	    *(double *)(crsl+FAC1) = ieeepr8(tempd1-tempd2);
+	    XCLEARC;   /* XXX: test overflow */
+	  } else
+	    mathexception('f', FC_DFP_OFLOW, ea);
+	else {
+	  *(double *)(crsl+FAC1) = *(double *)&immu64;
+	  dfcm(crsl+FAC1);
+	}
+      else if (*(int *)(crsl+FAC1) == 0)
+	*(double *)(crsl+FAC1) = 0.0;
       continue;
 
     case 0402:
@@ -8758,7 +9133,8 @@ nonimode:
       continue;
 
     default:
-      printf("Unknown memory reference opcode: %o\n", opcode);
+      printf("em: unknown memory reference opcode: %o\n", opcode);
+      fault(UIIFAULT, RPL, RP);
       fatal(NULL);
     }
   }

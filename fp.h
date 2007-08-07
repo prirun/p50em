@@ -20,8 +20,20 @@
       - and frac = 0 => positive or negative zero, depending on sign
       - and frac non-zero => subnormal (aka denormal, unnormalized)
       - subnormals have an implied leading "0" bit (XXX: true??)
+
+   References (no code was used):
+
+http://en.wikipedia.org/wiki/IEEE_754
+http://www.psc.edu/general/software/packages/ieee/ieee.html
+http://www.math.grinnell.edu/~stone/courses/fundamentals/IEEE-reals.html
+http://www.gnu.org/software/libc/manual/html_node/IEEE-Floating-Point.html
+http://en.wikipedia.org/wiki/Floating_point
+http://www.win.ua.ac.be/~cant/arithmos/
+http://tima-cmp.imag.fr/~guyot/Cours/Oparithm/english/Op_Ar2.htm
+
 */
 
+#define GETFRAC(d) (*(long long *)&(d) & 0xFFFFFFFFFFFF0000LL)
 
 /* getdp unpacks a Prime DPFP into 48-bit sign + mantissa (left
    justified in 64 bits) and a 32-bit signed exponent */
@@ -61,7 +73,7 @@ int prieee8(void *dp, double *d) {
 
     if (frac64 == 0x8000000000000000LL) {
       exp32 += (1023-128);
-      if (exp32 < 0 || exp32 > 0x3ff)
+      if (exp32 < 0 || exp32 > 0x7fe)
 	return 0;
       frac64 |= ((long long)exp32 << 52);
       *d = *(double *)&frac64;
@@ -88,9 +100,20 @@ int prieee8(void *dp, double *d) {
   /* adjust exponent bias and check range */
 
   exp32 += (1023-128) - 1;
-  if (exp32 < 0 || exp32 > 0x7ff)
+#if 1
+  if (exp32 < 0 || exp32 > 0x7fe)
     return 0;
-  
+#else
+  if (exp32 < 0) {
+    *d = 0.0;
+    return 1;
+  }
+  if (exp32 > 0x7fe) {
+    exp32 = 0x7fe;
+    frac64 = 0x7fffffffffffffffLL;
+  }
+#endif
+
   /* pack into an IEEE DPFP, losing the leading 1 bit in the process */
 
   frac64 = sign | ((long long)exp32 << 52) | ((frac64 >> 10) & 0xfffffffffffffLL);
@@ -98,59 +121,9 @@ int prieee8(void *dp, double *d) {
   return 1;
 }
 
-/* Conversion from Prime SPFP to IEEE DPFP */
-
-double prieee4(unsigned int sp) {
-  int frac32, sign;
-  long long frac64;
-  int exp32;
-
-  /* unpack Prime SPFP */
-
-  frac32 = sp & 0xFFFFFF00;
-  exp32 = sp & 0xFF;
-
-  /* if negative, change to sign-magnitude */
-
-  sign = 0;
-  if (frac32 < 0) {
-
-    /* special case: negative power of 2 */
-
-    if (frac32 == 0x80000000) {
-      exp32--;
-      frac64 = 0x8000000000000000LL | ((long long)exp32 << 52);
-      return *(double *)&frac64;
-    } else {
-      sign = 0x80000000;
-      frac32 = -frac32;
-    }
-
-  /* special case: zero */
-
-  } else if (frac32 == 0)
-    return 0.0;
-
-  /* normalize positive fraction until bit 2 is 1 */
-
-  while ((frac32 & 0x40000000) == 0) {
-    frac32 = frac32 << 1;
-    exp32--;
-  }
-
-  /* adjust exponent bias and check range */
-
-  exp32 += (1023-128) - 1;
-  
-  /* pack into an IEEE DPFP, losing the leading 1 bit in the process */
-
-  frac64 = (long long)sign | ((long long)exp32 << 52) | (((long long)frac32 << 22) & 0xfffffffffffffLL);
-  return *(double *)&frac64;
-}
-
-
 /* conversion from IEEE back to Prime.  Prime exponents are larger, so
-   this conversion cannot overflow/underflow, but precision is lost */
+   this conversion cannot overflow/underflow, but precision may be
+   lost */
 
 double ieeepr8(double d) {
   long long frac64;
@@ -263,9 +236,10 @@ double fltl (int int32) {
 
 dfcm (void *dp) {
   long long frac64;
-  int exp32;
+  int exp32, oflow;
 
   CLEARC;
+  oflow = 0;
   getdp(dp, &frac64, &exp32);
   if (frac64 != 0) {                          /* can't normalize zero */
     if (frac64 == 0x8000000000000000LL) {     /* overflow case? */
@@ -278,11 +252,12 @@ dfcm (void *dp) {
 	exp32--;
       }
     }
-    if (exp32 > 32767 || exp32 < -32768)
-      mathexception('f', FC_DFP_OFLOW, 0);
-    else
-      putdp(dp, frac64, exp32);
-  }
+    putdp(dp, frac64, exp32);
+    oflow = exp32 > 32767 || exp32 < -32768;
+  } else
+    *(double *)dp = 0.0;;            /* DFCM is documented to clean up dirty zeroes */
+  if (oflow)
+    mathexception('f', FC_DFP_OFLOW, 0);
 }
 
 
@@ -311,34 +286,131 @@ void norm(void *dp) {
 /* double->single floating point round (FRN) instruction.
 
    Passed a pointer to a Prime double precision variable, one of the
-   FACC's, and updates it in place.  May also take an arithmetic fault
-   if overflow occurs.  For faults, the ea is zero because FACC's
-   don't have an effective address. */
+   FACC's, and updates it in place.
+
+   NOTE: this routine is coded strangely because I ran into compiler
+   bugs (gcc 4.0.1) */
 
 void frn(void *dp) {
   long long frac64;
   int exp32;
-  int origsign, newsign;
+  int doround1, doround2;
 
-  CLEARC;
   getdp(dp, &frac64, &exp32);
   if (frac64 == 0)
     *(long long *)dp = 0;
   else {
-    origsign = (frac64 < 0);
-    if ((frac64 & 0x18000000000LL)
-	| ((frac64 & 0x8000000000LL) && (frac64 & 0x7FFFFF0000LL))) {
-      frac64 +=      0x10000000000LL;
+    doround1 = ((frac64 & 0x18000000000LL) != 0);
+    doround2 = ((frac64 &  0x8000000000LL) != 0) && ((frac64 & 0x7FFFFF0000LL) != 0);
+    if (doround1 || doround2) {
       frac64 &= 0xFFFFFF0000000000LL;
+      if (frac64 != 0x7FFFFF0000000000LL)
+	frac64 +=        0x10000000000LL;
+      else {
+	frac64 =    0x4000000000000000LL;
+	exp32++;
+      }
+      frac64 |= (exp32 & 0xFFFF);
       norm(&frac64);
       *(long long *)dp = frac64;
-      newsign = (frac64 < 0);
-      if (newsign != origsign)
-	/* XXX: is this fault code right? */
-	mathexception('f', FC_DFP_OFLOW, 0);
     }
   }
 }
+
+
+/* SPFP comparison, for both FCS (SRV-mode) and FC (I-mode)
+   For I-mode FC instruction, condition codes are used.
+   For SRV-mode FCS instruction, return value is the amount
+   RPL should be advanced.
+*/
+
+int fcs (unsigned int *fac, int fop) {
+  int templ;
+  short fopexp, facexp;
+
+  CLEARCC;
+  templ = fac[0] & 0xffffff00;                       /* FAC SP mantissa */
+  if (templ == 0)                                    /* fix dirty zero */
+    facexp = 0;
+  else
+    facexp = fac[1] & 0xffff;                        /* FAC exponent */
+  fopexp = fop & 0xff;
+  fop = fop & 0xffffff00;
+  if (fop == 0)                                      /* fix dirty zero */
+    fopexp = 0;
+  if ((templ & 0x80000000) == (fop & 0x80000000)) {  /* compare signs */
+    if (facexp == fopexp)                            /* compare exponents */
+      if (templ == fop) {                            /* compare fractions */
+	SETEQ;
+	return 1;
+      } else if (templ < fop) {                      /* compare fractions */
+	SETLT;                                       /* FAC < operand */
+	return 2;
+      } else
+	return 0;                                    /* FAC > operand */
+    else if (facexp < fopexp) {                      /* compare exponents */
+      SETLT;                                         /* FAC < operand */
+      return 2;
+    } else
+      return 0;
+  } else if (templ & 0x80000000) {
+    SETLT;                                           /* FAC < operand */
+    return 2;
+  } else
+    return 0;                                        /* FAC > operand */
+}
+
+
+/* DPFP comparison, for both DFCS (SRV-mode) and DFC (I-mode)
+   For I-mode DFC instruction, condition codes are used.
+   For SRV-mode DFCS instruction, return value is the amount
+   RPL should be advanced.
+
+   NOTE: This code doesn't pass Prime diagnostics for higher model
+   CPU's, I'm guessing because comparison is implemented as subtract,
+   and we can't do that because numbers with huge exponents (and 
+   Prime ASCII characters in the DAC) won't convert to IEEE.
+*/
+
+int dfcs (unsigned int *fac, long long fop) {
+  long long templl;
+  short fopexp, facexp;
+
+  CLEARCC;
+  templl = *(long long *)fac;
+  facexp = templl & 0xffff;                          /* FAC exponent */
+  templl = templl & 0xffffffffffff0000LL;            /* FAC SP mantissa */
+  if (templl == 0)                                   /* fix dirty zero */
+    facexp = 0;
+  fopexp = fop & 0xffff;
+  fop = fop & 0xffffffffffff0000LL;
+  if (fop == 0)                                      /* fix dirty zero */
+    fopexp = 0;
+#if 0
+  printf("dfcs: FAC: %016llx %04x; op: %016llx %04x\n", templl, facexp, fop, fopexp);
+#endif
+  if ((templl & 0x8000000000000000LL) == (fop & 0x8000000000000000LL)) {  /* compare signs */
+    if (facexp == fopexp)                            /* compare exponents */
+      if (templl == fop) {                           /* compare fractions */
+	SETEQ;
+	return 1;
+      } else if (templl < fop) {                     /* compare fractions */
+	SETLT;                                       /* FAC < operand */
+	return 2;
+      } else
+	return 0;                                    /* FAC > operand */
+    else if (facexp < fopexp) {                      /* compare exponents */
+      SETLT;                                         /* FAC < operand */
+      return 2;
+    } else
+      return 0;
+  } else if (templl & 0x8000000000000000LL) {
+    SETLT;                                           /* FAC < operand */
+    return 2;
+  } else
+    return 0;                                        /* FAC > operand */
+}
+
 
 #if 0
 
