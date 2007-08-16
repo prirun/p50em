@@ -56,6 +56,19 @@ inline putdp (void *p, long long frac64, int exp32) {
    IEEE DPFP exponents are only 11 bits.
 */
 
+/* Floating point conversion caches.
+   1st entry is a Prime-format DPFP number.
+   2nd entry is the corresponding IEEE DPFP number.
+   Unused entries are 0.0
+
+   There are two corresponding hash arrays, one for Prime entries
+   and a 2nd for IEEE entries.  Whenever a conversion is done, both
+   types of entries are updated. */
+
+static double fpcache[2][512];
+static short primecix[512];
+static short ieeecix[512];
+
 int prieee8(void *dp, double *d) {
   long long frac64, sign;
   int exp32;

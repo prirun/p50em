@@ -454,10 +454,10 @@ readasr:
 	  crs[A] = 0;
 	crs[A] = crs[A] | ch;
 	TRACE(T_INST, " character read=%o: %c\n", crs[A], crs[A] & 0x7f);
-	if (ch != 015) {         /* log all except carriage returns */
+	if (!(terminfo.c_lflag & ECHO) && ch != 015) /* log all except CR */
 	  fputc(ch, conslog);
-	  fflush(conslog);       /* immediately flush typing echos */
-	}
+	fflush(conslog);         /* immediately flush when typing */
+	fflush(tracefile);
 	IOSKIP;
       } else {
 	printf("Unexpected error reading from tty, n=%d\n", n);

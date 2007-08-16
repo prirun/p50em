@@ -131,6 +131,7 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr);
 /* condition code macros */
 
 #define CLEARCC crs[KEYS] &= ~0300
+#define CLEAREQ crs[KEYS] &= ~0100
 #define SETEQ crs[KEYS] |= 0100
 #define SETLT crs[KEYS] |= 0200
 
@@ -175,9 +176,9 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr);
 #define SETCC_F \
   CLEARCC; \
   if (*(int *)(crs+FLTH) < 0) \
-    crs[KEYS] |= 0200; \
+    SETLT; \
   else if (*(int *)(crs+FLTH) == 0) \
-    crs[KEYS] |= 0100;
+    SETEQ;
 
 #define SETCC_D SETCC_F
 
@@ -246,36 +247,6 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr);
 /* same macro, but uses a passed program counter */
 
 #define RESTRICTR(rpring) if ((rpring) & RINGMASK32) fault(RESTRICTFAULT, 0, 0);
-
-/* Table for unusual instructions that aren't implemented but we want to
-   print something when they're encountered */
-
-unsigned short gen0tab[] = {
-  000503,          /* EMCM - enter machine check mode */
-  000501,          /* LMCM - leave machine check mode */
-  001304,          /* MDEI - memory diagnostic */
-  001305,          /* MDII - memory diagnostic */
-  001324,          /* MDIW - memory diagnostic */
-  001306,          /* MDRS - memory diagnostic */
-  001307,          /* MDWC - memory diagnostic */
-  000021,          /* RMC - reset machine check */
-  000311,          /* VIFY - ucode verify */
-  001113};         /* XVFY - extended ucode verify */
-
-#define GEN0TABSIZE sizeof(gen0tab)/sizeof(unsigned short)
-
-char gen0nam[][5] = {
-  "EMCM",
-  "LMCM",
-  "MDEI",
-  "MDII",
-  "MDIW",
-  "MDRS",
-  "MDWC",
-  "RMC",
-  "VIFY",
-  "XVFY"};
-
 
 /* trace flags to control aspects of emulator tracing:
 
@@ -857,7 +828,7 @@ unsigned short get16t(ea_t ea, ea_t rpring) {
   fatal(NULL);
 }
 
-inline unsigned short get16r(ea_t ea, ea_t rpring) {
+unsigned short get16r(ea_t ea, ea_t rpring) {
   unsigned short access;
 
   /* sign bit is set for live register access */
@@ -900,15 +871,44 @@ double get64r(ea_t ea, ea_t rpring) {
     warn("address trap in get64");
 
   pa = mapva(ea, RACC, &access, rpring);
-  if ((pa & 01777) <= 01774)
-    return *(double *)(mem+pa);
-  else {
+#if 0
+  if ((pa & 01777) <= 01774) {          /* no page wrap */
+    *(int *)(m+0) = *(int *)(mem+pa);
+    *(int *)(m+2) = *(int *)(mem+pa+2);
+  } else {
     m[0] = mem[pa];
     m[1] = get16r(INCVA(ea,1), rpring);
     m[2] = get16r(INCVA(ea,2), rpring);
     m[3] = get16r(INCVA(ea,3), rpring);
-    return *(double *)m;
   }
+#else
+  if ((ea & 01777) <= 01774) {          /* no page wrap */
+    *(int *)(m+0) = *(int *)(mem+pa);
+    *(int *)(m+2) = *(int *)(mem+pa+2);
+  } else                                /* wraps page (maybe seg too) */
+    switch (ea & 3) {
+    case 1:
+      m[0] = mem[pa];
+      *(int *)(m+1) = *(int *)(mem+pa+1);
+      pa = mapva(INCVA(ea,3), RACC, &access, rpring);
+      m[3] = mem[pa];
+      break;
+    case 2:
+      *(int *)(m+0) = *(int *)(mem+pa);
+      pa = mapva(INCVA(ea,2), RACC, &access, rpring);
+      *(int *)(m+2) = *(int *)(mem+pa);
+      break;
+    case 3:
+      m[0] = mem[pa];
+      pa = mapva(INCVA(ea,1), RACC, &access, rpring);
+      *(int *)(m+1) = *(int *)(mem+pa);
+      m[3] = mem[pa+2];
+      break;
+    default:
+      fatal("Page cross error in get64r");
+    }
+#endif
+  return *(double *)m;
 }
 
 /* Instruction version of get16 (can be replaced by get16 too...)
@@ -3017,11 +3017,11 @@ unsigned short ldc(int n, unsigned short result) {
     }
     utempl--;
     PUTFLR(n,utempl);
-    crs[KEYS] &= ~0100;     /* reset EQ */
+    CLEAREQ;
   } else {                  /* utempl == 0 */
     TRACE(T_INST, " LDC %d limit\n", n);
     //printf(" LDC %d limit\n", n);
-    crs[KEYS] |= 0100;      /* set EQ */
+    SETEQ;
   }
   return result;
 }
@@ -3060,11 +3060,11 @@ stc(int n, unsigned short ch) {
     }
     utempl--;
     PUTFLR(n,utempl);
-    crs[KEYS] &= ~0100;     /* reset EQ */
+    CLEAREQ;
   } else {                  /* utempl == 0 */
     TRACE(T_INST, " STC %d limit\n", n);
     //printf(" STC %d limit\n", n);
-    crs[KEYS] |= 0100;      /* set EQ */
+    SETEQ;
   }
 }
 
@@ -3500,6 +3500,13 @@ main (int argc, char **argv) {
 
   static short bootdiskctrl[4] = {026, 027, 022, 023};
 
+  /* the dispatch table for generic instructions:
+     - bits 1-2 are the class (0-3)
+     - bits 3-6 are always zero
+     - bits 7-16 are the opcode
+     the index into the table is bits 1-2, 7-16, for a 12-bit index */
+
+  void *disp_gen[4096];                /* generic dispatch table */
   int boot;                            /* true if reading a boot record */
   char *bootarg;                       /* argument to -boot, if any */
   char bootfile[16];                   /* boot file to load (optional) */
@@ -3566,6 +3573,10 @@ main (int argc, char **argv) {
     perror("Unable to open trace.log");
     exit(1);
   }
+
+  /* initialize dispatch tables */
+
+#include "dispatch.h"
 
   /* master clear:
      - clear all registers
@@ -3919,524 +3930,516 @@ For disk boots, the last 3 digits can be:\n\
   if (setjmp(jmpbuf))
     ;
 
-  while (1) {
+fetch:
 
 #if 0
-    if (instcount > 10300000)
-      savetraceflags = ~0;
+  if (instcount > 10300000)
+    savetraceflags = ~0;
 #endif
 
 #if 0
   /* NOTE: doing something like this causes Primos to do a controlled
 	 shutdown, flushing disk buffers, etc. */
-      RPH = 07777;
+  RPH = 07777;
 #endif
 
 #if 0
     /* trace AC$SET call not working
 
-       NOTE: a 2-word range is needed for RPL because a procedure with
-       arguments may start executing at the ARGT instruction (listed
-       in the load map as procedure start), or at the instruction
-       following ARGT (if PCL completes w/o faults) */
+     NOTE: a 2-word range is needed for RPL because a procedure with
+     arguments may start executing at the ARGT instruction (listed
+     in the load map as procedure start), or at the instruction
+     following ARGT (if PCL completes w/o faults) */
 
-    if (TRACEUSER && SEGNO16(RPH) == 041 && 06200 <= RPL && RPL <= 06201) { /* ac$set */
-      savetraceflags = ~TB_MAP;
-      printf("enable trace, RPH=%o, RPL=%o\n", SEGNO16(RPH), RPL);
-    }
-    if (TRACEUSER && SEGNO16(RPH) == 013 && 044030 <= RPL && RPL <= 044031) { /* setrc$ */
-      savetraceflags = 0;
-      printf("disable trace, RPH=%o, RPL=%o\n", SEGNO16(RPH), RPL);
-    }
+  if (TRACEUSER && SEGNO16(RPH) == 041 && 06200 <= RPL && RPL <= 06201) { /* ac$set */
+    savetraceflags = ~TB_MAP;
+    printf("enable trace, RPH=%o, RPL=%o\n", SEGNO16(RPH), RPL);
+  }
+  if (TRACEUSER && SEGNO16(RPH) == 013 && 044030 <= RPL && RPL <= 044031) { /* setrc$ */
+    savetraceflags = 0;
+    printf("disable trace, RPH=%o, RPL=%o\n", SEGNO16(RPH), RPL);
+  }
 #endif
 
 #if 0
-    /* this is for FTN Generic 3 trace */
-    if (SEGNO16(RPH) == 04000 && RPL >= 034750 && RPL <= 034760)
-      savetraceflags = ~TB_MAP;
-    else
-      savetraceflags = 0;
+  /* this is for FTN Generic 3 trace */
+  if (SEGNO16(RPH) == 04000 && RPL >= 034750 && RPL <= 034760)
+    savetraceflags = ~TB_MAP;
+  else
+    savetraceflags = 0;
 #endif
 
 #if 0
-    /* NOTE: this tends to cause a page fault loop if the location
-       being monitored isn't wired */
+  /* NOTE: this tends to cause a page fault loop if the location
+     being monitored isn't wired */
 
-    if (trapaddr != 0 && (crs[OWNERL] & 0100000) && (crs[MODALS] & 010)) {
-      traceflags = -1;
-      printf("TRAP: at #%d\n", instcount);
-      utempa = get16(trapaddr);
-      if (utempa != trapvalue) {
-	printf("TRAP: at #%d, old value of %o/%o was %o; new value is %o\n", instcount, trapaddr>>16, trapaddr&0xffff, trapvalue, utempa);
-	trapvalue = utempa;
-	printf("TRAP: new trap value is %o\n", trapvalue);
+  if (trapaddr != 0 && (crs[OWNERL] & 0100000) && (crs[MODALS] & 010)) {
+    traceflags = -1;
+    printf("TRAP: at #%d\n", instcount);
+    utempa = get16(trapaddr);
+    if (utempa != trapvalue) {
+      printf("TRAP: at #%d, old value of %o/%o was %o; new value is %o\n", instcount, trapaddr>>16, trapaddr&0xffff, trapvalue, utempa);
+      trapvalue = utempa;
+      printf("TRAP: new trap value is %o\n", trapvalue);
+    }
+  }
+#endif
+
+#ifndef NOTRACE
+  /* is this user being traced? */
+
+  if (TRACEUSER && ((traceseg == 0) || (traceseg == (RPH & 0xFFF))))
+    traceflags = savetraceflags;
+  else
+    traceflags = 0;
+#endif
+
+  /* hack to activate trace in 32I mode */
+
+#if 0
+  if ((crs[KEYS] & 0016000) == 0010000)
+    traceflags = savetraceflags;
+  else
+    traceflags = 0;
+#endif
+
+#if 0
+  /* NOTE: rev 23.4 halts at inst #75379065 with the error:
+     "System Serial Number does not agree with this version of Primos."
+     To track this down, turn on tracing just before this instruction. */
+
+  if (75370000 < instcount && instcount < 75380000)
+    traceflags = ~TB_MAP;
+#endif
+
+#if 0
+  /* turn on tracing  near instruction #47704931 to debug I/O TLB error
+     in rev 22.1 */
+
+  if (instcount > 47700000)
+    traceflags = ~0;
+#endif
+
+  /* poll any devices that requested a poll */
+
+  for (i=0; i<64; i++)
+    if (devpoll[i] && (--devpoll[i] <= 0)) {
+      devmap[i](4, 0, i);
+    }
+
+  /* is an interrupt pending, with interrupts enabled? */
+
+  if (inhcount)
+    inhcount--;
+  else if (intvec >= 0 && (crs[MODALS] & 0100000) /* && inhcount == 0 */) {
+    //printf("fetch: taking interrupt vector '%o, modals='%o\n", intvec, crs[MODALS]);
+    TRACE(T_INST, "\nfetch: taking interrupt vector '%o, modals='%o\n", intvec, crs[MODALS]);
+    regs.sym.pswpb = RP;
+    regs.sym.pswkeys = crs[KEYS];
+
+    if (crs[MODALS] & 010) {              /* PX enabled */
+      //traceflags = ~TB_MAP;
+      newkeys(014000);
+      RPH = 4;
+      RPL = intvec;
+
+    } else if (crs[MODALS] & 040000) {    /* vectored interrupt mode */
+      m = get16(intvec);
+      if (m != 0) {
+	put16(RPL, m);
+	RP = m+1;
+      } else {
+	printf("fetch: interrupt vector '%o = 0 in vectored interrupt mode\n", intvec);
+	fatal(NULL);
+      }
+
+    } else {                              /* standard interrupt mode */
+      m = get16(063);
+      printf("Standard mode interrupt vector loc = %o\n", m);
+      //traceflags = ~TB_MAP;
+      if (m != 0) {
+	put16(RPL, m);
+	RP = m+1;
+      } else {
+	fatal("fetch: loc '63 = 0 in standard interrupt mode");
       }
     }
-#endif
+    crs[MODALS] &= 077777;   /* inhibit interrupts */
+  }
 
-    /* is this user being traced? */
+  /* as a speedup later, fetch 32/64 bits (or the rest of the page)
+     and maintain a prefetch queue */
 
-    if (TRACEUSER && ((traceseg == 0) || (traceseg == (RPH & 0xFFF))))
-      traceflags = savetraceflags;
-    else
-      traceflags = 0;
-
-    /* hack to activate trace in 32I mode */
-
+  prevpc = RP;
+  ea = RP;
 #if 0
-    if ((crs[KEYS] & 0016000) == 0010000)
-      traceflags = savetraceflags;
-    else
-      traceflags = 0;
+  /* NOTE: Rev 21 Sys Arch Guide, 2nd Ed, pg 3-32 says:
+
+     "When bits 17 to 32 of the program counter contain a value within
+     the ATR (address trap range) and the processor is reading an 
+     instruction, an address trap always occurs.  The only exception
+     to this is if the machine is operating in 32I mode."
+
+     However, if this code is enabled, the Primos boot fails very
+     early, before verifying memory.  */
+
+  if ((ea & 0xFFFF) < 040)
+    ea = 0x80000000 | (ea & 0xFFFF);
 #endif
 
-#if 0
-    /* NOTE: rev 23.4 halts at inst #75379065 with the error:
-       "System Serial Number does not agree with this version of Primos."
-       To track this down, turn on tracing just before this instruction. */
+  inst = iget16(ea);
+  RPL++;
+  instcount++;
 
-    if (75370000 < instcount && instcount < 75380000)
-      traceflags = ~TB_MAP;
-#endif
+  /* while a process is running, RP is the real program counter, PBH
+     is the active procedure segment, and PBL is zero.  When a
+     process stops running, RP is copied to PB.  When a process
+     starts running again, PB is copied to RP. */
 
-#if 0
-    /* turn on tracing  near instruction #47704931 to debug I/O TLB error
-       in rev 22.1 */
+  crs[PBH] = RPH;
+  crs[PBL] = 0;
+  earp = RP;
 
-    if (instcount > 47700000)
-      traceflags = ~0;
-#endif
+  if (crs[MODALS] & 010) {     /* px enabled, bump 1ms process timer */
+    if (crs[TIMERL]++ > instpermsec) {
+      crs[TIMERL] = 0;
 
-    /* poll any devices that requested a poll */
+      /* if 1ms resolution process timer overflows, set pcb abort flag */
 
-    for (i=0; i<64; i++)
-      if (devpoll[i] && (--devpoll[i] <= 0)) {
-	devmap[i](4, 0, i);
-      }
-
-    /* is an interrupt pending, with interrupts enabled? */
-
-    if (intvec >= 0 && (crs[MODALS] & 0100000) && inhcount == 0) {
-      //printf("fetch: taking interrupt vector '%o, modals='%o\n", intvec, crs[MODALS]);
-      TRACE(T_INST, "\nfetch: taking interrupt vector '%o, modals='%o\n", intvec, crs[MODALS]);
-      regs.sym.pswpb = RP;
-      regs.sym.pswkeys = crs[KEYS];
-
-      if (crs[MODALS] & 010) {              /* PX enabled */
-	//traceflags = ~TB_MAP;
-	newkeys(014000);
-	RPH = 4;
-	RPL = intvec;
-
-      } else if (crs[MODALS] & 040000) {    /* vectored interrupt mode */
-	m = get16(intvec);
-	if (m != 0) {
-	  put16(RPL, m);
-	  RP = m+1;
-	} else {
-	  printf("fetch: interrupt vector '%o = 0 in vectored interrupt mode\n", intvec);
-	  fatal(NULL);
-	}
-
-      } else {                              /* standard interrupt mode */
-	m = get16(063);
-	printf("Standard mode interrupt vector loc = %o\n", m);
-	//traceflags = ~TB_MAP;
-	if (m != 0) {
-	  put16(RPL, m);
-	  RP = m+1;
-	} else {
-	  fatal("fetch: loc '63 = 0 in standard interrupt mode");
-	}
-      }
-      crs[MODALS] &= 077777;   /* inhibit interrupts */
-    }
-    if (inhcount)
-      inhcount--;
-
-    /* as a speedup later, fetch 32/64 bits (or the rest of the page)
-       and maintain a prefetch queue */
-
-    prevpc = RP;
-    ea = RP;
-#if 0
-    /* NOTE: Rev 21 Sys Arch Guide, 2nd Ed, pg 3-32 says:
-
-       "When bits 17 to 32 of the program counter contain a value within
-       the ATR (address trap range) and the processor is reading an 
-       instruction, an address trap always occurs.  The only exception
-       to this is if the machine is operating in 32I mode."
-
-       However, if this code is enabled, the Primos boot fails very
-       early, before verifying memory.  */
-    
-    if ((ea & 0xFFFF) < 040)
-      ea = 0x80000000 | (ea & 0xFFFF);
-#endif
-
-    inst = iget16(ea);
-    RPL++;
-    instcount++;
-
-    /* while a process is running, RP is the real program counter, PBH
-       is the active procedure segment, and PBL is zero.  When a
-       process stops running, RP is copied to PB.  When a process
-       starts running again, PB is copied to RP. */
-
-    crs[PBH] = RPH;
-    crs[PBL] = 0;
-    earp = RP;
-
-    if (crs[MODALS] & 010) {     /* px enabled, bump 1ms process timer */
-      if (crs[TIMERL]++ > instpermsec) {
-	crs[TIMERL] = 0;
-
-	/* if 1ms resolution process timer overflows, set pcb abort flag */
-
-	crs[TIMER]++;
-	if (crs[TIMER] == 0) {
-	  TRACE(T_PX,  "#%d: pcb %o timer overflow\n", instcount, crs[OWNERL]);
-	  ea = *(ea_t *)(crs+OWNER);
-	  m = get16r0(ea+4) | 1;       /* set process abort flag */
-	  put16r0(m, ea+4);
-	}
+      crs[TIMER]++;
+      if (crs[TIMER] == 0) {
+	TRACE(T_PX,  "#%d: pcb %o timer overflow\n", instcount, crs[OWNERL]);
+	ea = *(ea_t *)(crs+OWNER);
+	m = get16r0(ea+4) | 1;       /* set process abort flag */
+	put16r0(m, ea+4);
       }
     }
-
-#if 0
-    /* NOTE: this is to debug generic instruction 3's in Primos boot */
-
-    if (instcount > 75376100)
-      //traceflags = -1;
-      traceflags = TB_DIO;
-
-#endif
+  }
 
 xec:
-    /* NOTE: don't trace JMP * instructions (used to test PX) */
+  /* NOTE: don't trace JMP * instructions (used to test PX) */
 
 #if 0
-    if (inst == 03777)
-      traceflags = 0;
+  if (inst == 03777)
+    traceflags = 0;
 #endif
 
 #if 0
-    if (crs[OWNERL] == 0100200 && inst == 001114 && savetraceflags)
-      traceflags = ~0;
+  if (crs[OWNERL] == 0100200 && inst == 001114 && savetraceflags)
+    traceflags = ~0;
+  else
+    traceflags = 0;
+#endif
+
+  TRACE(T_FLOW, "\n			#%u [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%:0d B='%o/%d L='%o/%d E='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d K=%o M=%o\n", instcount, searchloadmap(*(unsigned int *)(crs+OWNER),'x'), crs[OWNERL], *(short *)(crs+TIMER), crs[SBH], crs[SBL], crs[LBH], crs[LBL], searchloadmap(*(unsigned int *)(crs+LBH),'l'), crs[XBH], crs[XBL], RPH, RPL-1, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), *(unsigned int *)(crs+L), *(int *)(crs+L), *(unsigned int *)(crs+E), *(int *)(crs+E), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&020000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, crs[KEYS], crs[MODALS]);
+
+  /* begin instruction decode: generic? */
+
+  if ((inst & 036000) != 0)
+    if ((crs[KEYS] & 0016000) == 0010000)
+      goto imode;
     else
-      traceflags = 0;
-#endif
+      goto nonimode;
 
-    TRACE(T_FLOW, "\n			#%u [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%:0d B='%o/%d L='%o/%d E='%o/%d X=%o/%d Y=%o/%d C=%d L=%d LT=%d EQ=%d K=%o M=%o\n", instcount, searchloadmap(*(unsigned int *)(crs+OWNER),'x'), crs[OWNERL], *(short *)(crs+TIMER), crs[SBH], crs[SBL], crs[LBH], crs[LBL], searchloadmap(*(unsigned int *)(crs+LBH),'l'), crs[XBH], crs[XBL], RPH, RPL-1, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), *(unsigned int *)(crs+L), *(int *)(crs+L), *(unsigned int *)(crs+E), *(int *)(crs+E), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000) != 0, (crs[KEYS]&020000) != 0, (crs[KEYS]&0200) != 0, (crs[KEYS]&0100) != 0, crs[KEYS], crs[MODALS]);
+  TRACE(T_INST, " generic class %d\n", inst>>14);
+  goto *disp_gen[GENIX(inst)];
+    
+  /* V-mode/frequent instructions */
 
-    /* begin instruction decode: generic? */
+d_iab:  /* 000201 */
+  TRACE(T_FLOW, " IAB\n");
+  tempa = crs[B];
+  crs[B] = crs[A];
+  crs[A] = tempa;
+  goto fetch;
 
-    if ((inst & 036000) == 0) {
-      class = inst>>14;
-      if (class == 0) {
-	TRACE(T_INST, " generic class 0\n");
-	switch (inst) {
+d_cgt:  /* 001314 */
+  TRACE(T_FLOW, " CGT\n");
+  tempa = iget16(RP);              /* get number of words */
+  if (1 <= crs[A] && crs[A] < tempa)
+    RPL = iget16(INCVA(RP,crs[A]));
+  else
+    RPL += tempa;
+  goto fetch;
 
-	/* V-mode/frequent instructions */
+d_pida:  /* 000115 */
+  TRACE(T_FLOW, " PIDA\n");
+  *(int *)(crs+L) = *(short *)(crs+A);
+  goto fetch;
 
-	case 000201:
-	  TRACE(T_FLOW, " IAB\n");
-	  tempa = crs[B];
-	  crs[B] = crs[A];
-	  crs[A] = tempa;
-	  continue;
+d_pidl:  /* 000305 */
+  TRACE(T_FLOW, " PIDL\n");
+  *(long long *)(crs+L) = *(int *)(crs+L);
+  goto fetch;
 
-	case 001314:
-	  TRACE(T_FLOW, " CGT\n");
-	  tempa = iget16(RP);              /* get number of words */
-	  if (1 <= crs[A] && crs[A] < tempa)
-	    RPL = iget16(INCVA(RP,crs[A]));
-	  else
-	    RPL += tempa;
-	  continue;
+  /* NOTE: PMA manual says copy B reg to A reg, but DIAG seems
+     to indicate a swap */
 
-	case 000115:
-	  TRACE(T_FLOW, " PIDA\n");
-	  *(int *)(crs+L) = *(short *)(crs+A);
-	  continue;
+d_pima: /* 000015 */
+  TRACE(T_FLOW, " PIMA\n");
+  templ = crsl[GR2];
+  crsl[GR2] = (crsl[GR2] << 16) | (crsl[GR2] >> 16);
+  templ2 = (templ << 16) >> 16;
+  if (templ != templ2)
+    mathexception('i', FC_INT_OFLOW, 0);
+  else
+    CLEARC;
+  goto fetch;
 
-	case 000305:
-	  TRACE(T_FLOW, " PIDL\n");
-	  *(long long *)(crs+L) = *(int *)(crs+L);
-	  continue;
+d_piml:  /* 000301 */
+  TRACE(T_FLOW, " PIML\n");
+  templ = *(int *)(crs+L);
+  *(int *)(crs+L) = *(int *)(crs+E);
+  if (((templ ^ *(int *)(crs+E)) & 0x80000000) || (templ != 0 && templ != -1))
+    mathexception('i', FC_INT_OFLOW, 0);
+  else
+    CLEARC;
+  goto fetch;
 
-	/* NOTE: PMA manual says copy B reg to A reg, but DIAG seems
-	   to indicate a swap */
+  /* character/field instructions */
 
-	case 000015:
-	  TRACE(T_FLOW, " PIMA\n");
-	  templ = crsl[GR2];
-	  crsl[GR2] = (crsl[GR2] << 16) | (crsl[GR2] >> 16);
-	  templ2 = (templ << 16) >> 16;
-	  if (templ != templ2)
-	    mathexception('i', FC_INT_OFLOW, 0);
-	  else
-	    CLEARC;
-	  continue;
+d_ldc0:  /* 001302 */
+  TRACE(T_FLOW, " LDC 0\n");
+  crs[A] = ldc(0, crs[A]);
+  goto fetch;
 
-	case 000301:
-	  TRACE(T_FLOW, " PIML\n");
-	  templ = *(int *)(crs+L);
-	  *(int *)(crs+L) = *(int *)(crs+E);
-	  if (((templ ^ *(int *)(crs+E)) & 0x80000000) || (templ != 0 && templ != -1))
-	    mathexception('i', FC_INT_OFLOW, 0);
-	  else
-	    CLEARC;
-	  continue;
+d_ldc1:  /* 001312 */
+  TRACE(T_FLOW, " LDC 1\n");
+  crs[A] = ldc(1, crs[A]);
+  goto fetch;
 
-	/* character/field instructions */
+d_stc0: /* 001322 */
+  TRACE(T_FLOW, " STC 0\n");
+  stc(0, crs[A]);
+  goto fetch;
 
-	case 001302:
-	  TRACE(T_FLOW, " LDC 0\n");
-	  crs[A] = ldc(0, crs[A]);
-	  continue;
+d_stc1:  /* 001332 */
+  TRACE(T_FLOW, " STC 1\n");
+  stc(1, crs[A]);
+  goto fetch;
 
-	case 001312:
-	  TRACE(T_FLOW, " LDC 1\n");
-	  crs[A] = ldc(1, crs[A]);
-	  continue;
+d_eafa0:  /* 001300 */
+  TRACE(T_FLOW, " EAFA 0\n");
+  ea = apea(&eabit);
+  crsl[FAR0] = ea & 0x6FFFFFFF;
+  crsl[FLR0] = (crsl[FLR0] & 0xFFFF0FFF) | (eabit << 12);
+  TRACE(T_INST, " FAR0=%o/%o, eabit=%d, FLR=%x\n", crsl[FAR0]>>16, crsl[FAR0]&0xFFFF, eabit, crsl[FLR0]);
+  goto fetch;
 
-	case 001322:
-	  TRACE(T_FLOW, " STC 0\n");
-	  stc(0, crs[A]);
-	  continue;
-	    
-	case 001332:
-	  TRACE(T_FLOW, " STC 1\n");
-	  stc(1, crs[A]);
-	  continue;
+d_eafa1:  /* 001310 */
+  TRACE(T_FLOW, " EAFA 1\n");
+  ea = apea(&eabit);
+  crsl[FAR1] = ea & 0x6FFFFFFF;
+  crsl[FLR1] = (crsl[FLR1] & 0xFFFF0FFF) | (eabit << 12);
+  TRACE(T_INST, " FAR1=%o/%o, eabit=%d, FLR=%x\n", crsl[FAR1]>>16, crsl[FAR1]&0xFFFF, eabit, crsl[FLR1]);
+  goto fetch;
 
-	case 001300:
-	  TRACE(T_FLOW, " EAFA 0\n");
-	  ea = apea(&eabit);
-	  crsl[FAR0] = ea & 0x6FFFFFFF;
-	  crsl[FLR0] = (crsl[FLR0] & 0xFFFF0FFF) | (eabit << 12);
-	  TRACE(T_INST, " FAR0=%o/%o, eabit=%d, FLR=%x\n", crsl[FAR0]>>16, crsl[FAR0]&0xFFFF, eabit, crsl[FLR0]);
-	  continue;
+d_alfa0:  /* 001301 */
+  TRACE(T_FLOW, " ALFA 0\n");
+  arfa(0, *(int *)(crs+L));
+  goto fetch;
 
-	case 001310:
-	  TRACE(T_FLOW, " EAFA 1\n");
-	  ea = apea(&eabit);
-	  crsl[FAR1] = ea & 0x6FFFFFFF;
-	  crsl[FLR1] = (crsl[FLR1] & 0xFFFF0FFF) | (eabit << 12);
-	  TRACE(T_INST, " FAR1=%o/%o, eabit=%d, FLR=%x\n", crsl[FAR1]>>16, crsl[FAR1]&0xFFFF, eabit, crsl[FLR1]);
-	  continue;
+d_alfa1:  /* 001311 */
+  TRACE(T_FLOW, " ALFA 1\n");
+  arfa(1, *(int *)(crs+L));
+  goto fetch;
 
-	case 001301:
-	  TRACE(T_FLOW, " ALFA 0\n");
-	  arfa(0, *(int *)(crs+L));
-	  continue;
+d_lfli0:  /* 001303 */
+  TRACE(T_FLOW, " LFLI 0\n");
+  utempa = iget16(RP);
+  RPL++;
+  PUTFLR(0,utempa);
+  TRACE(T_INST, " Load Field length with %d, FLR=%x, actual = %d\n", utempa, crsl[FLR0], GETFLR(0));
+  goto fetch;
 
-	case 001311:
-	  TRACE(T_FLOW, " ALFA 1\n");
-	  arfa(1, *(int *)(crs+L));
-	  continue;
+d_lfli1:  /* 001313 */
+  TRACE(T_FLOW, " LFLI 1\n");
+  utempa = iget16(RP);
+  RPL++;
+  PUTFLR(1,utempa);
+  TRACE(T_INST, " Load Field length with %d, FLR=%x, actual = %d\n", utempa, crsl[FLR1], GETFLR(1));
+  goto fetch;
 
-	case 001303:
-	  TRACE(T_FLOW, " LFLI 0\n");
-	  utempa = iget16(RP);
-	  RPL++;
-	  PUTFLR(0,utempa);
-	  TRACE(T_INST, " Load Field length with %d, FLR=%x, actual = %d\n", utempa, crsl[FLR0], GETFLR(0));
-	  continue;
-
-	case 001313:
-	  TRACE(T_FLOW, " LFLI 1\n");
-	  utempa = iget16(RP);
-	  RPL++;
-	  PUTFLR(1,utempa);
-	  TRACE(T_INST, " Load Field length with %d, FLR=%x, actual = %d\n", utempa, crsl[FLR1], GETFLR(1));
-	  continue;
-
-	case 001320:
-	  TRACE(T_FLOW, " STFA 0\n");
-	  ea = apea(NULL);
-	  utempl = crsl[FAR0] & 0x6FFFFFFF;
-	  utempa = crsl[FLR0] & 0xF000;
+d_stfa0:  /* 001320 */
+  TRACE(T_FLOW, " STFA 0\n");
+  ea = apea(NULL);
+  utempl = crsl[FAR0] & 0x6FFFFFFF;
+  utempa = crsl[FLR0] & 0xF000;
 stfa:
-	  if (utempa != 0) {
-	    utempl = utempl | EXTMASK32;
-	    put16(utempa,INCVA(ea,2));
-	    TRACE(T_INST, " stored 3-word pointer %o/%o %o\n", utempl>>16, utempl&0xffff, utempa);
-	  } else {
-	    TRACE(T_INST, " stored 2-word pointer %o/%o\n", utempl>>16, utempl&0xffff);
-	  }
-	  put32(utempl,ea);
-	  continue;
+  if (utempa != 0) {
+    utempl = utempl | EXTMASK32;
+    put16(utempa,INCVA(ea,2));
+    TRACE(T_INST, " stored 3-word pointer %o/%o %o\n", utempl>>16, utempl&0xffff, utempa);
+  } else {
+    TRACE(T_INST, " stored 2-word pointer %o/%o\n", utempl>>16, utempl&0xffff);
+  }
+  put32(utempl,ea);
+  goto fetch;
 
-	case 001330:
-	  TRACE(T_FLOW, " STFA 1\n");
-	  ea = apea(NULL);
-	  utempl = crsl[FAR1] & 0x6FFFFFFF;
-	  utempa = crsl[FLR1] & 0xF000;
-	  goto stfa;
+d_stfa1:  /* 001330 */
+  TRACE(T_FLOW, " STFA 1\n");
+  ea = apea(NULL);
+  utempl = crsl[FAR1] & 0x6FFFFFFF;
+  utempa = crsl[FLR1] & 0xF000;
+  goto stfa;
 
-	case 001321:
-	  TRACE(T_FLOW, " TLFL 0\n");
-	  PUTFLR(0,*(unsigned int *)(crs+L));
-	  TRACE(T_INST, " Transfer %d to FLR0, FLR=%x, actual = %d\n", *(unsigned int *)(crs+L), crsl[FLR0], GETFLR(0));
-	  continue;
+d_tlfl0:  /* 001321 */
+  TRACE(T_FLOW, " TLFL 0\n");
+  PUTFLR(0,*(unsigned int *)(crs+L));
+  TRACE(T_INST, " Transfer %d to FLR0, FLR=%x, actual = %d\n", *(unsigned int *)(crs+L), crsl[FLR0], GETFLR(0));
+  goto fetch;
 
-	case 001331:
-	  TRACE(T_FLOW, " TLFL 1\n");
-	  PUTFLR(1,*(unsigned int *)(crs+L));
-	  TRACE(T_INST, " Transfer %d to FLR1, FLR=%x, actual = %d\n", *(unsigned int *)(crs+L), crsl[FLR1], GETFLR(1));
-	  continue;
+d_tlfl1:  /* 001331 */
+  TRACE(T_FLOW, " TLFL 1\n");
+  PUTFLR(1,*(unsigned int *)(crs+L));
+  TRACE(T_INST, " Transfer %d to FLR1, FLR=%x, actual = %d\n", *(unsigned int *)(crs+L), crsl[FLR1], GETFLR(1));
+  goto fetch;
 
-	case 001323:
-	  TRACE(T_FLOW, " TFLL 0\n");
-	  *(unsigned int *)(crs+L) = GETFLR(0);
-	  continue;
+d_tfll0:  /* 001323 */
+  TRACE(T_FLOW, " TFLL 0\n");
+  *(unsigned int *)(crs+L) = GETFLR(0);
+  goto fetch;
 
-	case 001333:
-	  TRACE(T_FLOW, " TFLL 1\n");
-	  *(unsigned int *)(crs+L) = GETFLR(1);
-	  continue;
-	
-	case 000611:
-	  TRACE(T_FLOW, " PRTN\n");
-	  prtn();
+d_tfll1:  /* 001333 */
+  TRACE(T_FLOW, " TFLL 1\n");
+  *(unsigned int *)(crs+L) = GETFLR(1);
+  goto fetch;
 
-	  /* if this PRTN is for a procedure being traced, disable
-	     tracing if one-shot is true */
+d_prtn:  /* 000611 */
+  TRACE(T_FLOW, " PRTN\n");
+  prtn();
 
-	  if (numtraceprocs > 0 && TRACEUSER)
-	    for (i=0; i<numtraceprocs; i++)
-	      if (*(int *)(crs+SB) == traceprocs[i].sb) {
-		traceprocs[i].sb = -1;
-		fflush(tracefile);
-		if (traceprocs[i].oneshot) {
-		  printf("Disabled trace for %s at sb '%o/%o\n", traceprocs[i].name, crs[SBH], crs[SBL]);
-		  savetraceflags = 0;
-		}
-		break;
-	      }
-	  continue;
+  /* if this PRTN is for a procedure being traced, disable
+     tracing if one-shot is true */
 
-	case 001005:
-	  TRACE(T_FLOW, " TKA\n");
-	  crs[A] = crs[KEYS];
-	  continue;
+  if (numtraceprocs > 0 && TRACEUSER)
+    for (i=0; i<numtraceprocs; i++)
+      if (*(int *)(crs+SB) == traceprocs[i].sb) {
+	traceprocs[i].sb = -1;
+	fflush(tracefile);
+	if (traceprocs[i].oneshot) {
+	  printf("Disabled trace for %s at sb '%o/%o\n", traceprocs[i].name, crs[SBH], crs[SBL]);
+	  savetraceflags = 0;
+	}
+	break;
+      }
+  goto fetch;
 
-	case 001015:
-	  TRACE(T_FLOW, " TAK\n");
-	  newkeys(crs[A] & 0177770);
-	  continue;
+d_tka:  /* 001005 */
+  TRACE(T_FLOW, " TKA\n");
+  crs[A] = crs[KEYS];
+  goto fetch;
 
-	case 000001:
-	  TRACE(T_FLOW, " NOP 1\n");
-	  continue;
+d_tak:  /* 001015 */
+  TRACE(T_FLOW, " TAK\n");
+  newkeys(crs[A] & 0177774);
+  goto fetch;
 
-	case 000715:
-	  TRACE(T_FLOW, " RSAV\n");
-	  ea = apea(NULL);
-	  j = 1;
-	  savemask = 0;
-	  for (i = 11; i >= 0; i--) {
-	    if (crsl[i] != 0) {
-	      TRACE(T_INST, " crsl[%d] saved, value=%o (%o/%o)\n", i, crsl[i], crsl[i]>>16, crsl[i]&0xffff);
-	      put32(crsl[i], INCVA(ea,j));
-	      savemask |= bitmask16[16-i];
-	    }
-	    j += 2;
-	  }
-	  put32(*(int *)(crs+XB), INCVA(ea,25));
-	  TRACE(T_INST, " XB saved, value=%o/%o\n", crs[XBH], crs[XBL]);
-	  put16(savemask, ea);
-	  TRACE(T_INST, " Saved, mask=%o\n", savemask);
-	  continue;
+d_nop:  /* 000001 */
+  TRACE(T_FLOW, " NOP 1\n");
+  goto fetch;
 
-	case 000717:
-	  TRACE(T_FLOW, " RRST\n");
-	  ea = apea(NULL);
-	  savemask = get16(ea);
-	  TRACE(T_INST, " Save mask=%o\n", savemask);
-	  j = 1;
-	  for (i = 11; i >= 0; i--) {
-	    if (savemask & bitmask16[16-i]) {
-	      crsl[i] = get32(INCVA(ea,j));
-	      TRACE(T_INST, " crsl[%d] restored, value=%o (%o/%o)\n", i, crsl[i], crsl[i]>>16, crsl[i]&0xffff);
-	    } else {
-	      crsl[i] = 0;
-	    }
-	    j += 2;
-	  }
-	  *(unsigned int *)(crs+XB) = get32(INCVA(ea,25));
-	  TRACE(T_INST, " XB restored, value=%o/%o\n", crs[XBH], crs[XBL]);
-	  continue;
+d_rsav:  /* 000715 */
+  TRACE(T_FLOW, " RSAV\n");
+  ea = apea(NULL);
+  j = 1;
+  savemask = 0;
+  for (i = 11; i >= 0; i--) {
+    if (crsl[i] != 0) {
+      TRACE(T_INST, " crsl[%d] saved, value=%o (%o/%o)\n", i, crsl[i], crsl[i]>>16, crsl[i]&0xffff);
+      put32(crsl[i], INCVA(ea,j));
+      savemask |= bitmask16[16-i];
+    }
+    j += 2;
+  }
+  put32(*(int *)(crs+XB), INCVA(ea,25));
+  TRACE(T_INST, " XB saved, value=%o/%o\n", crs[XBH], crs[XBL]);
+  put16(savemask, ea);
+  TRACE(T_INST, " Saved, mask=%o\n", savemask);
+  goto fetch;
 
-	case 000400:
-	case 000401:
-	case 000402:
-	  TRACE(T_FLOW, " ENB\n");
-	  RESTRICT();
-	  crs[MODALS] |= 0100000;
-	  inhcount = 1;
-	  continue;
+d_rrst:  /* 000717 */
+  TRACE(T_FLOW, " RRST\n");
+  ea = apea(NULL);
+  savemask = get16(ea);
+  TRACE(T_INST, " Save mask=%o\n", savemask);
+  j = 1;
+  for (i = 11; i >= 0; i--) {
+    if (savemask & bitmask16[16-i]) {
+      crsl[i] = get32(INCVA(ea,j));
+      TRACE(T_INST, " crsl[%d] restored, value=%o (%o/%o)\n", i, crsl[i], crsl[i]>>16, crsl[i]&0xffff);
+    } else {
+      crsl[i] = 0;
+    }
+    j += 2;
+  }
+  *(unsigned int *)(crs+XB) = get32(INCVA(ea,25));
+  TRACE(T_INST, " XB restored, value=%o/%o\n", crs[XBH], crs[XBL]);
+  goto fetch;
 
-	case 001000:
-	case 001001:
-	case 001002:
-	  TRACE(T_FLOW, " INH\n");
-	  RESTRICT();
-	  crs[MODALS] &= ~0100000;
-	  continue;
+d_enb:  /* 000400 (enbm), 000401 (enbl), 000402 (enbp) */
+  TRACE(T_FLOW, " ENB\n");
+  RESTRICT();
+  crs[MODALS] |= 0100000;
+  inhcount = 1;
+  goto fetch;
 
-	case 01200:
-	  TRACE(T_FLOW, " STAC\n");
-	  ea = apea(NULL);
-	  if (get16(ea) == crs[B]) {
-	    put16(crs[A], ea);
-	    crs[KEYS] |= 0100;       /* set EQ */
-	  } else 
-	    crs[KEYS] &= ~0100;      /* reset EQ */
-	  continue;
+d_inh:  /* 001000 (inhm), 001001 (inhl), 001002 (inhp) */
+  TRACE(T_FLOW, " INH\n");
+  RESTRICT();
+  crs[MODALS] &= ~0100000;
+  goto fetch;
 
-	case 01204:
-	  TRACE(T_FLOW, " STLC\n");
-	  ea = apea(NULL);
-	  if (get32(ea) == *(unsigned int *)(crs+E)){
-	    put32(*(unsigned int *)(crs+L), ea);
-	    crs[KEYS] |= 0100;       /* set EQ */
-	  } else 
-	    crs[KEYS] &= ~0100;      /* reset EQ */
-	  continue;
+d_stac:  /* 001200 */
+  TRACE(T_FLOW, " STAC\n");
+  ea = apea(NULL);
+  if (get16(ea) == crs[B]) {
+    put16(crs[A], ea);
+    SETEQ;
+  } else 
+    CLEAREQ;
+  goto fetch;
 
-	/* NOTE: when ARGT is executed as an instruction, it means
-	   that a fault occurred during PCL argument processing. */
+d_stlc:  /* 001204 */
+  TRACE(T_FLOW, " STLC\n");
+  ea = apea(NULL);
+  if (get32(ea) == *(unsigned int *)(crs+E)){
+    put32(*(unsigned int *)(crs+L), ea);
+    SETEQ;
+  } else 
+    CLEAREQ;
+  goto fetch;
 
-	case 000605:
-	  TRACE(T_FLOW|T_PCL, " ARGT\n");
-	  argt();
-	  continue;
+  /* NOTE: when ARGT is executed as an instruction, it means
+     that a fault occurred during PCL argument processing. */
 
-	case 000705:
-	  TRACE(T_FLOW|T_PCL, " CALF\n");
-	  ea = apea(NULL);
-	  calf(ea);
-	  continue;
+d_argt:  /* 000605 */
+  TRACE(T_FLOW|T_PCL, " ARGT\n");
+  argt();
+  goto fetch;
 
-	/* Decimal and character instructions
+d_calf:  /* 000705 */
+  TRACE(T_FLOW|T_PCL, " CALF\n");
+  ea = apea(NULL);
+  calf(ea);
+  goto fetch;
 
-           IMPORTANT NOTE: when using the ZGETC and ZPUTC macros, 
-	   be sure to use curly braces, ie,
+  /* Decimal and character instructions
 
-	   Instead of:
+    IMPORTANT NOTE: when using the ZGETC and ZPUTC macros, 
+    be sure to use curly braces, ie,
 
-	     if (cond)
-	       ZPUTC ...
-	       
-	   use:
+	 Instead of:
 
-	     if (cond) {
-	       ZPUTC ...
-             }
-	*/
+	   if (cond)
+	     ZPUTC ...
+
+	 use:
+
+	   if (cond) {
+	     ZPUTC ...
+	   }
+  */
 
 #define ZGETC(zea, zlen, zcp, zclen, zch) \
   if (zclen == 0) { \
@@ -4475,1958 +4478,1919 @@ stfa:
   zlen--
 
 #if 1
-	  /* if the high-speed code is enabled, and eafa doesn't mask the far,
-	     Primos boots but emacs fails badly:
-	     1. garbage display on the mode line
-	     2. ^x^f won't load a file (filename is off by one character)
-	     3. explore P command (dive) doesn't work
+  /* if the high-speed code is enabled, and eafa doesn't mask the far,
+     Primos boots but emacs fails badly:
+     1. garbage display on the mode line
+     2. ^x^f won't load a file (filename is off by one character)
+     3. explore P command (dive) doesn't work
 
-	     if the medium-speed code is enabled (ldc/stc loop), Primos
-	     boots and emacs mostly works except:
-             1. explore P command (dive) doesn't work
+     if the medium-speed code is enabled (ldc/stc loop), Primos
+     boots and emacs mostly works except:
+     1. explore P command (dive) doesn't work
 
-	     if the Prime UII library is used, which is identical to the medium
-	     speed loop as far as I can tell, everything works. ??  :(
-	  */
+     if the Prime UII library is used, which is identical to the medium
+     speed loop as far as I can tell, everything works. ??  :(
+  */
 
-	case 001114:
-	  TRACE(T_FLOW, " ZMV\n");
-	  zspace = 0240;
-	  if (crs[KEYS] & 020)
-	    zspace = 040;
-	  TRACE(T_INST, "ZMV: source=%o/%o, len=%d, dest=%o/%o, len=%d, keys=%o\n", crsl[FAR0]>>16, crsl[FAR0]&0xffff, GETFLR(0), crsl[FAR1]>>16, crsl[FAR1]&0xffff, GETFLR(1), crs[KEYS]);
+d_zmv:  /* 001114 */
+  TRACE(T_FLOW, " ZMV\n");
+  zspace = 0240;
+  if (crs[KEYS] & 020)
+    zspace = 040;
+  TRACE(T_INST, "ZMV: source=%o/%o, len=%d, dest=%o/%o, len=%d, keys=%o\n", crsl[FAR0]>>16, crsl[FAR0]&0xffff, GETFLR(0), crsl[FAR1]>>16, crsl[FAR1]&0xffff, GETFLR(1), crs[KEYS]);
 
 #if 1
-	  zlen1 = GETFLR(0);
-	  zlen2 = GETFLR(1);
-	  zea1 = crsl[FAR0];
-	  if (crsl[FLR0] & 0x8000)
-	    zea1 |= EXTMASK32;
-	  zea2 = crsl[FAR1];
-	  if (crsl[FLR1] & 0x8000)
-	    zea2 |= EXTMASK32;
-	  TRACE(T_INST, "     ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
-	  zclen1 = 0;
-	  zclen2 = 0;
-	  while (zlen2) {
-	    if (zlen1) {
-	      ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-	    } else
-	      zch1 = zspace;
-	    TRACE(T_INST, " zch1=%o (%c)\n", zch1, zch1&0x7f);
-	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-	  }
+  zlen1 = GETFLR(0);
+  zlen2 = GETFLR(1);
+  zea1 = crsl[FAR0];
+  if (crsl[FLR0] & 0x8000)
+    zea1 |= EXTMASK32;
+  zea2 = crsl[FAR1];
+  if (crsl[FLR1] & 0x8000)
+    zea2 |= EXTMASK32;
+  TRACE(T_INST, "     ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
+  zclen1 = 0;
+  zclen2 = 0;
+  while (zlen2) {
+    if (zlen1) {
+      ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+    } else
+      zch1 = zspace;
+    TRACE(T_INST, " zch1=%o (%c)\n", zch1, zch1&0x7f);
+    ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+  }
 #else
-	  /* this should work, but emacs explore "dive" (P) breaks :(
+  /* this should work, but emacs explore "dive" (P) breaks :(
 
-	     I think what might happen is that if a fault occurs in
-	     the loop because of the ldc/stc memory references, the
-	     ZMVD is completely restarted but the field address/length
-	     registers (and keys) have been modified and are not in
-	     the same state as when the ZMVD started.  Emulating ZMVD
-	     via UII works because the individual stc/ldc causing the
-	     fault is restarted rather than the whole ZMVD */
+  I think what might happen is that if a fault occurs in
+  the loop because of the ldc/stc memory references, the
+  ZMVD is completely restarted but the field address/length
+  registers (and keys) have been modified and are not in
+  the same state as when the ZMVD started.  Emulating ZMVD
+  via UII works because the individual stc/ldc causing the
+  fault is restarted rather than the whole ZMVD */
 
-	  utempa1 = crs[KEYS];   /* UII does this because of fault */
-	  do {
-	    utempa = ldc(0,0);
-	    if (crs[KEYS] & 0100)
-	      utempa = zspace;
-	    stc(1, utempa);
-	  } while (!(crs[KEYS] & 0100));
-	  crs[KEYS] = utempa1;
+  utempa1 = crs[KEYS];   /* UII does this because of fault */
+  do {
+    utempa = ldc(0,0);
+    if (crs[KEYS] & 0100)
+      utempa = zspace;
+    stc(1, utempa);
+  } while (!(crs[KEYS] & 0100));
+  crs[KEYS] = utempa1;
 #endif
-	  continue;
-
-	case 001115:
-	  TRACE(T_FLOW, " ZMVD\n");
-	  zlen1 = GETFLR(1);
-	  zlen2 = zlen1;
-	  zea1 = crsl[FAR0];
-	  if (crsl[FLR0] & 0x8000)
-	    zea1 |= EXTMASK32;
-	  zea2 = crsl[FAR1];
-	  if (crsl[FLR1] & 0x8000)
-	    zea2 |= EXTMASK32;
-	  TRACE(T_INST, " ea1=%o/%o, ea2=%o/%o, len=%d\n", zea1>>16, zea1&0xffff, zea2>>16, zea2&0xffff, zlen1);
-	  zclen1 = 0;
-	  zclen2 = 0;
-	  while (zlen2) {
-	    ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-	    TRACE(T_INST, " zch1=%o (%c)\n", zch1, zch1&0x7f);
-	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-	  }
-	  continue;
-
-	/* NOTE: ZFIL is used early after PX enabled, and can be used to cause
-	   a UII fault to debug CALF etc.
-
-	   Could use memset(zcp2, zch2, zclen2) to fill by pieces.
-	*/
-
-	case 001116:
-	  TRACE(T_FLOW, " ZFIL\n");
-	  zlen2 = GETFLR(1);
-	  zea2 = crsl[FAR1];
-	  if (crsl[FLR1] & 0x8000)
-	    zea2 |= EXTMASK32;
-	  zch2 = crs[A];
-	  TRACE(T_INST, " ea=%o/%o, len=%d, fill=%o (%c)\n", zea2>>16, zea2&0xffff, zlen2, zch2, zch2&0x7f);
-	  //printf("ZFIL: ea=%o/%o, len=%d\n", zea2>>16, zea2&0xffff, zlen2);
-	  zclen2 = 0;
-	  while (zlen2) {
-	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch2);
-	  }
-	  continue;
-
-	case 001117:
-	  TRACE(T_FLOW, " ZCM\n");
-	  if (crs[KEYS] & 020)
-	    zspace = 040;
-	  else
-	    zspace = 0240;
-	  zlen1 = GETFLR(0);
-	  zlen2 = GETFLR(1);
-	  zea1 = crsl[FAR0];
-	  if (crsl[FLR0] & 0x8000)
-	    zea1 |= EXTMASK32;
-	  zea2 = crsl[FAR1];
-	  if (crsl[FLR1] & 0x8000)
-	    zea2 |= EXTMASK32;
-	  TRACE(T_INST, " ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
-	  zresult = 0100;                /* assume equal */
-	  zclen1 = 0;
-	  zclen2 = 0;
-	  while (zlen1 || zlen2) {
-	    if (zlen1) {
-	      ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-	    } else
-	      zch1 = zspace;
-	    if (zlen2) {
-	      ZGETC(zea2, zlen2, zcp2, zclen2, zch2);
-	    } else
-	      zch2 = zspace;
-	    TRACE(T_INST, " zch1=%o (%c), zch2=%o (%c)\n", zch1, zch1&0x7f, zch2, zch2&0x7f);
-	    if (zch1 < zch2) {
-	      zresult = 0200;
-	      break;
-	    } else if (zch1 > zch2) {
-	      zresult = 0;
-	      break;
-	    }
-	  }
-	  crs[KEYS] = (crs[KEYS] & ~0300) | zresult;
-	  continue;
-
-	case 001110:
-	  TRACE(T_FLOW, " ZTRN\n");
-	  zlen1 = GETFLR(1);
-	  zlen2 = zlen1;
-	  utempl = zlen1;
-	  zea1 = crsl[FAR0];
-	  if (crsl[FLR0] & 0x8000)
-	    zea1 |= EXTMASK32;
-	  zea2 = crsl[FAR1];
-	  if (crsl[FLR1] & 0x8000)
-	    zea2 |= EXTMASK32;
-	  TRACE(T_INST, " ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
-	  zclen1 = 0;
-	  zclen2 = 0;
-	  ea = *(ea_t *)(crs+XB);
-	  while (zlen2) {
-	    ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-	    utempa = get16(INCVA(ea,zch1/2));
-	    if (zch1 & 1)
-	      zch2 = utempa & 0xFF;
-	    else
-	      zch2 = utempa >> 8;
-	    TRACE(T_INST, " zch1=%o (%c), zch2=%o (%c)\n", zch1, zch1&0x7f, zch2, zch2&0x7f);
-	    ZPUTC(zea2, zlen2, zcp2, zclen2, zch2);
-	  }
-	  PUTFLR(1, 0);
-	  arfa(0, utempl);
-	  arfa(1, utempl);
-	  continue;
-
-	case 001111:
-	  TRACE(T_FLOW, " ZED\n");
-	  zlen1 = GETFLR(0);
-	  zlen2 = 128*1024;      /* XXX: not sure about max length of result */
-	  zea1 = crsl[FAR0];
-	  if (crsl[FLR0] & 0x8000)
-	    zea1 |= EXTMASK32;
-	  zea2 = crsl[FAR1];
-	  if (crsl[FLR1] & 0x8000)
-	    zea2 |= EXTMASK32;
-	  TRACE(T_INST, " ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
-	  if (crs[KEYS] & 020)
-	    zspace = 040;
-	  else
-	    zspace = 0240;
-	  zclen1 = 0;
-	  zclen2 = 0;
-	  ea = *(ea_t *)(crs+XB);
-	  for (i=0; i < 32767; i++) {     /* do edit pgms have a size limit? */
-	    utempa = get16(INCVA(ea, i));
-	    m = utempa & 0xFF;
-	    switch ((utempa >> 8) & 3) {
-	    case 0:  /* copy M chars */
-	      while (m && zlen1) {
-		ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-		ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-		m--;
-	      }
-	      while (m) {
-		ZPUTC(zea2, zlen2, zcp2, zclen2, zspace);
-		m--;
-	      }
-	      break;
-
-	    case 1:  /* insert character M */
-	      ZPUTC(zea2, zlen2, zcp2, zclen2, m);
-	      break;
-
-	    case 2:  /* skip M characters */
-	      if (m >= zlen1)
-		zlen1 = 0;
-	      else while (m) {
-		ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-		m--;
-	      }
-	      break;
-		
-	    case 3:  /* insert M blanks */
-	      while (m) {
-		ZPUTC(zea2, zlen2, zcp2, zclen2, zspace);
-		m--;
-	      }
-	      break;
-
-	    default:
-	      fatal("ZED em bug");
-	    }
-	    if (utempa & 0x8000)
-	      break;
-	  }
-	  continue;
-
-	case 001112:
-
-	  /* XED has some support for chars w/o parity by checking the
-	     keys before setting the zero suppress character, but it's
-	     not clear if it should ignore all character parity */
-
-	  TRACE(T_FLOW, " XED\n");
-	  zlen1 = zlen2 = 128*1024;
-	  zea1 = crsl[FAR0];
-	  if (crsl[FLR0] & 0x8000)
-	    zea1 |= EXTMASK32;
-	  zea2 = crsl[FAR1];
-	  if (crsl[FLR1] & 0x8000)
-	    zea2 |= EXTMASK32;
-	  zclen1 = 0;
-	  zclen2 = 0;
-	  TRACE(T_INST, " ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
-	  if (crs[KEYS] & 020)
-	    xsc = 040;
-	  else
-	    xsc = 0240;
-	  xfc = 0;
-	  ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-	  //printf("xed: first char = '%o\n", zch1);
-	  xsign = (zch1 == XMINUS);
-	  xsig = 0;
-	  ea = *(ea_t *)(crs+XB);
-	  for (i=0; i < 32767; i++) {     /* do edit pgms have a size limit? */
-	    utempa = get16(INCVA(ea, i));
-	    m = utempa & 0xFF;
-	    //printf("\nxed: %d: opcode = %o, m=%o\n", i, (utempa>>8) & 037, m);
-	    switch ((utempa >> 8) & 037) {
-	    case 0:  /* Zero Suppress */
-	      while (m) {
-		ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-		if (!xsig)
-		  if (zch1 == XZERO)
-		    zch1 = xsc;
-		  else {
-		    xsig = 1;
-		    if (xfc) {
-		      ZPUTC(zea2, zlen2, zcp2, zclen2, xfc);
-		    }
-		  }
-		ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-		m--;
-	      }
-	      break;
-
-	    case 1:  /* insert character M */
-	      ZPUTC(zea2, zlen2, zcp2, zclen2, m);
-	      break;
-
-	    case 2:  /* set supression character */
-	      xsc = m;
-	      break;
-		
-	    case 3:  /* insert character */
-	      if (xsig)
-		zch1 = m;
-	      else
-		zch1 = xsc;
-	      ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-	      break;
-
-	    case 4:  /* insert digits */
-	      if (!xsig && xfc) {
-		ZPUTC(zea2, zlen2, zcp2, zclen2, xfc);
-	      }
-	      while (m) {
-		ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-		ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-		m--;
-	      }
-	      xsig = 1;
-	      break;
-
-	    case 5:  /* insert char if minus */
-	      if (xsign)
-		zch1 = m;
-	      else
-		zch1 = xsc;
-	      ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-	      break;
-
-	    case 6:  /* insert char if plus */
-	      if (!xsign)
-		zch1 = m;
-	      else
-		zch1 = xsc;
-	      ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-	      break;
-
-	    case 7:  /* set floating char */
-	      xfc = m;
-	      break;
-
-	    case 010:  /* set floating if plus */
-	      if (!xsign)
-		xfc = m;
-	      else
-		xfc = xsc;
-	      break;
-
-	    case 011:  /* set floating if minus */
-	      if (xsign)
-		xfc = m;
-	      else
-		xfc = xsc;
-	      break;
-
-	    case 012:  /* set floating to sign */
-	      if (xsign)
-		xfc = XMINUS;
-	      else
-		xfc = XPLUS;
-	      break;
-
-	    case 013:  /* jump if zero */
-	      if (crs[A])
-		i += m;
-	      break;
-
-	    case 014:  /* fill with suppress */
-	      while (m) {
-		ZPUTC(zea2, zlen2, zcp2, zclen2, xsc);
-		m--;
-	      }
-	      break;
-
-	    case 015:  /* set significance */
-	      if (!xsig && xfc) {
-		ZPUTC(zea2, zlen2, zcp2, zclen2, xfc);
-	      }
-	      xsig = 1;
-	      break;
-
-	    case 016:  /* insert sign */
-	      if (xsign)
-		zch1 = XMINUS;
-	      else
-		zch1 = XPLUS;
-	      ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-	      break;
-
-	    case 017:  /* suppress digits */
-	      while (m) {
-		ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-		if (zch1 == XZERO)
-		  zch1 = xsc;
-		ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-		m--;
-	      }
-	      break;
-
-	    case 020:  /* embed sign */
-	      while (m) {
-		ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-		if (xsign)
-		  if (zch1 == XZERO)
-		    zch1 = XRBRACE;
-		  else
-		    zch1 = zch1-XONE+XJ;
-		ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-		m--;
-	      }
-	      break;
-
-	    default:
-	      warn("xed: unrecognized subprogram opcode ignored");
-	    }
-	    if (utempa & 0x8000)
-	      break;
-	  }
-	  continue;
-#endif
-
-	/* 001100 = XAD*
-	   001101 = XMV*
-	   001102 = XCM*
-	   001104 = XMP*
-	   001107 = XDV*
-	   001110 = ZTRN
-	   001111 = ZED
-	   001112 = XED
-	   001114 = ZMV
-	   001115 = ZMVD
-	   001116 = ZFIL
-	   001117 = ZCM
-	   001145 = XBTD*
-	   001146 = XDTB*
-
-	   * = These are not yet implemented */
-
-	case 000510:
-	  TRACE(T_FLOW, " STTM\n", inst);
-	  ea = *(ea_t *)(crs+OWNER);
-	  utempl = get32r0(ea+PCBPET);      /* get PCB elapsed timer */
-	  utempl += crs[TIMERH];            /* add live timer */
-	  ea = *(ea_t *)(crs+XB);
-	  put32(utempl, ea);                /* store process time */
-	  put16(crs[TIMERL], INCVA(ea,2));  /* and live timer residue */
-	  continue;
-
-	/* OS/restricted instructions */
-
-	case 000511:
-	  TRACE(T_FLOW, " RTS\n", inst);
-	  RESTRICT();
-	  tempa = crs[TIMERH];
-	  templ = tempa - *(short *)(crs+A);
-	  ea = *(ea_t *)(crs+OWNER);
-	  templ += get32r0(ea+PCBPET);
-	  put32r0(templ, ea+PCBPET);
-	  crs[TIMERH] = crs[A];
-	  continue;
-
-	case 000315:
-	  TRACE(T_FLOW, " WAIT\n", inst);
-	  RESTRICT();
-	  pwait();
-	  continue;
-
-	case 001210:
-	case 001211:
-	case 001214:
-	case 001215:
-	case 001216:
-	case 001217:
-	  TRACE(T_FLOW, " NFY\n", inst);
-	  RESTRICT();
-	  nfy(inst);
-	  continue;
-	    
-	case 001212:
-	case 001213:
-	  warn("Unrecognized NFY instruction");
-	  fault(ILLINSTFAULT, RPL, RP);
-	  continue;
-
-	case 001315:
-	  TRACE(T_FLOW, " STEX\n");
-	  *(ea_t *)(crs+L) = stex(*(unsigned int *)(crs+L));
-	  continue;
-
-	/* NOTE: L contains target virtual address, which is used to
-	   determine which pages of cache to invalidate.  Since this
-	   emulator does not have a memory cache, L is unused. */
-
-	case 000044:
-	  TRACE(T_FLOW, " LIOT\n");
-	  RESTRICT();
-	  ea = apea(NULL);
-	  utempa = STLBIX(ea);
-	  stlb[utempa].valid = 0;
-	  TRACE(T_INST, " invalidated STLB index %d\n", utempa);
-	  mapva(ea, RACC, &access, RP);
-	  TRACE(T_INST, " loaded STLB for %o/%o\n", ea>>16, ea&0xffff);
-	  continue;
-
-	case 000064:
-	  TRACE(T_FLOW, " PTLB\n");
-	  RESTRICT();
-	  utempl = *(unsigned int *)(crs+L);
-	  for (utempa = 0; utempa < STLBENTS; utempa++)
-	    if ((utempl & 0x80000000) || stlb[utempa].ppn == utempl)
-	      stlb[utempa].valid = 0;
-	  continue;
-
-	case 000615:
-	  TRACE(T_FLOW, " ITLB\n");
-	  RESTRICT();
-	  utempl = *(unsigned int *)(crs+L);
-
-	  /* NOTE: Primos substitutes an ITLB loop for PTLB, and the ITLB
-	     segno is 1, ie, it looks like using segment 1 invalidates all
-	     pages that match, ignoring segment number??  Instead of doing
-	     that, we purge the STLB whenever address 1/0 is invalidated. */
-
-	  if (utempl == 0x10000) {
-	    for (utempa = 0; utempa < STLBENTS; utempa++)
-	      stlb[utempa].valid = 0;
-	    TRACE(T_INST, " purged entire STLB\n");
-	  } else {
-	    utempa = STLBIX(utempl);
-	    stlb[utempa].valid = 0;
-	    TRACE(T_INST, " invalidated STLB index %d\n", utempa);
-	    if (((utempl >> 16) & 07777) < 4)
-	      iotlb[(utempl >> 10) & 0xFF].valid = 0;
-	  }
-#if 0
-	  /* HACK for DIAG to suppress ITLB loop in trace */
-	  if (RP == 0106070)
-	    if (*(int *)(crs+L) == 0) {
-	      TRACEA(" Suppressing DIAG trace\n");
-	      savetraceflags = traceflags;
-	      traceflags = 0;
-	    } else if (crs[A] == 07777 && crs[B] == 0176000) {
-	      TRACEA(" Restoring DIAG trace\n");
-	      traceflags = savetraceflags;
-	    }
-#endif
-	  continue;
-
-	case 000711:
-	  TRACE(T_FLOW, " LPSW\n");
-	  RESTRICT();
-	  lpsw();
-	  continue;
-
-	case 000024:
-	  TRACE(T_FLOW, " STPM\n", inst);
-	  RESTRICT();
-	  for (i=0; i<8; i++)
-	    stpm[i] = 0;
-	  stpm[1] = cpuid;
-	  ea = *(unsigned int *)(crs+XB);
-	  put64(*(double *)(stpm+0), ea);
-	  put64(*(double *)(stpm+4), INCVA(ea,4));
-	  continue;
-
-	case 001700:
-	case 001701:
-	  TRACE(T_FLOW, " DBGILL\n", inst);
-	  fault(ILLINSTFAULT, RPL, RP);
-	  fatal(NULL);
-
-	/* JW: I think 1702 is an invalid opcode that Prime uses as
-	   an assertion when unexpected things happen, for example:
-
-	   LDA modals        get modals
-	   SAS 1             interrupts enabled?
-           1702              no, they should be, die
-	*/
-
-	case 001702:
-	  TRACE(T_FLOW, " 1702?\n", inst);
-	  if (RP & RINGMASK32)
-	    fault(ILLINSTFAULT, RPL, RP);
-	  else
-	    fatal("Primos software assertion failure");
-	  fatal(NULL);  /* just in case of a bogus return (coding error) */
-
-	case 000601:
-	  TRACE(T_FLOW, " IRTN\n", inst);
-	  RESTRICT();
-	  //fatal("IRTN causes a loop in CPU.CACHE Case 4");
-irtn:
-	  RP = regs.sym.pswpb;
-	  crs[PBH] = RPH;
-	  newkeys(regs.sym.pswkeys);
-	  crs[MODALS] |= 0100000;
-#if 0
-	  if (regs.sym.pcba != 0) {
-	    RP = regs.sym.pswpb;
-	    newkeys(regs.sym.pswkeys);
-	  } else
-	    crs[OWNERL] = 0;
-#endif
-	  dispatcher();
-	  continue;
-
-	case 000603:
-	  TRACE(T_FLOW, " IRTC\n", inst);
-	  RESTRICT();
-	  intvec = -1;
-	  goto irtn;
-
-	case 000411:
-	  TRACE(T_FLOW, " CAI\n", inst);
-	  RESTRICT();
-	  intvec = -1;
-	  continue;
-
-	/* R-mode/infrequent gen 0 instructions */
-
-	case 000005:                 /* SGL */
-	  TRACE(T_FLOW, " SGL\n");
-	  crs[KEYS] &= ~040000;
-	  continue;
-
-	case 000011:                 /* E16S */
-	  TRACE(T_FLOW, " E16S\n");
-	  newkeys(crs[KEYS] & 0161777);
-	  continue;
-
-	case 000013:                 /* E32S */
-	  TRACE(T_FLOW, " E32S\n");
-	  newkeys((crs[KEYS] & 0161777) | 1<<10);
-	  continue;
-
-	case 001013:                 /* E32R */
-	  TRACE(T_FLOW, " E32R\n");
-	  newkeys((crs[KEYS] & 0161777) | 3<<10);
-	  continue;
-
-	case 001011:                 /* E64R */
-	  TRACE(T_FLOW, " E64R\n");
-	  newkeys((crs[KEYS] & 0161777) | 2<<10);
-	  continue;
-
-	case 000010:                 /* E64V */
-	  TRACE(T_FLOW, " E64V\n");
-	  newkeys((crs[KEYS] & 0161777) | 6<<10);
-	  continue;
-
-	case 001010:                 /* E32I */
-	  TRACE(T_FLOW, " E32I\n");
-
-	  /* NOTE: this fault needs to occur on older models even in
-	     Ring 0, so the RESTRICT() macro can't be used here */
-
-	  if (cpuid < 4)
-	    fault(RESTRICTFAULT, 0, 0);
-	  else
-	    newkeys((crs[KEYS] & 0161777) | 4<<10);
-	  continue;
-
-	case 000505:                 /* SVC */
-	  TRACE(T_FLOW, " SVC\n");
-	  fault(SVCFAULT, 0, 0);
-	  fatal("Returned from SVC fault");
-	  continue;
-
-	case 000111:                  /* CEA */
-	  TRACE(T_FLOW, " CEA\n");
-	  switch ((crs[KEYS] & 016000) >> 10) {
-	  case 0:                       /* 16S */
-	    ea = crs[A];
-	    i = ea & 0100000;
-	    x = ea & 040000;
-	    ea &= 037777;
-	    while (1) {
-	      if (x)                           /* indexed */
-		ea += crs[X];
-	      if (!i)                          /* not indirect */
-		break;
-	      if (ea < 040)
-		m = get16(0x80000000|ea);
-	      else
-		m = get16(MAKEVA(RPH,ea));
-	      i = m & 0100000;
-	      x = m & 040000;
-	      ea = m & 037777;                 /* go indirect */
-	    }
-	    crs[A] = ea;
-	    break;
-	  case 1:                       /* 32S */
-	  case 3:                       /* 32R */
-	    while (crs[A] & 0100000) {
-	      ea = crs[A] & 077777;
-	      if (ea < 040)
-		crs[A] = get16(0x80000000|ea);
-	      else
-		crs[A] = get16(MAKEVA(RPH,ea));
-	    }
-	  }
-	  continue;
-
-	case 000000:
-	  TRACE(T_FLOW, " HLT\n");
-	  RESTRICT();
-	  memdump(0,0xFFFF);
-	  fatal("CPU halt");
-
-	case 000205:                /* PIM (R-mode) */
-	  TRACE(T_FLOW, " PIM\n");
-#if 0
-	  /* NOTE: this fits the description in the Rev 21 ISG, but fails
-	     DIAG test CPU.INTEGER, Case 12 */
-
-	  crs[A] = (crs[A] & 0x8000) | (crs[B] & 0x7FFF);
-#else
-	  crs[A] = (crs[A] & 0x8000) | crs[B];
-#endif
-	  continue;
-
-	case 000211:                /* PID (R-mode) */
-	  TRACE(T_FLOW, " PID\n");
-	  *(int *)(crs+L) = *(short *)(crs+A);
-	  crs[B] &= 0x7fff;
-	  continue;
-
-	/* DBL activates 31-bit mode (R-mode only):
-
-	   LDA -> DLD (double load)
-	   STA -> DST (double store)
-	   ADD -> DAD (double add)
-	   SUB -> DSB (double subtract)
-
-	   Other R-mode, 31-bit instructions include:
-	   
-	   PID, DIV, MPY, PIM, INT, FLOT
-	*/
-
-	case 000007:                 /* DBL */
-	  TRACE(T_FLOW, " DBL\n");
-	  crs[KEYS] |= 040000;
-	  continue;
-
-	case 000041:
-	  TRACE(T_FLOW, " SCA\n");
-	  crs[A] = crs[VSC] & 0xFF;
-	  continue;
-
-	case 000043:
-	  TRACE(T_FLOW, " INK\n");
-	  crs[A] = (crs[KEYS] & 0xFF00) | (crs[VSC] & 0xFF);
-	  continue;
-
-	case 000405:
-	  TRACE(T_FLOW, " OTK\n");
-	  newkeys((crs[A] & 0xFF00) | (crs[KEYS] & 0xFF));
-	  crs[VSC] = (crs[VSC] & 0xFF00) | (crs[A] & 0xFF);
-	  if ((RP & RINGMASK32) == 0)
-	    inhcount = 1;
-	  continue;
-
-	case 000415:
-	  TRACE(T_FLOW, " ESIM\n");
-	  RESTRICT();
-	  crs[MODALS] &= ~040000;
-	  continue;
-
-	case 000417:
-	  TRACE(T_FLOW, " EVIM\n");
-	  RESTRICT();
-	  crs[MODALS] |= 040000;
-	  continue;
-
-	case 000101:
-	  TRACE(T_FLOW, " NRM\n");
-	  crs[VSC] = 0;
-	  if (crs[A] == 0 && crs[B] == 0)
-	    continue;
-	  while (!((crs[A] ^ (crs[A] << 1)) & 0x8000)) {
-	    TRACE(T_INST,  " step %d: crs[A]=%o, crs[B]=%o\n", crs[VSC], crs[A], crs[B]);
-	    crs[B] = crs[B] << 1;
-	    crs[A] = (crs[A] & 0x8000) | ((crs[A] << 1) & 0x7FFE) | (crs[B] >> 15);
-	    crs[VSC]++;
-	  }
-	  crs[B] &= 0x7FFF;
-	  TRACE(T_INST,  " finished with %d shifts: crs[A]=%o, crs[B]=%o\n", crs[VSC], crs[A], crs[B]);
-	  continue;
-
-	case 000105:
-	  TRACE(T_FLOW, " RTN\n");
-	  m = get16(crs[S]+1);
-	  if (m == 0)
-	    fatal("RTN stack underflow");
-	  crs[S] = get16(crs[S]);
-	  continue;
-
-	/* unusual instructions */
-
-	case 000003:
-	  TRACE(T_FLOW, " gen 3?\n");
-#if 0
-	  /* After looking at the simh Honeywell 315/516 simulator, I decided that
-	     instruction 3 must be some kind of no-op on the Prime.  I did verify
-	     that it is a legal instruction and doesn't generate a UII fault, even
-	     though it is not documented anywhere that I could find. */
-
-	  TRACEA("#%d: %o/%o: Generic instruction 3?\n", instcount, RPH, RPL);
-	  savetraceflags = ~0;
-#endif
-	  continue;
-
-	default:
-	  if (001100 <= inst && inst <= 001146) {
-	    TRACE(T_FLOW, " X/Z UII %o\n", inst);
-	    fault(UIIFAULT, RPL, RP);
-	    continue;
-	  }
-
-	  for (i=0; i<GEN0TABSIZE; i++) {
-	    if (inst == gen0tab[i]) {
-	      TRACE(T_FLOW, " %s\n", gen0nam[i]);
-	      break;
-	    }
-	  }
-	  if (i < GEN0TABSIZE)
-	    continue;
-
-	  TRACEA(" unrecognized generic class 0 instruction!\n");
-	  printf("#%d: %o/%o: Unrecognized generic class 0 instruction '%o!\n", instcount, RPH, RPL, inst);
-	  //traceflags = ~TB_MAP;
-	  fault(UIIFAULT, RPL, RP);
-	  fatal(NULL);
-	}
+  goto fetch;
+
+d_zmvd:  /* 001115 */
+  TRACE(T_FLOW, " ZMVD\n");
+  zlen1 = GETFLR(1);
+  zlen2 = zlen1;
+  zea1 = crsl[FAR0];
+  if (crsl[FLR0] & 0x8000)
+    zea1 |= EXTMASK32;
+  zea2 = crsl[FAR1];
+  if (crsl[FLR1] & 0x8000)
+    zea2 |= EXTMASK32;
+  TRACE(T_INST, " ea1=%o/%o, ea2=%o/%o, len=%d\n", zea1>>16, zea1&0xffff, zea2>>16, zea2&0xffff, zlen1);
+  zclen1 = 0;
+  zclen2 = 0;
+  while (zlen2) {
+    ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+    TRACE(T_INST, " zch1=%o (%c)\n", zch1, zch1&0x7f);
+    ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+  }
+  goto fetch;
+
+  /* NOTE: ZFIL is used early after PX enabled, and can be used to cause
+     a UII fault to debug CALF etc.
+
+     Could use memset(zcp2, zch2, zclen2) to fill by pieces.
+  */
+
+d_zfil:  /* 001116 */
+  TRACE(T_FLOW, " ZFIL\n");
+  zlen2 = GETFLR(1);
+  zea2 = crsl[FAR1];
+  if (crsl[FLR1] & 0x8000)
+    zea2 |= EXTMASK32;
+  zch2 = crs[A];
+  TRACE(T_INST, " ea=%o/%o, len=%d, fill=%o (%c)\n", zea2>>16, zea2&0xffff, zlen2, zch2, zch2&0x7f);
+  //printf("ZFIL: ea=%o/%o, len=%d\n", zea2>>16, zea2&0xffff, zlen2);
+  zclen2 = 0;
+  while (zlen2) {
+    ZPUTC(zea2, zlen2, zcp2, zclen2, zch2);
+  }
+  goto fetch;
+
+d_zcm:  /* 001117 */
+  TRACE(T_FLOW, " ZCM\n");
+  if (crs[KEYS] & 020)
+    zspace = 040;
+  else
+    zspace = 0240;
+  zlen1 = GETFLR(0);
+  zlen2 = GETFLR(1);
+  zea1 = crsl[FAR0];
+  if (crsl[FLR0] & 0x8000)
+    zea1 |= EXTMASK32;
+  zea2 = crsl[FAR1];
+  if (crsl[FLR1] & 0x8000)
+    zea2 |= EXTMASK32;
+  TRACE(T_INST, " ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
+  zresult = 0100;                /* assume equal */
+  zclen1 = 0;
+  zclen2 = 0;
+  while (zlen1 || zlen2) {
+    if (zlen1) {
+      ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+    } else
+      zch1 = zspace;
+    if (zlen2) {
+      ZGETC(zea2, zlen2, zcp2, zclen2, zch2);
+    } else
+      zch2 = zspace;
+    TRACE(T_INST, " zch1=%o (%c), zch2=%o (%c)\n", zch1, zch1&0x7f, zch2, zch2&0x7f);
+    if (zch1 < zch2) {
+      zresult = 0200;
+      break;
+    } else if (zch1 > zch2) {
+      zresult = 0;
+      break;
+    }
+  }
+  crs[KEYS] = (crs[KEYS] & ~0300) | zresult;
+  goto fetch;
+
+d_ztrn:  /* 001110 */
+  TRACE(T_FLOW, " ZTRN\n");
+  zlen1 = GETFLR(1);
+  zlen2 = zlen1;
+  utempl = zlen1;
+  zea1 = crsl[FAR0];
+  if (crsl[FLR0] & 0x8000)
+    zea1 |= EXTMASK32;
+  zea2 = crsl[FAR1];
+  if (crsl[FLR1] & 0x8000)
+    zea2 |= EXTMASK32;
+  TRACE(T_INST, " ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
+  zclen1 = 0;
+  zclen2 = 0;
+  ea = *(ea_t *)(crs+XB);
+  while (zlen2) {
+    ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+    utempa = get16(INCVA(ea,zch1/2));
+    if (zch1 & 1)
+      zch2 = utempa & 0xFF;
+    else
+      zch2 = utempa >> 8;
+    TRACE(T_INST, " zch1=%o (%c), zch2=%o (%c)\n", zch1, zch1&0x7f, zch2, zch2&0x7f);
+    ZPUTC(zea2, zlen2, zcp2, zclen2, zch2);
+  }
+  PUTFLR(1, 0);
+  arfa(0, utempl);
+  arfa(1, utempl);
+  goto fetch;
+
+d_zed:  /* 001111 */
+  TRACE(T_FLOW, " ZED\n");
+  zlen1 = GETFLR(0);
+  zlen2 = 128*1024;      /* XXX: not sure about max length of result */
+  zea1 = crsl[FAR0];
+  if (crsl[FLR0] & 0x8000)
+    zea1 |= EXTMASK32;
+  zea2 = crsl[FAR1];
+  if (crsl[FLR1] & 0x8000)
+    zea2 |= EXTMASK32;
+  TRACE(T_INST, " ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
+  if (crs[KEYS] & 020)
+    zspace = 040;
+  else
+    zspace = 0240;
+  zclen1 = 0;
+  zclen2 = 0;
+  ea = *(ea_t *)(crs+XB);
+  for (i=0; i < 32767; i++) {     /* do edit pgms have a size limit? */
+    utempa = get16(INCVA(ea, i));
+    m = utempa & 0xFF;
+    switch ((utempa >> 8) & 3) {
+    case 0:  /* copy M chars */
+      while (m && zlen1) {
+	ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+	ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+	m--;
       }
-
-
-      if (class == 3) {
-	TRACE(T_INST, " generic class 3\n");
-
-	switch (inst) {
-
-	case 0141604:
-	  TRACE(T_FLOW, " BCLT\n");
-	  BCLT;
-	  continue;
-
-	case 0141600:
-	  TRACE(T_FLOW, " BCLE\n");
-	  BCLE;
-	  continue;
-
-	case 0141602:
-	  TRACE(T_FLOW, " BCEQ\n");
-	  BCEQ;
-	  continue;
-
-	case 0141603:
-	  TRACE(T_FLOW, " BCNE\n");
-	  BCNE;
-	  continue;
-
-	case 0141605:
-	  TRACE(T_FLOW, " BCGE\n");
-	  BCGE;
-	  continue;
-
-	case 0141601:
-	  TRACE(T_FLOW, " BCGT\n");
-	  BCGT;
-	  continue;
-
-	case 0141705:
-	  TRACE(T_FLOW, " BCR\n");
-	  if (!(crs[KEYS] & 0100000))
-	    RPL = iget16(RP);
-	  else
-	    RPL++;
-	  continue;
-
-	case 0141704:
-	  TRACE(T_FLOW, " BCS\n");
-	  if (crs[KEYS] & 0100000)
-	    RPL = iget16(RP);
-	  else
-	    RPL++;
-	  continue;
-
-	case 0141707:
-	  TRACE(T_FLOW, " BMLT/BLR\n");
-	  if (!(crs[KEYS] & 020000))
-	    RPL = iget16(RP);
-	  else
-	    RPL++;
-	  continue;
-
-	case 0141706:
-	  TRACE(T_FLOW, " BLS\n");
-	  BLS;
-	  continue;
-
-	case 0140614:
-	  TRACE(T_FLOW, " BLT\n");
-	  SETCC_A;
-	  BCLT;
-	  continue;
-
-	case 0140610:
-	  TRACE(T_FLOW, " BLE\n");
-	  SETCC_A;
-	  BCLE;
-	  continue;
-
-	case 0140612:
-	  TRACE(T_FLOW, " BEQ\n");
-	  SETCC_A;
-	  BCEQ;
-	  continue;
-
-	case 0140613:
-	  TRACE(T_FLOW, " BNE\n");
-	  SETCC_A;
-	  BCNE;
-	  continue;
-
-	case 0140615:
-	  TRACE(T_FLOW, " BGE\n");
-	  SETCC_A;
-	  BCGE;
-	  continue;
-
-	case 0140611:
-	  TRACE(T_FLOW, " BGT\n");
-	  SETCC_A;
-	  BCGT;
-	  continue;
-
-	case 0140700:
-	  TRACE(T_FLOW, " BLLE\n");
-	  SETCC_L;
-	  BCLE;
-	  continue;
-
-	case 0140702:
-	  TRACE(T_FLOW, " BLEQ\n");
-	  SETCC_L;
-	  BCEQ;
-	  continue;
-
-	case 0140703:
-	  TRACE(T_FLOW, " BLNE\n");
-	  SETCC_L;
-	  BCNE;
-	  continue;
-
-	case 0140701:
-	  TRACE(T_FLOW, " BLGT\n");
-	  SETCC_L;
-	  BCGT;
-	  continue;
-
-	case 0141614:
-	  TRACE(T_FLOW, " BFLT\n");
-	  SETCC_F;
-	  BCLT;
-	  continue;
-
-	case 0141610:
-	  TRACE(T_FLOW, " BFLE\n");
-	  SETCC_F;
-	  BCLE;
-	  continue;
-
-	case 0141612:
-	  TRACE(T_FLOW, " BFEQ\n");
-	  SETCC_F;
-	  BCEQ;
-	  continue;
-
-	case 0141613:
-	  TRACE(T_FLOW, " BFNE\n");
-	  SETCC_F;
-	  BCNE;
-	  continue;
-
-	case 0141615:
-	  TRACE(T_FLOW, " BFGE\n");
-	  SETCC_F;
-	  BCGE;
-	  continue;
-
-	case 0141611:
-	  TRACE(T_FLOW, " BFGT\n");
-	  SETCC_F;
-	  BCGT;
-	  continue;
-
-	case 0141334:
-	  TRACE(T_FLOW, " BIX\n");
-	  crs[X]++;
-	  BXNE;
-	  continue;
-
-	case 0141324:
-	  TRACE(T_FLOW, " BIY\n");
-	  crs[Y]++;
-	  BYNE;
-	  continue;
-
-	case 0140724:
-	  TRACE(T_FLOW, " BDY\n");
-	  crs[Y]--;
-	  BYNE;
-	  continue;
-
-	case 0140734:
-	  TRACE(T_FLOW, " BDX\n");
-	  crs[X]--;
-#if 1
-	  m = iget16(RP);
-	  if (crs[X] > 100 && m == RPL-1) {
-	    struct timeval tv0,tv1;
-	    long delayusec, actualmsec;
-
-	    /* for BDX *-1 loop (backstop process mainly), we want to change
-	       this to a long sleep so that the emulation host's CPU isn't 
-	       pegged the whole time the emulator is running.
-
-	       So first, check to see if any device times expire sooner than
-	       this, and if so, limit the sleep time to the lowest expiration
-	       value (this is stored as number of instructions left until the
-	       timer expires).
-
-	       NOTE: In practice, the clock device ticks at 330 times a sec
-	       under standard Primos so we only get to delay about 3ms here,
-	       but it still keeps CPU usage to 4-5% on a 1.5GHz Mac.  Primos
-	       mods to make the clock tick 20 times per second allows for
-	       much longer sleeps here, ie, CPU overhead is 0.7% while idle.
-	    */
-
-	    utempl = instpermsec*100;         /* limit delay to 100 msecs */
-	    for (i=0; i<64; i++)              /* check device timers */
-	      if (devpoll[i])                 /* poll set? */
-		if (devpoll[i] <= 100) {      /* too fast! */
-		  utempl = 1;
-		  break;
-		} else if (devpoll[i] < utempl)
-		  utempl = devpoll[i];
-	    utempl--;                         /* utempl = # instructions */
-	    delayusec = utempl*1000/instpermsec;
-	    if (delayusec > 1000) {
-	      if (gettimeofday(&tv0, NULL) != 0)
-		fatal("em: gettimeofday 0 failed");
-	      usleep(delayusec);
-	      if (gettimeofday(&tv1, NULL) != 0)
-		fatal("em: gettimeofday 1 failed");
-	      actualmsec = (tv1.tv_sec-tv0.tv_sec-1)*1000 + (tv1.tv_usec+1000000-tv0.tv_usec)/1000;
-	      // TRACEA(" BDX loop at %o/%o, remainder=%d, owner=%o, utempl=%d, wanted %d us, got %d ms\n", prevpc>>16, prevpc&0xffff, crs[X], crs[OWNERL], utempl, delayusec, actualusec);
-
-	      /* do timer bookkeeping that would have occurred if we had 
-		 actually looped on BDX utempl times */
-
-	      for (i=0; i<64; i++)
-		if (devpoll[i] > 0)
-		  devpoll[i] -= utempl;
-	      crs[X] = 0;
-	      utempa = crs[TIMER];
-	      if (actualmsec > 0) {
-		crs[TIMER] += actualmsec;
-		if (crs[TIMER] < utempa) {
-		  tempea = *(ea_t *)(crs+OWNER);
-		  utempa = get16r0(tempea+4) | 1;    /* set process abort flag */
-		  put16r0(utempa, tempea+4);
-		}
-	      } else {
-		crs[TIMERL] += utempl;
-	      }
-	      instcount += actualmsec*instpermsec;
-	    }
-	  }
-#endif
-	  BXNE;
-	  continue;
-
-	case 0141206:
-	  TRACE(T_FLOW, " A1A\n");
-a1a:
-	  add16(crs+A, 1, 0, 0);
-	  continue;
-
-	case 0140304:
-	  TRACE(T_FLOW, " A2A\n");
-	  add16(crs+A, 2, 0, 0);
-	  continue;
-
-	case 0141216:
-	  TRACE(T_FLOW, " ACA\n");
-	  if (crs[KEYS] & 0100000)
-	    goto a1a;
-	  crs[KEYS] &= ~0120300;                 /* clear C, L, LT, EQ */
-	  SETCC_A;
-	  continue;
-
-	case 0140110:
-	  TRACE(T_FLOW, " S1A\n");
-	  add16(crs+A, 0xFFFF, 0, 0);
-	  continue;
-
-	case 0140310:
-	  TRACE(T_FLOW, " S2A\n");
-	  add16(crs+A, 0xFFFE, 0, 0);
-	  continue;
-
-	case 0141050:
-	  TRACE(T_FLOW, " CAL\n");
-	  crs[A] &= 0xFF;
-	  continue;
-
-	case 0141044:
-	  TRACE(T_FLOW, " CAR\n");
-	  crs[A] &= 0xFF00;
-	  continue;
-
-	case 0140040:
-	  TRACE(T_FLOW, " CRA\n");
-	  crs[A] = 0;
-	  continue;
-
-	/* On the P300, the B register is the low-order word of the
-	   DP floating pt fraction, so CRB was used to convert SPFP
-	   numbers to DPFP.  On the P400 and up, the B register and
-	   DPFP accumulator do not overlap.  For compatibility, there
-	   are 3 related instructions:
-
-	   '14 clears B and the low-order DPFP register
-	   '15 clears only B
-	   '16 clears only the low-order DPFP register
-	*/
-
-	case 0140014:
-	  TRACE(T_FLOW, " P300CRB\n");
-	  crs[B] = 0;
-	  crs[FLTD] = 0;
-	  continue;
-
-	case 0140015:
-	  TRACE(T_FLOW, " CRB\n");
-	  crs[B] = 0;
-	  continue;
-
-	case 0140016:
-	  TRACE(T_FLOW, " FDBL\n");
-	  crs[FLTD] = 0;
-	  continue;
-
-	case 0140010:
-	  TRACE(T_FLOW, " CRL\n");
-	  *(int *)(crs+L) = 0;
-	  continue;
-
-	case 0140214:
-	  TRACE(T_FLOW, " CAZ\n");
-	  /* set keys like CAS =0 would (subtract) */
-	  crs[KEYS] = (crs[KEYS] & ~0100) | 020200;   /* clear EQ, set L, LT */
-	  if (crs[A] == 0) {                  /* if zero, set EQ */
-	    crs[KEYS] |= 0100; 
-	    RPL++;
-	  } else if (*(short *)(crs+A) < 0)
-	    RPL += 2;
-	  continue;
-
-	/* NOTE: using "if (crs[X]++ == 0)" doesn't work because of
-	   unsigned short type promotion! */
-
-	case 0140114:
-	  TRACE(T_FLOW, " IRX\n");
-	  crs[X]++;
-	  if (crs[X] == 0)
-	    RPL++;
-	  continue;
-
-	case 0140210:
-	  TRACE(T_FLOW, " DRX\n");
-	  crs[X]--;
-	  if (crs[X] == 0)
-	    RPL++;
-	  continue;
-
-	case 0141240:
-	  TRACE(T_FLOW, " ICR\n");
-	  crs[A] = crs[A] << 8;
-	  continue;
-
-	case 0141140:
-	  TRACE(T_FLOW, " ICL\n");
-	  crs[A] = crs[A] >> 8;
-	  continue;
-
-	case 0141340:
-	  TRACE(T_FLOW, " ICA\n");
-	  crs[A] = (crs[A] >> 8) | (crs[A] << 8);
-	  continue;
-
-	/* NOTE: Rev 21 Inst. Guide says CC are indeterminate, other
-	   references say they are set */
-
-	case 0140417:
-	  TRACE(T_FLOW, " LT\n");
-	  crs[A] = 1;
-	  continue;
-
-	case 0140416:
-	  TRACE(T_FLOW, " LF\n");
-	  crs[A] = 0;
-	  continue;
-
-	case 0140314:
-	  TRACE(T_FLOW, " TAB\n");
-	  crs[B] = crs[A];
-	  continue;
-
-	case 0140504:
-	  TRACE(T_FLOW, " TAX\n");
-	  crs[X] = crs[A];
-	  continue;
-
-	case 0140505:
-	  TRACE(T_FLOW, " TAY\n");
-	  crs[Y] = crs[A];
-	  continue;
-
-	case 0140604:
-	  TRACE(T_FLOW, " TBA\n");
-	  crs[A] = crs[B];
-	  continue;
-
-	case 0141034:
-	  TRACE(T_FLOW, " TXA\n");
-	  crs[A] = crs[X];
-	  continue;
-
-	case 0141124:
-	  TRACE(T_FLOW, " TYA\n");
-	  crs[A] = crs[Y];
-	  continue;
-
-	case 0140104:
-	  TRACE(T_FLOW, " XCA\n");
-	  crs[B] = crs[A];
-	  crs[A] = 0;
-	  continue;
-
-	case 0140204:
-	  TRACE(T_FLOW, " XCB\n");
-	  crs[A] = crs[B];
-	  crs[B] = 0;
-	  continue;
-
-	case 0140407:
-	  TRACE(T_FLOW, " TCA\n");
-	  tch(crs+A);
-	  continue;
-
-	case 0141210:
-	  TRACE(T_FLOW, " TCL\n");
-	  tcr(crsl+GR2);
-	  continue;
-
-	case 0140600:
-	  TRACE(T_FLOW, " SCB\n");
-	  crs[KEYS] |= 0100000;
-	  continue;
-
-	case 0140200:
-	  TRACE(T_FLOW, " RCB\n");
-	  crs[KEYS] &= 077777;
-	  continue;
-
-	case 0140024:
-	  TRACE(T_FLOW, " CHS\n");
-	  crs[A] ^= 0x8000;
-	  continue;
-
-	case 0140500:
-	  TRACE(T_FLOW, " SSM\n");
-	  crs[A] |= 0100000;
-	  continue;
-
-	case 0140100:
-	  TRACE(T_FLOW, " SSP\n");
-	  crs[A] &= 077777;
-	  continue;
-
-	case 0140401:
-	  TRACE(T_FLOW, " CMA\n");
-	  crs[A] = ~crs[A];
-	  continue;
-
-	case 0140320:
-	  TRACE(T_FLOW, " CSA\n");
-	  crs[KEYS] = (crs[KEYS] & 077777) | (crs[A] & 0x8000);
-	  crs[A] = crs[A] & 077777;
-	  continue;
-
-	case 0141500:
-	  TRACE(T_FLOW, " LCLT\n");
-	  crs[A] = LCLT;
-	  continue;
-
-	case 0141501:
-	  TRACE(T_FLOW, " LCLE\n");
-	  crs[A] = LCLE;
-	  continue;
-
-	case 0141503:
-	  TRACE(T_FLOW, " LCEQ\n");
-	  crs[A] = LCEQ;
-	  continue;
-
-	case 0141502:
-	  TRACE(T_FLOW, " LCNE\n");
-	  crs[A] = LCNE;
-	  continue;
-
-	case 0141504:
-	  TRACE(T_FLOW, " LCGE\n");
-	  crs[A] = LCGE;
-	  continue;
-
-	case 0141505:
-	  TRACE(T_FLOW, " LCGT\n");
-	  crs[A] = LCGT;
-	  continue;
-
-	case 0140410:
-	  TRACE(T_FLOW, " LLT\n");
-	  SETCC_A;
-	  crs[A] = LCLT;
-	  continue;
-
-	case 0140411:
-	  TRACE(T_FLOW, " LLE\n");
-	  SETCC_A;
-	  crs[A] = LCLE;
-	  continue;
-
-	case 0140412:
-	  TRACE(T_FLOW, " LNE\n");
-	  SETCC_A;
-	  crs[A] = LCNE;
-	  continue;
-
-	case 0140413:
-	  TRACE(T_FLOW, " LEQ\n");
-	  SETCC_A;
-	  crs[A] = LCEQ;
-	  continue;
-
-	case 0140414:
-	  TRACE(T_FLOW, " LGE\n");
-	  SETCC_A;
-	  crs[A] = LCGE;
-	  continue;
-
-	case 0140415:
-	  TRACE(T_FLOW, " LGT\n");
-	  SETCC_A;
-	  crs[A] = LCGT;
-	  continue;
-
-	case 0141511:
-	  TRACE(T_FLOW, " LLLE\n");
-	  SETCC_L;
-	  crs[A] = LCLE;
-	  continue;
-
-	case 0141513:
-	  TRACE(T_FLOW, " LLEQ\n");
-	  SETCC_L;
-	  crs[A] = LCEQ;
-	  continue;
-
-	case 0141512:
-	  TRACE(T_FLOW, " LLNE\n");
-	  SETCC_L;
-	  crs[A] = LCNE;
-	  continue;
-
-	case 0141515:
-	  TRACE(T_FLOW, " LLGT\n");
-	  SETCC_L;
-	  crs[A] = LCGT;
-	  continue;
-
-	case 0141110:
-	  TRACE(T_FLOW, " LFLT\n");
-	  SETCC_F;
-	  crs[A] = LCLT;
-	  continue;
-
-	case 0141111:
-	  TRACE(T_FLOW, " LFLE\n");
-	  SETCC_F;
-	  crs[A] = LCLE;
-	  continue;
-
-	case 0141113:
-	  TRACE(T_FLOW, " LFEQ\n");
-	  SETCC_F;
-	  crs[A] = LCEQ;
-	  continue;
-
-	case 0141112:
-	  TRACE(T_FLOW, " LFNE\n");
-	  SETCC_F;
-	  crs[A] = LCNE;
-	  continue;
-
-	case 0141114:
-	  TRACE(T_FLOW, " LFGE\n");
-	  SETCC_F;
-	  crs[A] = LCGE;
-	  continue;
-
-	case 0141115:
-	  TRACE(T_FLOW, " LFGT\n");
-	  SETCC_F;
-	  crs[A] = LCGT;
-	  continue;
-
-	case 0140550:
-	  TRACE(T_FLOW, " FLOT\n");
-	  templ = *(short *)(crs+A);
-	  templ = (templ<<15) | crs[B];
-	  *(double *)(crs+FLTH) = fltl(templ);
-	  continue;
-
-	case 0140534:
-	  TRACE(T_FLOW, " FRN\n");
-	  CLEARC;
-	  frn(crsl+FAC1);
-	  continue;
-
-	case 0140574:
-	  TRACE(T_FLOW, " DFCM\n");
-	  dfcm(crsl+FAC1);
-	  continue;
-
-	case 0141000:
-	  TRACE(T_FLOW, " ADLL\n");
-	  adlr(2);
-	  continue;
-
-	case 0140530:
-	  TRACE(T_FLOW, " FCM\n");
-	  dfcm(crsl+FAC1);
-	  continue;
-
-	case 0140510:
-	  TRACE(T_FLOW, " FSZE\n");
-	  if (*(int *)(crs+FLTH) == 0)
-	    RPL++;
-	  continue;
-
-	case 0140511:
-	  TRACE(T_FLOW, " FSNZ\n");
-	  if (*(int *)(crs+FLTH) != 0)
-	    RPL++;
-	  continue;
-
-	case 0140512:
-	  TRACE(T_FLOW, " FSMI\n");
-	  if (*(int *)(crs+FLTH) < 0)
-	    RPL++;
-	  continue;
-
-	case 0140513:
-	  TRACE(T_FLOW, " FSPL\n");
-	  if (*(int *)(crs+FLTH) >= 0)
-	    RPL++;
-	  continue;
-
-	case 0140514:
-	  TRACE(T_FLOW, " FSLE\n");
-	  if (*(int *)(crs+FLTH) <= 0)
-	    RPL++;
-	  continue;
-
-	case 0140515:
-	  TRACE(T_FLOW, " FSGT\n");
-	  if (*(int *)(crs+FLTH) > 0)
-	    RPL++;
-	  continue;
-
-	case 0140554:
-	  TRACE(T_FLOW, " INT\n");
-	  /* XXX: do -1073741824.5 and 1073741823.5 work on Prime, or overflow? */
-	  if (prieee8(crs+FLTH, &tempd) && -1073741824.0 <= tempd && tempd <= 1073741823.0) {
-	    templ = tempd;
-	    crs[B] = templ & 0x7FFF;
-	    crs[A] = templ >> 15;
-	    CLEARC;
-	  } else
-	    mathexception('f', FC_INT_CONV, ea);
-	  continue;
-
-	case 0140531:
-	  TRACE(T_FLOW, " INTA\n");
-	  /* XXX: do 32767.5 and -32768.5 work on Prime, or overflow? */
-	  if (prieee8(crs+FLTH, &tempd) && -32768.0 <= tempd && tempd <= 32767.0) {
-	    *(short *)(crs+A) = tempd;
-	    CLEARC;
-	  } else
-	    mathexception('f', FC_INT_CONV, ea);
-	  continue;
-
-	case 0140532:
-	  TRACE(T_FLOW, " FLTA\n");
-	  tempd = *(short *)(crs+A);
-	  *(double *)(crs+FLTH) = ieeepr8(tempd);
-	  continue;
-
-	case 0140533:
-	  TRACE(T_FLOW, " INTL\n");
-	  if (prieee8(crs+FLTH, &tempd) && -2147483648.0 <= tempd && tempd <= 2147483647.0) {
-	    *(int *)(crs+L) = tempd;
-	    CLEARC;
-	  } else
-	    mathexception('f', FC_INT_CONV, ea);
-	  continue;
-
-	case 0140535:
-	  TRACE(T_FLOW, " FLTL\n");
-	  *(double *)(crs+FLTH) = fltl(crsl[GR2]);
-	  continue;
-
-	case 0141711:
-	  TRACE(T_FLOW, " BMLE\n");
-	  if (!(crs[KEYS] & 020000))
-	    RPL = iget16(RP);
-	  else
-	    BCEQ;
-	  continue;
-
-#if 0
-	case 0141602:   /* same opcode as BCEQ */
-	  TRACE(T_FLOW, " BMEQ\n");
-	  goto bceq;
-
-	case 0141603:   /* same opcode as BCNE */
-	  TRACE(T_FLOW, " BMNE\n");
-	  goto bcne;
-
-	/* NOTE: BMGE is equivalent to BLS; this opcode doesn't exist
-	   in newer manuals */
-
-	case 0141606:
-	  TRACE(T_FLOW, " BMGE\n");
-	  goto bls;
-#endif
-
-	case 0141710:
-	  TRACE(T_FLOW, " BMGT\n");
-	  if (crs[KEYS] & 020000)
-	    BCNE;
-	  else
-	    RPL++;
-	  continue;
-
-	case 0141404:
-	  TRACE(T_FLOW, " CRE\n");
-	  *(int *)(crs+E) = 0;
-	  continue;
-
-	case 0141410:
-	  TRACE(T_FLOW, " CRLE\n");
-	  *(int *)(crs+L) = 0;
-	  *(int *)(crs+E) = 0;
-	  continue;
-
-	case 0141414:
-	  TRACE(T_FLOW, " ILE\n");
-	  templ = *(int *)(crs+L);
-	  *(int *)(crs+L) = *(int *)(crs+E);
-	  *(int *)(crs+E) = templ;
-	  continue;
-
-	  /* these next 4 are V/I-mode */
-
-	case 0140570:  /* QFCM - quad complement */
-	case 0140571:  /* DRNM - round minus Q to D */
-	case 0140572:  /* QINQ - trucate Q fraction */
-	case 0140573:  /* QIQR - round and remove Q fraction */
-	  TRACE(T_FLOW, " QFCM DRNM QINQ QIQR UII\n");
-	  fault(UIIFAULT, RPL, RP);
-	  continue;
-
-        /* queue instructions */
-
-	case 0141714:
-	  TRACE(T_FLOW, " RTQ\n");
-	  ea = apea(NULL);
-	  if (rtq(ea, crs+A, RP))
-	    crs[KEYS] &= ~0100;
-	  else
-	    crs[KEYS] |= 0100;
-	  continue;
-
-	case 0141715:
-	  TRACE(T_FLOW, " RBQ\n");
-	  ea = apea(NULL);
-	  if (rbq(ea, crs+A, RP))
-	    crs[KEYS] &= ~0100;
-	  else
-	    crs[KEYS] |= 0100;
-	  continue;
-
-	case 0141716:
-	  TRACE(T_FLOW, " ABQ\n");
-	  ea = apea(NULL);
-	  if (abq(ea, crs[A], RP))
-	    crs[KEYS] &= ~0100;
-	  else
-	    crs[KEYS] |= 0100;
-	  continue;
-
-	case 0141717:
-	  TRACE(T_FLOW, " ATQ\n");
-	  ea = apea(NULL);
-	  if (atq(ea, crs[A], RP))
-	    crs[KEYS] &= ~0100;
-	  else
-	    crs[KEYS] |= 0100;
-	  continue;
-
-	case 0141757:
-	  TRACE(T_FLOW, " TSTQ\n");
-	  ea = apea(NULL);
-	  crs[A] = tstq(ea);
-	  SETCC_A;
-	  continue;
-
-	default:
-	  TRACE(T_FLOW, " unrecognized generic class 3 instruction!\n");
-	  printf(" unrecognized generic class 3 instruction %o!\n", inst);
-
-	  /* XXX: hacks for CPU.FAULT; not sure how to determine
-	     whether an instruction is illegal or unimplemented */
-
-	  if (inst == 0141700)
-	    fault(ILLINSTFAULT, RPL, RP);
-	  else
-	    fault(UIIFAULT, RPL, RP);
-	  fatal(NULL);
-	}	
+      while (m) {
+	ZPUTC(zea2, zlen2, zcp2, zclen2, zspace);
+	m--;
       }
+      break;
 
-      /* this is a bit weird here: the shift group is really only for
-	 V-mode instructions, but Prime put some I-mode generics in
-	 the same instruction space.  Not sure, but I think a real
-	 Prime would probably take an illegal instruction fault on
-	 something like LRL executed in I-mode, but the emulator will
-	 just do it.  */
+    case 1:  /* insert character M */
+      ZPUTC(zea2, zlen2, zcp2, zclen2, m);
+      break;
 
-      if (class == 1) {
-	TRACE(T_INST, " shift group\n");
-	scount = -inst & 077;
-	if (scount == 0)
-	  scount = 0100;
-	switch (inst & 01700) {
+    case 2:  /* skip M characters */
+      if (m >= zlen1)
+	zlen1 = 0;
+      else while (m) {
+	ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+	m--;
+      }
+      break;
 
-	case 00000: /* LRL */
-	  TRACE(T_FLOW, " LRL %d\n", scount);
-	  crsl[GR2] = lrl(crsl[GR2], scount);
-	  break;
+    case 3:  /* insert M blanks */
+      while (m) {
+	ZPUTC(zea2, zlen2, zcp2, zclen2, zspace);
+	m--;
+      }
+      break;
 
-	case 00100: /* LRS (different in R & V modes) */
-	  TRACE(T_FLOW, " LRS %d\n", scount);
-	  if (crs[KEYS] & 010000) {          /* V/I mode */
-	    crsl[GR2] = lrs(crsl[GR2], scount);
-	  } else {
-	    CLEARCL;
-	    utempa = crs[B] & 0x8000;        /* save B bit 1 */
-	    if (scount <= 31) {
-	      templ = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
-	      EXPCL(templ & bitmask32[32-scount]);
-	      templ = templ >> (scount+1);
-	      crs[A] = templ >> 15;
-	      crs[B] = (templ & 0x7FFF) | utempa;
-	    } else if (crs[A] & 0x8000) {
-	      *(int *)(crs+A) = 0xFFFF7FFF | utempa;
-	      SETCL;
-	    } else {
-	      *(int *)(crs+A) = utempa;
-	    }
-	  }
-	  break;
+    default:
+      fatal("ZED em bug");
+    }
+    if (utempa & 0x8000)
+      break;
+  }
+  goto fetch;
 
-	case 00200: /* LRR */
-	  TRACE(T_FLOW, " LRR %d\n", scount);
-	  crsl[GR2] = lrr(crsl[GR2], scount);
-	  break;
+d_xed:  /* 001112 */
 
-	case 00300: 
-	  switch (inst) {
+  /* XED has some support for chars w/o parity by checking the
+     keys before setting the zero suppress character, but it's
+     not clear if it should ignore all character parity */
 
-	  case 0040310: /* SSSN */
-	    sssn();
-	    break;
-
-	  case 0040300: /* DRN */
-	  case 0040301: /* DRNP */
-	  case 0040302: /* DRNZ */
-	  case 0040303: /* FRNP */
-	  case 0040320: /* FRNM */
-	  case 0040321: /* FRNZ */
-	    TRACE(T_FLOW, " DRNx/FRNx(V) UII\n");
-	    fault(UIIFAULT, RPL, RP);
-	    break;
-
-	  default:
-	    goto badshift;
-	  }
-	  break;
-
-	case 00400: /* ARL */
-	  TRACE(T_FLOW, " ARL %d\n", scount);
-	  crs[A] = arl(crs[A], scount);
-	  break;
-
-	case 00500: /* ARS */
-	  TRACE(T_FLOW, " ARS %d\n", scount);
-	  crs[A] = ars(crs[A], scount);
-	  break;
-
-	case 00600: /* ARR */
-	  TRACE(T_FLOW, " ARR %d\n", scount);
-	  crs[A] = arr(crs[A], scount);
-	  break;
-
-	case 01000: /* LLL */
-	  TRACE(T_FLOW, " LLL %d\n", scount);
-	  crsl[GR2] = lll(crsl[GR2], scount);
-	  break;
-
-	case 01100: /* LLS (different in R/V modes) */
-	  TRACE(T_FLOW, " LLS %d\n", scount);
-	  if (crs[KEYS] & 010000)                /* V/I mode */
-	    crsl[GR2] = lls(crsl[GR2], scount);
+  TRACE(T_FLOW, " XED\n");
+  zlen1 = zlen2 = 128*1024;
+  zea1 = crsl[FAR0];
+  if (crsl[FLR0] & 0x8000)
+    zea1 |= EXTMASK32;
+  zea2 = crsl[FAR1];
+  if (crsl[FLR1] & 0x8000)
+    zea2 |= EXTMASK32;
+  zclen1 = 0;
+  zclen2 = 0;
+  TRACE(T_INST, " ea1=%o/%o, len1=%d, ea2=%o/%o, len2=%d\n", zea1>>16, zea1&0xffff, zlen1, zea2>>16, zea2&0xffff, zlen2);
+  if (crs[KEYS] & 020)
+    xsc = 040;
+  else
+    xsc = 0240;
+  xfc = 0;
+  ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+  //printf("xed: first char = '%o\n", zch1);
+  xsign = (zch1 == XMINUS);
+  xsig = 0;
+  ea = *(ea_t *)(crs+XB);
+  for (i=0; i < 32767; i++) {     /* do edit pgms have a size limit? */
+    utempa = get16(INCVA(ea, i));
+    m = utempa & 0xFF;
+    //printf("\nxed: %d: opcode = %o, m=%o\n", i, (utempa>>8) & 037, m);
+    switch ((utempa >> 8) & 037) {
+    case 0:  /* Zero Suppress */
+      while (m) {
+	ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+	if (!xsig)
+	  if (zch1 == XZERO)
+	    zch1 = xsc;
 	  else {
-	    CLEARCL;
-	    utempa = crs[B] & 0x8000;            /* save B bit 1 */
-	    if (scount < 31) {
-	      utempl = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
-	      templ2 = 0x80000000;
-	      templ2 = templ2 >> scount;         /* create mask */
-	      templ2 = templ2 & utempl;          /* grab bits */
-	      templ2 = templ2 >> (31-scount);    /* sign extend them */
-	      EXPCL(!(templ2 == -1 || templ2 == 0));
-	      //printf(" before: A=%x, B=%x, utempl=%x, ", crs[A], crs[B], utempl);
-	      utempl = utempl << scount;
-	      crs[A] = utempl >> 16;
-	      crs[B] = ((utempl >> 1) & 0x7FFF) | utempa;
-	      //printf(" after: A=%x, B=%x, utempl=%x\n", crs[A], crs[B], utempl);
-	    } else {
-	      EXPCL(*(unsigned int *)(crs+A) != 0);
-	      *(unsigned int *)(crs+A) = utempa;
+	    xsig = 1;
+	    if (xfc) {
+	      ZPUTC(zea2, zlen2, zcp2, zclen2, xfc);
 	    }
 	  }
-	  if ((crs[KEYS] & 0100400) == 0100400)
-	    mathexception('i', FC_INT_OFLOW, 0);
-	  break;
-
-	case 01200: /* LLR */
-	  TRACE(T_FLOW, " LLR %d\n", scount);
-	  crsl[GR2] = llr(crsl[GR2], scount);
-	  break;
-
-	case 01400: /* ALL */
-	  TRACE(T_FLOW, " ALL %d\n", scount);
-	  crs[A] = all(crs[A], scount);
-	  break;
-
-	case 01500: /* ALS */
-	  TRACE(T_FLOW, " ALS %d\n", scount);
-	  crs[A] = als(crs[A], scount);
-	  if ((crs[KEYS] & 0100400) == 0100400)
-	    mathexception('i', FC_INT_OFLOW, 0);
-	  break;
-
-	case 01600: /* ALR */
-	  TRACE(T_FLOW, " ALR %d\n", scount);
-	  crs[A] = alr(crs[A], scount);
-	  break;
-
-	default:
-badshift:
-	  printf("emulator warning: unrecognized shift/generic instruction %06o at %o/%o\n", inst, RPH, RPL);
-	  TRACE(T_FLOW, " unrecognized shift instruction!: %o\n", inst);
-	}
-      continue;
+	ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+	m--;
       }
+      break;
 
-      if (class == 2) {
-	TRACE(T_INST, " skip group\n");
+    case 1:  /* insert character M */
+      ZPUTC(zea2, zlen2, zcp2, zclen2, m);
+      break;
 
-	if (inst == 0101000) {
-	  TRACE(T_FLOW, " NOP-SKP\n");
-	  continue;
+    case 2:  /* set supression character */
+      xsc = m;
+      break;
+
+    case 3:  /* insert character */
+      if (xsig)
+	zch1 = m;
+      else
+	zch1 = xsc;
+      ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+      break;
+
+    case 4:  /* insert digits */
+      if (!xsig && xfc) {
+	ZPUTC(zea2, zlen2, zcp2, zclen2, xfc);
+      }
+      while (m) {
+	ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+	ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+	m--;
+      }
+      xsig = 1;
+      break;
+
+    case 5:  /* insert char if minus */
+      if (xsign)
+	zch1 = m;
+      else
+	zch1 = xsc;
+      ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+      break;
+
+    case 6:  /* insert char if plus */
+      if (!xsign)
+	zch1 = m;
+      else
+	zch1 = xsc;
+      ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+      break;
+
+    case 7:  /* set floating char */
+      xfc = m;
+      break;
+
+    case 010:  /* set floating if plus */
+      if (!xsign)
+	xfc = m;
+      else
+	xfc = xsc;
+      break;
+
+    case 011:  /* set floating if minus */
+      if (xsign)
+	xfc = m;
+      else
+	xfc = xsc;
+      break;
+
+    case 012:  /* set floating to sign */
+      if (xsign)
+	xfc = XMINUS;
+      else
+	xfc = XPLUS;
+      break;
+
+    case 013:  /* jump if zero */
+      if (crs[A])
+	i += m;
+      break;
+
+    case 014:  /* fill with suppress */
+      while (m) {
+	ZPUTC(zea2, zlen2, zcp2, zclen2, xsc);
+	m--;
+      }
+      break;
+
+    case 015:  /* set significance */
+      if (!xsig && xfc) {
+	ZPUTC(zea2, zlen2, zcp2, zclen2, xfc);
+      }
+      xsig = 1;
+      break;
+
+    case 016:  /* insert sign */
+      if (xsign)
+	zch1 = XMINUS;
+      else
+	zch1 = XPLUS;
+      ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+      break;
+
+    case 017:  /* suppress digits */
+      while (m) {
+	ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+	if (zch1 == XZERO)
+	  zch1 = xsc;
+	ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+	m--;
+      }
+      break;
+
+    case 020:  /* embed sign */
+      while (m) {
+	ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+	if (xsign)
+	  if (zch1 == XZERO)
+	    zch1 = XRBRACE;
+	  else
+	    zch1 = zch1-XONE+XJ;
+	ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+	m--;
+      }
+      break;
+
+    default:
+      warn("xed: unrecognized subprogram opcode ignored");
+    }
+    if (utempa & 0x8000)
+      break;
+  }
+  goto fetch;
+#endif
+
+  /* unimplemented decimal instructions:
+
+     - 001100 : XAD
+     - 001101 : XMV
+     - 001102 : XCM
+     - 001104 : XMP
+     - 001107 : XDV
+     - 001145 : XBTD
+     - 001146 : XDTB
+  */
+
+d_xuii:
+  TRACE(T_FLOW, " X/Z UII %o\n", inst);
+  fault(UIIFAULT, RPL, RP);
+  fatal("Return from XZUII fault");
+
+d_sttm:  /* 000510 */
+  TRACE(T_FLOW, " STTM\n", inst);
+  ea = *(ea_t *)(crs+OWNER);
+  utempl = get32r0(ea+PCBPET);      /* get PCB elapsed timer */
+  utempl += crs[TIMERH];            /* add live timer */
+  ea = *(ea_t *)(crs+XB);
+  put32(utempl, ea);                /* store process time */
+  put16(crs[TIMERL], INCVA(ea,2));  /* and live timer residue */
+  goto fetch;
+
+  /* OS/restricted instructions */
+
+d_rts:  /* 000511 */
+  TRACE(T_FLOW, " RTS\n", inst);
+  RESTRICT();
+  tempa = crs[TIMERH];
+  templ = tempa - *(short *)(crs+A);
+  ea = *(ea_t *)(crs+OWNER);
+  templ += get32r0(ea+PCBPET);
+  put32r0(templ, ea+PCBPET);
+  crs[TIMERH] = crs[A];
+  goto fetch;
+
+d_wait:  /* 000315 */
+  TRACE(T_FLOW, " WAIT\n", inst);
+  RESTRICT();
+  pwait();
+  goto fetch;
+
+d_nfy:  /* 1210 (nfye), 1211 (nfyb), 
+	   1214 (inen), 1215 (inbn), 1216 (inec), 1217 (inbc) */
+  TRACE(T_FLOW, " NFY\n", inst);
+  RESTRICT();
+  nfy(inst);
+  goto fetch;
+
+d_stex:  /* 001315 */
+  TRACE(T_FLOW, " STEX\n");
+  *(ea_t *)(crs+L) = stex(*(unsigned int *)(crs+L));
+  goto fetch;
+
+  /* NOTE: L contains target virtual address, which is used to
+     determine which pages of cache to invalidate.  Since this
+     emulator does not have a memory cache, L is unused. */
+
+d_liot:  /* 000044 */
+  TRACE(T_FLOW, " LIOT\n");
+  RESTRICT();
+  ea = apea(NULL);
+  utempa = STLBIX(ea);
+  stlb[utempa].valid = 0;
+  TRACE(T_INST, " invalidated STLB index %d\n", utempa);
+  mapva(ea, RACC, &access, RP);
+  TRACE(T_INST, " loaded STLB for %o/%o\n", ea>>16, ea&0xffff);
+  goto fetch;
+
+d_ptlb:  /* 000064 */
+  TRACE(T_FLOW, " PTLB\n");
+  RESTRICT();
+  utempl = *(unsigned int *)(crs+L);
+  for (utempa = 0; utempa < STLBENTS; utempa++)
+    if ((utempl & 0x80000000) || stlb[utempa].ppn == utempl)
+      stlb[utempa].valid = 0;
+  goto fetch;
+
+d_itlb:  /* 000615 */
+  TRACE(T_FLOW, " ITLB\n");
+  RESTRICT();
+  utempl = *(unsigned int *)(crs+L);
+
+  /* NOTE: Primos substitutes an ITLB loop for PTLB, and the ITLB
+     segno is 1, ie, it looks like using segment 1 invalidates all
+     pages that match, ignoring segment number??  Instead of doing
+     that, we purge the STLB whenever address 1/0 is invalidated. */
+
+  if (utempl == 0x10000) {
+    for (utempa = 0; utempa < STLBENTS; utempa++)
+      stlb[utempa].valid = 0;
+    TRACE(T_INST, " purged entire STLB\n");
+  } else {
+    utempa = STLBIX(utempl);
+    stlb[utempa].valid = 0;
+    TRACE(T_INST, " invalidated STLB index %d\n", utempa);
+    if (((utempl >> 16) & 07777) < 4)
+      iotlb[(utempl >> 10) & 0xFF].valid = 0;
+  }
+  goto fetch;
+
+d_lpsw:  /* 000711 */
+  TRACE(T_FLOW, " LPSW\n");
+  RESTRICT();
+  lpsw();
+  goto fetch;
+
+d_stpm:  /* 000024 */
+  TRACE(T_FLOW, " STPM\n", inst);
+  RESTRICT();
+  for (i=0; i<8; i++)
+    stpm[i] = 0;
+  stpm[1] = cpuid;
+  ea = *(unsigned int *)(crs+XB);
+  put64(*(double *)(stpm+0), ea);
+  put64(*(double *)(stpm+4), INCVA(ea,4));
+  goto fetch;
+
+d_dbgill:  /*  001700, 001701 */
+  TRACE(T_FLOW, " DBGILL\n", inst);
+  fault(ILLINSTFAULT, RPL, RP);
+  fatal(NULL);
+
+      /* JW: I think 1702 is an invalid opcode that Prime uses as
+	 an assertion when unexpected things happen, for example:
+
+	 LDA modals        get modals
+	 SAS 1             interrupts enabled?
+	 1702              no, they should be, die
+      */
+
+d_pbug:  /* 001702 */
+  TRACE(T_FLOW, " 1702?\n", inst);
+  if (RP & RINGMASK32)
+    fault(ILLINSTFAULT, RPL, RP);
+  else
+    fatal("Primos software assertion failure");
+  fatal(NULL);  /* just in case of a bogus return (coding error) */
+
+d_irtn:  /* 000601 */
+  TRACE(T_FLOW, " IRTN\n", inst);
+  RESTRICT();
+  //fatal("IRTN causes a loop in CPU.CACHE Case 4");
+irtn:
+  RP = regs.sym.pswpb;
+  crs[PBH] = RPH;
+  newkeys(regs.sym.pswkeys);
+  crs[MODALS] |= 0100000;
+#if 0
+  if (regs.sym.pcba != 0) {
+    RP = regs.sym.pswpb;
+    newkeys(regs.sym.pswkeys);
+  } else
+    crs[OWNERL] = 0;
+#endif
+  dispatcher();
+  goto fetch;
+
+d_irtc:  /* 000603 */
+  TRACE(T_FLOW, " IRTC\n", inst);
+  RESTRICT();
+  intvec = -1;
+  goto irtn;
+
+d_cai:  /* 000411 */
+  TRACE(T_FLOW, " CAI\n", inst);
+  RESTRICT();
+  intvec = -1;
+  goto fetch;
+
+  /* R-mode/infrequent gen 0 instructions */
+
+d_sgl:  /* 000005 */
+  TRACE(T_FLOW, " SGL\n");
+  crs[KEYS] &= ~040000;
+  goto fetch;
+
+d_e16s:  /* 000011 */
+  TRACE(T_FLOW, " E16S\n");
+  newkeys(crs[KEYS] & 0161777);
+  goto fetch;
+
+d_e32s:  /* 000013 */
+  TRACE(T_FLOW, " E32S\n");
+  newkeys((crs[KEYS] & 0161777) | 1<<10);
+  goto fetch;
+
+d_e32r:  /* 001013 */
+  TRACE(T_FLOW, " E32R\n");
+  newkeys((crs[KEYS] & 0161777) | 3<<10);
+  goto fetch;
+
+d_e64r:  /* 001011 */
+  TRACE(T_FLOW, " E64R\n");
+  newkeys((crs[KEYS] & 0161777) | 2<<10);
+  goto fetch;
+
+d_e64v:  /* 000010 */
+  TRACE(T_FLOW, " E64V\n");
+  newkeys((crs[KEYS] & 0161777) | 6<<10);
+  goto fetch;
+
+d_e32i:  /* 001010 */
+  TRACE(T_FLOW, " E32I\n");
+
+  /* NOTE: this fault needs to occur on older models even in
+     Ring 0, so the RESTRICT() macro can't be used here.
+
+     XXX: for a P500 (cpuid=0), this shouldn't fault! */
+
+  if (cpuid < 4)
+    fault(RESTRICTFAULT, 0, 0);
+  else
+    newkeys((crs[KEYS] & 0161777) | 4<<10);
+  goto fetch;
+
+d_svc:  /* 000505 */
+  TRACE(T_FLOW, " SVC\n");
+  fault(SVCFAULT, 0, 0);
+  fatal("Returned from SVC fault");
+  
+d_cea:  /* 000111 */
+  TRACE(T_FLOW, " CEA\n");
+  switch ((crs[KEYS] & 016000) >> 10) {
+  case 0:                       /* 16S */
+    ea = crs[A];
+    i = ea & 0100000;
+    x = ea & 040000;
+    ea &= 037777;
+    while (1) {
+      if (x)                           /* indexed */
+	ea += crs[X];
+      if (!i)                          /* not indirect */
+	break;
+      if (ea < 040)
+	m = get16(0x80000000|ea);
+      else
+	m = get16(MAKEVA(RPH,ea));
+      i = m & 0100000;
+      x = m & 040000;
+      ea = m & 037777;                 /* go indirect */
+    }
+    crs[A] = ea;
+    break;
+  case 1:                       /* 32S */
+  case 3:                       /* 32R */
+    while (crs[A] & 0100000) {
+      ea = crs[A] & 077777;
+      if (ea < 040)
+	crs[A] = get16(0x80000000|ea);
+      else
+	crs[A] = get16(MAKEVA(RPH,ea));
+    }
+  }
+  goto fetch;
+
+d_hlt:  /* 000000 */
+  TRACE(T_FLOW, " HLT\n");
+  RESTRICT();
+  memdump(0,0xFFFF);
+  fatal("CPU halt");
+
+d_pim:  /* 000205 (R-mode) */
+  TRACE(T_FLOW, " PIM\n");
+#if 0
+  /* NOTE: this fits the description in the Rev 21 ISG, but fails
+     DIAG test CPU.INTEGER, Case 12 */
+
+  crs[A] = (crs[A] & 0x8000) | (crs[B] & 0x7FFF);
+#else
+  crs[A] = (crs[A] & 0x8000) | crs[B];
+#endif
+  goto fetch;
+
+d_pid:  /* 000211 (R-mode) */
+  TRACE(T_FLOW, " PID\n");
+  *(int *)(crs+L) = *(short *)(crs+A);
+  crs[B] &= 0x7fff;
+  goto fetch;
+
+d_dbl:  /* 000007 (R-mode) */
+
+  /* DBL activates 31-bit mode (R-mode only):
+
+      LDA -> DLD (double load)
+      STA -> DST (double store)
+      ADD -> DAD (double add)
+      SUB -> DSB (double subtract)
+
+      Other R-mode, 31-bit instructions include:
+
+      PID, DIV, MPY, PIM, INT, FLOT
+  */
+
+  TRACE(T_FLOW, " DBL\n");
+  crs[KEYS] |= 040000;
+  goto fetch;
+
+d_sca:  /* 000041 */
+  TRACE(T_FLOW, " SCA\n");
+  crs[A] = crs[VSC] & 0xFF;
+  goto fetch;
+
+d_inkr:  /* 000043 */
+  TRACE(T_FLOW, " INKr\n");
+  crs[A] = (crs[KEYS] & 0xFF00) | (crs[VSC] & 0xFF);
+  goto fetch;
+
+ d_otkr:  /* 000405 */
+  TRACE(T_FLOW, " OTKr\n");
+  newkeys((crs[A] & 0xFF00) | (crs[KEYS] & 0xFF));
+  crs[VSC] = (crs[VSC] & 0xFF00) | (crs[A] & 0xFF);
+  if ((RP & RINGMASK32) == 0)
+    inhcount = 1;
+  goto fetch;
+
+d_esim:  /* 000415 */
+  TRACE(T_FLOW, " ESIM\n");
+  RESTRICT();
+  crs[MODALS] &= ~040000;
+  goto fetch;
+
+d_evim:  /* 000417 */
+  TRACE(T_FLOW, " EVIM\n");
+  RESTRICT();
+  crs[MODALS] |= 040000;
+  goto fetch;
+
+d_nrm:  /* 000101 */
+  TRACE(T_FLOW, " NRM\n");
+  crs[VSC] = 0;
+  if (crsl[GR2] != 0) {
+    while (!((crs[A] ^ (crs[A] << 1)) & 0x8000)) {
+      TRACE(T_INST,  " step %d: crs[A]=%o, crs[B]=%o\n", crs[VSC], crs[A], crs[B]);
+      crs[B] = crs[B] << 1;
+      crs[A] = (crs[A] & 0x8000) | ((crs[A] << 1) & 0x7FFE) | (crs[B] >> 15);
+      crs[VSC]++;
+    }
+    crs[B] &= 0x7FFF;
+    TRACE(T_INST,  " finished with %d shifts: crs[A]=%o, crs[B]=%o\n", crs[VSC], crs[A], crs[B]);
+  }
+  goto fetch;
+
+d_rtn:  /* 000105 */
+  TRACE(T_FLOW, " RTN\n");
+  m = get16(crs[S]+1);
+  if (m == 0)
+    fatal("RTN stack underflow");
+  crs[S] = get16(crs[S]);
+  goto fetch;
+
+  /* unusual instructions */
+
+d_sync:  /* 000003 */
+  TRACE(T_FLOW, " SYNC\n");
+
+  /* After looking at the simh Honeywell 315/516 simulator, I
+     decided that instruction 3 must be some kind of no-op on
+     the Prime.  I did verify that it is a legal instruction and
+     doesn't generate a UII fault, even though it is not
+     documented anywhere that I could find.
+
+     FTN executes this instruction (by JMP to wrong relative
+     address I think), and newer versions of Primos execute it
+     in the disk driver code, to sync the cache on multi-processor
+     systems (something like that).
+  */
+
+  goto fetch;
+
+d_bclt:  /* 0141604 */
+  TRACE(T_FLOW, " BCLT\n");
+  BCLT;
+  goto fetch;
+
+d_bcle:  /* 0141600 */
+  TRACE(T_FLOW, " BCLE\n");
+  BCLE;
+  goto fetch;
+
+d_bceq:  /* 0141602 */
+  TRACE(T_FLOW, " BCEQ\n");
+  BCEQ;
+  goto fetch;
+
+d_bcne:  /* 0141603 */
+  TRACE(T_FLOW, " BCNE\n");
+  BCNE;
+  goto fetch;
+
+d_bcge:  /* 0141605 */
+  TRACE(T_FLOW, " BCGE\n");
+  BCGE;
+  goto fetch;
+
+d_bcgt:  /* 0141601 */
+  TRACE(T_FLOW, " BCGT\n");
+  BCGT;
+  goto fetch;
+
+d_bcr:  /* 0141705 */
+  TRACE(T_FLOW, " BCR\n");
+  if (!(crs[KEYS] & 0100000))
+    RPL = iget16(RP);
+  else
+    RPL++;
+  goto fetch;
+
+d_bcs:  /* 0141704 */
+  TRACE(T_FLOW, " BCS\n");
+  if (crs[KEYS] & 0100000)
+    RPL = iget16(RP);
+  else
+    RPL++;
+  goto fetch;
+
+d_blr:  /* 0141707 */
+  TRACE(T_FLOW, " BMLT/BLR\n");
+  if (!(crs[KEYS] & 020000))
+    RPL = iget16(RP);
+  else
+    RPL++;
+  goto fetch;
+
+d_bls:  /* 0141706 */
+  TRACE(T_FLOW, " BLS\n");
+  BLS;
+  goto fetch;
+
+d_blt:  /* 0140614 */
+  TRACE(T_FLOW, " BLT\n");
+  SETCC_A;
+  BCLT;
+  goto fetch;
+
+d_ble:  /* 0140610 */
+  TRACE(T_FLOW, " BLE\n");
+  SETCC_A;
+  BCLE;
+  goto fetch;
+
+d_beq:  /* 0140612 */
+  TRACE(T_FLOW, " BEQ\n");
+  SETCC_A;
+  BCEQ;
+  goto fetch;
+
+d_bne:  /* 0140613 */
+  TRACE(T_FLOW, " BNE\n");
+  SETCC_A;
+  BCNE;
+  goto fetch;
+
+d_bge:  /* 0140615 */
+  TRACE(T_FLOW, " BGE\n");
+  SETCC_A;
+  BCGE;
+  goto fetch;
+
+d_bgt:  /* 0140611 */
+  TRACE(T_FLOW, " BGT\n");
+  SETCC_A;
+  BCGT;
+  goto fetch;
+
+d_blle:  /* 0140700 */
+  TRACE(T_FLOW, " BLLE\n");
+  SETCC_L;
+  BCLE;
+  goto fetch;
+
+d_bleq:  /* 0140702 */
+  TRACE(T_FLOW, " BLEQ\n");
+  SETCC_L;
+  BCEQ;
+  goto fetch;
+
+d_blne:  /* 0140703 */
+  TRACE(T_FLOW, " BLNE\n");
+  SETCC_L;
+  BCNE;
+  goto fetch;
+
+d_blgt:  /* 0140701 */
+  TRACE(T_FLOW, " BLGT\n");
+  SETCC_L;
+  BCGT;
+  goto fetch;
+
+d_bflt:  /* 0141614 */
+  TRACE(T_FLOW, " BFLT\n");
+  SETCC_F;
+  BCLT;
+  goto fetch;
+
+d_bfle:  /* 0141610 */
+  TRACE(T_FLOW, " BFLE\n");
+  SETCC_F;
+  BCLE;
+  goto fetch;
+
+d_bfeq:  /* 0141612 */
+  TRACE(T_FLOW, " BFEQ\n");
+  SETCC_F;
+  BCEQ;
+  goto fetch;
+
+d_bfne:  /* 0141613 */
+  TRACE(T_FLOW, " BFNE\n");
+  SETCC_F;
+  BCNE;
+  goto fetch;
+
+d_bfge:  /* 0141615 */
+  TRACE(T_FLOW, " BFGE\n");
+  SETCC_F;
+  BCGE;
+  goto fetch;
+
+d_bfgt:  /* 0141611 */
+  TRACE(T_FLOW, " BFGT\n");
+  SETCC_F;
+  BCGT;
+  goto fetch;
+
+d_bix:  /* 0141334 */
+  TRACE(T_FLOW, " BIX\n");
+  crs[X]++;
+  BXNE;
+  goto fetch;
+
+d_biy:  /* 0141324 */
+  TRACE(T_FLOW, " BIY\n");
+  crs[Y]++;
+  BYNE;
+  goto fetch;
+
+d_bdy:  /* 0140724 */
+  TRACE(T_FLOW, " BDY\n");
+  crs[Y]--;
+  BYNE;
+  goto fetch;
+
+d_bdx:  /* 0140734 */
+  TRACE(T_FLOW, " BDX\n");
+  crs[X]--;
+#if 1
+  m = iget16(RP);
+  if (crs[X] > 100 && m == RPL-1) {
+    struct timeval tv0,tv1;
+    long delayusec, actualmsec;
+
+    /* for BDX *-1 loop (backstop process mainly), we want to change
+       this to a long sleep so that the emulation host's CPU isn't 
+       pegged the whole time the emulator is running.
+
+       So first, check to see if any device times expire sooner than
+       this, and if so, limit the sleep time to the lowest expiration
+       value (this is stored as number of instructions left until the
+       timer expires).
+
+       NOTE: In practice, the clock device ticks at 330 times a sec
+       under standard Primos so we only get to delay about 3ms here,
+       but it still keeps CPU usage to 4-5% on a 1.5GHz Mac.  Primos
+       mods to make the clock tick 20 times per second allows for
+       much longer sleeps here, ie, CPU overhead is 0.7% while idle.
+    */
+
+    utempl = instpermsec*100;         /* limit delay to 100 msecs */
+    for (i=0; i<64; i++)              /* check device timers */
+      if (devpoll[i])                 /* poll set? */
+	if (devpoll[i] <= 100) {      /* too fast! */
+	  utempl = 1;
+	  break;
+	} else if (devpoll[i] < utempl)
+	  utempl = devpoll[i];
+    utempl--;                         /* utempl = # instructions */
+    delayusec = utempl*1000/instpermsec;
+    if (delayusec > 1000) {
+      if (gettimeofday(&tv0, NULL) != 0)
+	fatal("em: gettimeofday 0 failed");
+      usleep(delayusec);
+      if (gettimeofday(&tv1, NULL) != 0)
+	fatal("em: gettimeofday 1 failed");
+      actualmsec = (tv1.tv_sec-tv0.tv_sec-1)*1000 + (tv1.tv_usec+1000000-tv0.tv_usec)/1000;
+      // TRACEA(" BDX loop at %o/%o, remainder=%d, owner=%o, utempl=%d, wanted %d us, got %d ms\n", prevpc>>16, prevpc&0xffff, crs[X], crs[OWNERL], utempl, delayusec, actualusec);
+
+      /* do timer bookkeeping that would have occurred if we had 
+	 actually looped on BDX utempl times */
+
+      for (i=0; i<64; i++)
+	if (devpoll[i] > 0)
+	  devpoll[i] -= utempl;
+      crs[X] = 0;
+      utempa = crs[TIMER];
+      if (actualmsec > 0) {
+	crs[TIMER] += actualmsec;
+	if (crs[TIMER] < utempa) {
+	  tempea = *(ea_t *)(crs+OWNER);
+	  utempa = get16r0(tempea+4) | 1;    /* set process abort flag */
+	  put16r0(utempa, tempea+4);
 	}
-
-	if (inst == 0100000) {
-	  TRACE(T_FLOW, " SKP\n");
-	  RPL++;
-	  continue;
+      } else {
+	crs[TIMERL] += utempl;
+      }
+      instcount += actualmsec*instpermsec;
+    }
 	}
+#endif
+  BXNE;
+  goto fetch;
 
-	if (inst == 0101400) {
-	  TRACE(T_FLOW, " SMI/SLT\n");
-	  if (*(short *)(crs+A) < 0)
-	    RPL++;
-	  continue;
-	}
+d_a1a:  /* 0141206 */
+  TRACE(T_FLOW, " A1A\n");
+a1a:
+  add16(crs+A, 1, 0, 0);
+  goto fetch;
 
-	if (inst == 0100400) {
-	  TRACE(T_FLOW, " SPL/SGE\n");
-	  if (*(short *)(crs+A) >= 0)
-	    RPL++;
-	  continue;
-	}
+d_a2a:  /* 0140304 */
+  TRACE(T_FLOW, " A2A\n");
+  add16(crs+A, 2, 0, 0);
+  goto fetch;
 
-	if (inst == 0101100) {
-	  TRACE(T_FLOW, " SLN\n");
-	  if (crs[A] & 1)
-	    RPL++;
-	  continue;
-	}
+d_aca:  /* 0141216 */
+  TRACE(T_FLOW, " ACA\n");
+  if (crs[KEYS] & 0100000)
+    goto a1a;
+  crs[KEYS] &= ~0120300;                 /* clear C, L, LT, EQ */
+  SETCC_A;
+  goto fetch;
 
-	if (inst == 0100100) {
-	  TRACE(T_FLOW, " SLZ\n");
-	  if (!(crs[A] & 1))
-	    RPL++;
-	  continue;
-	}
+d_s1a:  /* 0140110 */
+  TRACE(T_FLOW, " S1A\n");
+  add16(crs+A, 0xFFFF, 0, 0);
+  goto fetch;
 
-	if (inst == 0101040) {
-	  TRACE(T_FLOW, " SNZ/SNE\n");
-	  if (crs[A] != 0)
-	    RPL++;
-	  continue;
-	}
+d_s2a:  /* 0140310 */
+  TRACE(T_FLOW, " S2A\n");
+  add16(crs+A, 0xFFFE, 0, 0);
+  goto fetch;
 
-	if (inst == 0100040) {
-	  TRACE(T_FLOW, " SZE/SEQ\n");
-	  if (crs[A] == 0)
-	    RPL++;
-	  continue;
-	}
+d_cal:  /* 0141050 */
+  TRACE(T_FLOW, " CAL\n");
+  crs[A] &= 0xFF;
+  goto fetch;
 
-	if (inst == 0101220) {
-	  TRACE(T_FLOW, " SLE\n");
-	  if (*(short *)(crs+A) <= 0)
-	    RPL++;
-	  continue;
-	}
+d_car:  /* 0141044 */
+  TRACE(T_FLOW, " CAR\n");
+  crs[A] &= 0xFF00;
+  goto fetch;
 
-	if (inst == 0100220) {
-	  TRACE(T_FLOW, " SGT\n");
-	  if (*(short *)(crs+A) > 0)
-	    RPL++;
-	  continue;
-	}
+d_cra:  /* 0140040 */
+  TRACE(T_FLOW, " CRA\n");
+  crs[A] = 0;
+  goto fetch;
 
-	if (inst == 0101001) {
-	  TRACE(T_FLOW, " SSC\n");
-	  if (crs[KEYS] & 0100000)
-	    RPL++;
-	  continue;
-	}
+  /* On the P300, the B register is the low-order word of the
+     DP floating pt fraction, so CRB was used to convert SPFP
+     numbers to DPFP.  On the P400 and up, the B register and
+     DPFP accumulator do not overlap.  For compatibility, there
+     are 3 related instructions:
 
-	if (inst == 0100001) {
-	  TRACE(T_FLOW, " SRC\n");
-	  if (!(crs[KEYS] & 0100000))
-	    RPL++;
-	  continue;
-	}
+     '14 clears B and the low-order DPFP register
+     '15 clears only B
+     '16 clears only the low-order DPFP register
+  */
 
-	if ((inst & 0177760) == 0100260) {
-	  m = (inst & 017)+1;
-	  TRACE(T_FLOW, " SAR %d\n", m);
-	  if (!(crs[A] & bitmask16[m]))
-	    RPL++;
-	  continue;
-	}
+d_crb300:  /* 0140014 */
+  TRACE(T_FLOW, " P300CRB\n");
+  crs[B] = 0;
+  crs[FLTD] = 0;
+  goto fetch;
 
-	if ((inst & 0177760) == 0101260) {
-	  m = (inst & 017)+1;
-	  TRACE(T_FLOW, " SAS %d\n", m);
-	  if (crs[A] & bitmask16[m])
-	    RPL++;
-	  continue;
-	}
+d_crb:  /* 0140015 */
+  TRACE(T_FLOW, " CRB\n");
+  crs[B] = 0;
+  goto fetch;
 
-	if ((inst & 0177760) == 0100240) {
-	  m = (inst & 017)+1;
-	  TRACE(T_FLOW, " SNR %d\n", m);
-	  RESTRICT();
-	  if (!(sswitch & bitmask16[m]))
-	    RPL++;
-	  continue;
-	}
+d_fdbl:  /* 0140016 */
+  TRACE(T_FLOW, " FDBL\n");
+  crs[FLTD] = 0;
+  goto fetch;
 
-	if ((inst & 0177760) == 0101240) {
-	  m = (inst & 017)+1;
-	  TRACE(T_FLOW, " SNS %d\n", m);
-	  RESTRICT();
-	  if (sswitch & bitmask16[m])
-	    RPL++;
-	  continue;
-	}
+d_crl:  /* 0140010 */
+  TRACE(T_FLOW, " CRL\n");
+  *(int *)(crs+L) = 0;
+  goto fetch;
 
-	if (inst == 0100200) {    /* skip if machine check flop is reset */
-	  TRACE(T_FLOW, " SMCR\n");
-	  RESTRICT();
-	  RPL++;
-	  continue;
-	}
+d_caz:  /* 0140214 */
+  TRACE(T_FLOW, " CAZ\n");
+  /* set keys like CAS =0 would (subtract) */
+  crs[KEYS] = (crs[KEYS] & ~0100) | 020200;   /* clear EQ, set L, LT */
+  if (crs[A] == 0) {                  /* if zero, set EQ */
+    SETEQ;
+    RPL++;
+  } else if (*(short *)(crs+A) < 0)
+    RPL += 2;
+  goto fetch;
 
-	if (inst == 0101200) {    /* skip if machine check flop is set */
-	  TRACE(T_FLOW, " SMCS\n");
-	  RESTRICT();
-	  continue;
-	}
+
+d_irx:  /* 0140114 */
+
+  /* NOTE: using "if (crs[X]++ == 0)" doesn't work because of
+     unsigned short type promotion! */
+
+  TRACE(T_FLOW, " IRX\n");
+  crs[X]++;
+  if (crs[X] == 0)
+    RPL++;
+  goto fetch;
+
+d_drx:  /* 0140210 */
+  TRACE(T_FLOW, " DRX\n");
+  crs[X]--;
+  if (crs[X] == 0)
+    RPL++;
+  goto fetch;
+
+d_icr:  /* 0141240 */
+  TRACE(T_FLOW, " ICR\n");
+  crs[A] = crs[A] << 8;
+  goto fetch;
+
+d_icl:  /* 0141140 */
+  TRACE(T_FLOW, " ICL\n");
+  crs[A] = crs[A] >> 8;
+  goto fetch;
+
+d_ica:  /* 0141340 */
+  TRACE(T_FLOW, " ICA\n");
+  crs[A] = (crs[A] >> 8) | (crs[A] << 8);
+  goto fetch;
+
+  /* NOTE: Rev 21 Inst. Guide says CC are indeterminate, other
+     references say they are set */
+
+d_lt:  /* 0140417 */
+  TRACE(T_FLOW, " LT\n");
+  crs[A] = 1;
+  goto fetch;
+
+d_lf:  /* 0140416 */
+  TRACE(T_FLOW, " LF\n");
+  crs[A] = 0;
+  goto fetch;
+
+d_tab:  /* 0140314 */
+  TRACE(T_FLOW, " TAB\n");
+  crs[B] = crs[A];
+  goto fetch;
+
+d_tax:  /* 0140504 */
+  TRACE(T_FLOW, " TAX\n");
+  crs[X] = crs[A];
+  goto fetch;
+
+d_tay:  /* 0140505 */
+  TRACE(T_FLOW, " TAY\n");
+  crs[Y] = crs[A];
+  goto fetch;
+
+d_tba:  /* 0140604 */
+  TRACE(T_FLOW, " TBA\n");
+  crs[A] = crs[B];
+  goto fetch;
+
+d_txa:  /* 0141034 */
+  TRACE(T_FLOW, " TXA\n");
+  crs[A] = crs[X];
+  goto fetch;
+
+d_tya:  /* 0141124 */
+  TRACE(T_FLOW, " TYA\n");
+  crs[A] = crs[Y];
+  goto fetch;
+
+d_xca:  /* 0140104 */
+  TRACE(T_FLOW, " XCA\n");
+  crs[B] = crs[A];
+  crs[A] = 0;
+  goto fetch;
+
+d_xcb:  /* 0140204 */
+  TRACE(T_FLOW, " XCB\n");
+  crs[A] = crs[B];
+  crs[B] = 0;
+  goto fetch;
+
+d_tca:  /* 0140407 */
+  TRACE(T_FLOW, " TCA\n");
+  tch(crs+A);
+  goto fetch;
+
+d_tcl:  /* 0141210 */
+  TRACE(T_FLOW, " TCL\n");
+  tcr(crsl+GR2);
+  goto fetch;
+
+d_scb:  /* 0140600 */
+  TRACE(T_FLOW, " SCB\n");
+  crs[KEYS] |= 0100000;
+  goto fetch;
+
+d_rcb:  /* 0140200 */
+  TRACE(T_FLOW, " RCB\n");
+  crs[KEYS] &= 077777;
+  goto fetch;
+
+d_chs:  /* 0140024 */
+  TRACE(T_FLOW, " CHS\n");
+  crs[A] ^= 0x8000;
+  goto fetch;
+
+d_ssm:  /* 0140500 */
+  TRACE(T_FLOW, " SSM\n");
+  crs[A] |= 0100000;
+  goto fetch;
+
+d_ssp:  /* 0140100 */
+  TRACE(T_FLOW, " SSP\n");
+  crs[A] &= 077777;
+  goto fetch;
+
+d_cma:  /* 0140401 */
+  TRACE(T_FLOW, " CMA\n");
+  crs[A] = ~crs[A];
+  goto fetch;
+
+d_csa:  /* 0140320 */
+  TRACE(T_FLOW, " CSA\n");
+  crs[KEYS] = (crs[KEYS] & 077777) | (crs[A] & 0x8000);
+  crs[A] = crs[A] & 077777;
+  goto fetch;
+
+d_lclt:  /* 0141500 */
+  TRACE(T_FLOW, " LCLT\n");
+  crs[A] = LCLT;
+  goto fetch;
+
+d_lcle:  /* 0141501 */
+  TRACE(T_FLOW, " LCLE\n");
+  crs[A] = LCLE;
+  goto fetch;
+
+d_lceq:  /* 0141503 */
+  TRACE(T_FLOW, " LCEQ\n");
+  crs[A] = LCEQ;
+  goto fetch;
+
+d_lcne:  /* 0141502 */
+  TRACE(T_FLOW, " LCNE\n");
+  crs[A] = LCNE;
+  goto fetch;
+
+d_lcge:  /* 0141504 */
+  TRACE(T_FLOW, " LCGE\n");
+  crs[A] = LCGE;
+  goto fetch;
+
+d_lcgt:  /* 0141505 */
+  TRACE(T_FLOW, " LCGT\n");
+  crs[A] = LCGT;
+  goto fetch;
+
+d_llt:  /* 0140410 */
+  TRACE(T_FLOW, " LLT\n");
+  SETCC_A;
+  crs[A] = LCLT;
+  goto fetch;
+
+d_lle:  /* 0140411 */
+  TRACE(T_FLOW, " LLE\n");
+  SETCC_A;
+  crs[A] = LCLE;
+  goto fetch;
+
+d_lne:  /* 0140412 */
+  TRACE(T_FLOW, " LNE\n");
+  SETCC_A;
+  crs[A] = LCNE;
+  goto fetch;
+
+d_leq:  /* 0140413 */
+  TRACE(T_FLOW, " LEQ\n");
+  SETCC_A;
+  crs[A] = LCEQ;
+  goto fetch;
+
+d_lge:  /* 0140414 */
+  TRACE(T_FLOW, " LGE\n");
+  SETCC_A;
+  crs[A] = LCGE;
+  goto fetch;
+
+d_lgt:  /* 0140415 */
+  TRACE(T_FLOW, " LGT\n");
+  SETCC_A;
+  crs[A] = LCGT;
+  goto fetch;
+
+d_llle:  /* 0141511 */
+  TRACE(T_FLOW, " LLLE\n");
+  SETCC_L;
+  crs[A] = LCLE;
+  goto fetch;
+
+d_lleq:  /* 0141513 */
+  TRACE(T_FLOW, " LLEQ\n");
+  SETCC_L;
+  crs[A] = LCEQ;
+  goto fetch;
+
+d_llne:  /* 0141512 */
+  TRACE(T_FLOW, " LLNE\n");
+  SETCC_L;
+  crs[A] = LCNE;
+  goto fetch;
+
+d_llgt:  /* 0141515 */
+  TRACE(T_FLOW, " LLGT\n");
+  SETCC_L;
+  crs[A] = LCGT;
+  goto fetch;
+
+d_lflt:  /* 0141110 */
+  TRACE(T_FLOW, " LFLT\n");
+  SETCC_F;
+  crs[A] = LCLT;
+  goto fetch;
+
+d_lfle:  /* 0141111 */
+  TRACE(T_FLOW, " LFLE\n");
+  SETCC_F;
+  crs[A] = LCLE;
+  goto fetch;
+
+d_lfeq:  /* 0141113 */
+  TRACE(T_FLOW, " LFEQ\n");
+  SETCC_F;
+  crs[A] = LCEQ;
+  goto fetch;
+
+d_lfne:  /* 0141112 */
+  TRACE(T_FLOW, " LFNE\n");
+  SETCC_F;
+  crs[A] = LCNE;
+  goto fetch;
+
+d_lfge:  /* 0141114 */
+  TRACE(T_FLOW, " LFGE\n");
+  SETCC_F;
+  crs[A] = LCGE;
+  goto fetch;
+
+d_lfgt:  /* 0141115 */
+  TRACE(T_FLOW, " LFGT\n");
+  SETCC_F;
+  crs[A] = LCGT;
+  goto fetch;
+
+d_flot:  /* 0140550 */
+  TRACE(T_FLOW, " FLOT\n");
+  templ = *(short *)(crs+A);
+  templ = (templ<<15) | crs[B];
+  *(double *)(crs+FLTH) = fltl(templ);
+  goto fetch;
+
+d_frn:  /* 0140534 */
+  TRACE(T_FLOW, " FRN\n");
+  CLEARC;
+  frn(crsl+FAC1);
+  goto fetch;
+
+d_dfcm:  /* 0140574 */
+  TRACE(T_FLOW, " DFCM\n");
+  dfcm(crsl+FAC1);
+  goto fetch;
+
+d_adll:  /* 0141000 */
+  TRACE(T_FLOW, " ADLL\n");
+  adlr(2);
+  goto fetch;
+
+d_fcmv:  /* 0140530 */
+  TRACE(T_FLOW, " FCMv\n");
+  dfcm(crsl+FAC1);
+  goto fetch;
+
+d_fsze:  /* 0140510 */
+  TRACE(T_FLOW, " FSZE\n");
+  if (*(int *)(crs+FLTH) == 0)
+    RPL++;
+  goto fetch;
+
+d_fsnz:  /* 0140511 */
+  TRACE(T_FLOW, " FSNZ\n");
+  if (*(int *)(crs+FLTH) != 0)
+    RPL++;
+  goto fetch;
+
+d_fsmi:  /* 0140512 */
+  TRACE(T_FLOW, " FSMI\n");
+  if (*(int *)(crs+FLTH) < 0)
+    RPL++;
+  goto fetch;
+
+d_fspl:  /* 0140513 */
+  TRACE(T_FLOW, " FSPL\n");
+  if (*(int *)(crs+FLTH) >= 0)
+    RPL++;
+  goto fetch;
+
+d_fsle:  /* 0140514 */
+  TRACE(T_FLOW, " FSLE\n");
+  if (*(int *)(crs+FLTH) <= 0)
+    RPL++;
+  goto fetch;
+
+d_fsgt:  /* 0140515 */
+  TRACE(T_FLOW, " FSGT\n");
+  if (*(int *)(crs+FLTH) > 0)
+    RPL++;
+  goto fetch;
+
+d_int:  /* 0140554 */
+  TRACE(T_FLOW, " INT\n");
+  /* XXX: do -1073741824.5 and 1073741823.5 work on Prime, or overflow? */
+  if (prieee8(crs+FLTH, &tempd) && -1073741824.0 <= tempd && tempd <= 1073741823.0) {
+    templ = tempd;
+    crs[B] = templ & 0x7FFF;
+    crs[A] = templ >> 15;
+    CLEARC;
+  } else
+    mathexception('f', FC_INT_CONV, ea);
+  goto fetch;
+
+d_inta:  /* 0140531 */
+  TRACE(T_FLOW, " INTA\n");
+  /* XXX: do 32767.5 and -32768.5 work on Prime, or overflow? */
+  if (prieee8(crs+FLTH, &tempd) && -32768.0 <= tempd && tempd <= 32767.0) {
+    *(short *)(crs+A) = tempd;
+    CLEARC;
+  } else
+    mathexception('f', FC_INT_CONV, ea);
+  goto fetch;
+
+d_flta:  /* 0140532 */
+  TRACE(T_FLOW, " FLTA\n");
+  tempd = *(short *)(crs+A);
+  *(double *)(crs+FLTH) = ieeepr8(tempd);
+  goto fetch;
+
+d_intl:  /* 0140533 */
+  TRACE(T_FLOW, " INTL\n");
+  if (prieee8(crs+FLTH, &tempd) && -2147483648.0 <= tempd && tempd <= 2147483647.0) {
+    *(int *)(crs+L) = tempd;
+    CLEARC;
+  } else
+    mathexception('f', FC_INT_CONV, ea);
+  goto fetch;
+
+d_fltl:  /* 0140535 */
+  TRACE(T_FLOW, " FLTL\n");
+  *(double *)(crs+FLTH) = fltl(crsl[GR2]);
+  goto fetch;
+
+d_bmle:  /* 0141711 */
+  TRACE(T_FLOW, " BMLE\n");
+  if (!(crs[KEYS] & 020000))
+    RPL = iget16(RP);
+  else
+    BCEQ;
+  goto fetch;
 
 #if 0
-	/* NOTE: this is the clock display instruction skip, but appears
-	   goofy to me, and looks more like an I/O instruction:
+d_bmeq:  /* 0141602 */   /* same opcode as BCEQ */
+  TRACE(T_FLOW, " BMEQ\n");
+  goto bceq;
 
- unrecognized skip instruction 101704 at 6/3174
+d_bmne:  /* 0141603 */   /* same opcode as BCNE */
+  TRACE(T_FLOW, " BMNE\n");
+  goto bcne;
+
+  /* NOTE: BMGE is equivalent to BLS; this opcode doesn't exist
+     in newer manuals */
+
+d_bmge:  /* 0141606 */
+  TRACE(T_FLOW, " BMGE\n");
+  goto bls;
+#endif
+
+d_bmgt:  /* 0141710 */
+  TRACE(T_FLOW, " BMGT\n");
+  if (crs[KEYS] & 020000)
+    BCNE;
+  else
+    RPL++;
+  goto fetch;
+
+d_cre:  /* 0141404 */
+  TRACE(T_FLOW, " CRE\n");
+  *(int *)(crs+E) = 0;
+  goto fetch;
+
+d_crle:  /* 0141410 */
+  TRACE(T_FLOW, " CRLE\n");
+  *(int *)(crs+L) = 0;
+  *(int *)(crs+E) = 0;
+  goto fetch;
+
+d_ile:  /* 0141414 */
+  TRACE(T_FLOW, " ILE\n");
+  templ = *(int *)(crs+L);
+  *(int *)(crs+L) = *(int *)(crs+E);
+  *(int *)(crs+E) = templ;
+  goto fetch;
+
+  /* these next 4 are V/I-mode quad mode:
+
+      0140570:  QFCM - quad complement
+      0140571:  DRNM - round minus Q to D
+      0140572:  QINQ - trucate Q fraction
+      0140573:  QIQR - round and remove Q fraction
+  */
+d_quii:
+  TRACE(T_FLOW, " QFCM DRNM QINQ QIQR UII\n");
+  fault(UIIFAULT, RPL, RP);
+  fatal("Return from d_quii");
+
+  /* queue instructions */
+
+d_rtq:  /* 0141714 */
+  TRACE(T_FLOW, " RTQ\n");
+  ea = apea(NULL);
+  if (rtq(ea, crs+A, RP))
+    CLEAREQ;
+  else
+    SETEQ;
+  goto fetch;
+
+d_rbq:  /* 0141715 */
+  TRACE(T_FLOW, " RBQ\n");
+  ea = apea(NULL);
+  if (rbq(ea, crs+A, RP))
+    CLEAREQ;
+  else
+    SETEQ;
+  goto fetch;
+
+d_abq:  /* 0141716 */
+  TRACE(T_FLOW, " ABQ\n");
+  ea = apea(NULL);
+  if (abq(ea, crs[A], RP))
+    CLEAREQ;
+  else
+    SETEQ;
+  goto fetch;
+
+d_atq:  /* 0141717 */
+  TRACE(T_FLOW, " ATQ\n");
+  ea = apea(NULL);
+  if (atq(ea, crs[A], RP))
+    CLEAREQ;
+  else
+    SETEQ;
+  goto fetch;
+
+d_tstq:  /* 0141757 */
+  TRACE(T_FLOW, " TSTQ\n");
+  ea = apea(NULL);
+  crs[A] = tstq(ea);
+  SETCC_A;
+  goto fetch;
+
+ d_diagill:  /* 0141700 */
+
+  /* XXX: hack for CPU.FAULT; not sure how to determine
+     whether an instruction is illegal or unimplemented */
+  
+  fault(ILLINSTFAULT, RPL, RP);
+  fatal("Return from 0141700 fault");
+
+d_emcm:  /* 000503 - enter machine check mode */
+  TRACE(T_FLOW, " EMCM\n");
+  goto fetch;
+
+d_lmcm:  /* 000501 - leave machine check mode */
+  TRACE(T_FLOW, " LMCM\n");
+  goto fetch;
+
+d_rmc:  /* 000021 - reset machine check FF */
+  TRACE(T_FLOW, " RMC\n");
+  goto fetch;
+
+d_viry:  /* 000311 - ucode verify */
+  TRACE(T_FLOW, " VIRY\n");
+  goto fetch;
+
+d_xvfy:  /* 001113 - extended ucode verify */
+  TRACE(T_FLOW, " XVFY\n");
+  goto fetch;
+
+  /* memory diagnostic opcodes:
+      001304:  MDEI - enable interleave
+      001305:  MDII - inhibit interleave
+      001306:  MDRS - reset syndrome bits
+      001307:  MDWC - write cache
+      001324:  MDIW - inhibit wide-word mode?
+  */
+
+d_mdxx:  /* 01304-01307, 01324 */
+  TRACE(T_FLOW, " MDxx\n");
+  goto fetch;
+
+d_gen1:
+
+  /* this is a bit weird here: the shift group is really only for
+     V-mode instructions, but Prime put some I-mode generics in
+     the same instruction space.  Not sure, but I think a real
+     Prime would probably take an illegal instruction fault on
+     something like LRL executed in I-mode, but the emulator will
+     just do it.  */
+
+  TRACE(T_INST, " shift group\n");
+  scount = -inst & 077;
+  if (scount == 0)
+    scount = 0100;
+  switch (inst & 01700) {
+
+  case 00000: /* LRL */
+    TRACE(T_FLOW, " LRL %d\n", scount);
+    crsl[GR2] = lrl(crsl[GR2], scount);
+    break;
+
+  case 00100: /* LRS (different in R & V modes) */
+    TRACE(T_FLOW, " LRS %d\n", scount);
+    if (crs[KEYS] & 010000) {          /* V/I mode */
+      crsl[GR2] = lrs(crsl[GR2], scount);
+    } else {
+      CLEARCL;
+      utempa = crs[B] & 0x8000;        /* save B bit 1 */
+      if (scount <= 31) {
+	templ = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
+	EXPCL(templ & bitmask32[32-scount]);
+	templ = templ >> (scount+1);
+	crs[A] = templ >> 15;
+	crs[B] = (templ & 0x7FFF) | utempa;
+      } else if (crs[A] & 0x8000) {
+	*(int *)(crs+A) = 0xFFFF7FFF | utempa;
+	SETCL;
+      } else {
+	*(int *)(crs+A) = utempa;
+      }
+    }
+    break;
+
+  case 00200: /* LRR */
+    TRACE(T_FLOW, " LRR %d\n", scount);
+    crsl[GR2] = lrr(crsl[GR2], scount);
+    break;
+
+  case 00300: 
+    switch (inst) {
+
+    case 0040310: /* SSSN */
+      sssn();
+      break;
+
+    case 0040300: /* DRN */
+    case 0040301: /* DRNP */
+    case 0040302: /* DRNZ */
+    case 0040303: /* FRNP */
+    case 0040320: /* FRNM */
+    case 0040321: /* FRNZ */
+      TRACE(T_FLOW, " DRNx/FRNx(V) UII\n");
+      fault(UIIFAULT, RPL, RP);
+      break;
+
+    default:
+      goto badshift;
+    }
+    break;
+
+  case 00400: /* ARL */
+    TRACE(T_FLOW, " ARL %d\n", scount);
+    crs[A] = arl(crs[A], scount);
+    break;
+
+  case 00500: /* ARS */
+    TRACE(T_FLOW, " ARS %d\n", scount);
+    crs[A] = ars(crs[A], scount);
+    break;
+
+  case 00600: /* ARR */
+    TRACE(T_FLOW, " ARR %d\n", scount);
+    crs[A] = arr(crs[A], scount);
+    break;
+
+  case 01000: /* LLL */
+    TRACE(T_FLOW, " LLL %d\n", scount);
+    crsl[GR2] = lll(crsl[GR2], scount);
+    break;
+
+  case 01100: /* LLS (different in R/V modes) */
+    TRACE(T_FLOW, " LLS %d\n", scount);
+    if (crs[KEYS] & 010000)                /* V/I mode */
+      crsl[GR2] = lls(crsl[GR2], scount);
+    else {
+      CLEARCL;
+      utempa = crs[B] & 0x8000;            /* save B bit 1 */
+      if (scount < 31) {
+	utempl = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
+	templ2 = 0x80000000;
+	templ2 = templ2 >> scount;         /* create mask */
+	templ2 = templ2 & utempl;          /* grab bits */
+	templ2 = templ2 >> (31-scount);    /* sign extend them */
+	EXPCL(!(templ2 == -1 || templ2 == 0));
+	//printf(" before: A=%x, B=%x, utempl=%x, ", crs[A], crs[B], utempl);
+	utempl = utempl << scount;
+	crs[A] = utempl >> 16;
+	crs[B] = ((utempl >> 1) & 0x7FFF) | utempa;
+	//printf(" after: A=%x, B=%x, utempl=%x\n", crs[A], crs[B], utempl);
+      } else {
+	EXPCL(*(unsigned int *)(crs+A) != 0);
+	*(unsigned int *)(crs+A) = utempa;
+      }
+    }
+    if ((crs[KEYS] & 0100400) == 0100400)
+      mathexception('i', FC_INT_OFLOW, 0);
+    break;
+
+  case 01200: /* LLR */
+    TRACE(T_FLOW, " LLR %d\n", scount);
+    crsl[GR2] = llr(crsl[GR2], scount);
+    break;
+
+  case 01400: /* ALL */
+    TRACE(T_FLOW, " ALL %d\n", scount);
+    crs[A] = all(crs[A], scount);
+    break;
+
+  case 01500: /* ALS */
+    TRACE(T_FLOW, " ALS %d\n", scount);
+    crs[A] = als(crs[A], scount);
+    if ((crs[KEYS] & 0100400) == 0100400)
+      mathexception('i', FC_INT_OFLOW, 0);
+    break;
+
+  case 01600: /* ALR */
+    TRACE(T_FLOW, " ALR %d\n", scount);
+    crs[A] = alr(crs[A], scount);
+    break;
+
+  default:
+badshift:
+    printf("emulator warning: unrecognized class 1 (shift) generic instruction %06o at %o/%o\n", inst, RPH, RPL);
+    TRACE(T_FLOW, " unrecognized shift instruction!: %o\n", inst);
+  }
+  goto fetch;
+
+  /* class 2 generic instructions (skip group) */
+
+
+d_nopskp:  /* 0101000 */
+  TRACE(T_FLOW, " NOP-SKP\n");
+  goto fetch;
+
+d_skp:  /* 0100000 */
+  TRACE(T_FLOW, " SKP\n");
+  RPL++;
+  goto fetch;
+
+d_smi:  /* 0101400 */
+  TRACE(T_FLOW, " SMI/SLT\n");
+  if (*(short *)(crs+A) < 0)
+    RPL++;
+  goto fetch;
+
+d_spl:  /* 0100400 */
+  TRACE(T_FLOW, " SPL/SGE\n");
+  if (*(short *)(crs+A) >= 0)
+    RPL++;
+  goto fetch;
+
+d_sln:  /* 0101100 */
+  TRACE(T_FLOW, " SLN\n");
+  if (crs[A] & 1)
+    RPL++;
+  goto fetch;
+
+d_slz:  /* 0100100 */
+  TRACE(T_FLOW, " SLZ\n");
+  if (!(crs[A] & 1))
+    RPL++;
+  goto fetch;
+
+d_snz:  /* 0101040 */
+  TRACE(T_FLOW, " SNZ/SNE\n");
+  if (crs[A] != 0)
+    RPL++;
+  goto fetch;
+
+d_sze:  /* 0100040 */
+  TRACE(T_FLOW, " SZE/SEQ\n");
+  if (crs[A] == 0)
+    RPL++;
+  goto fetch;
+
+d_sle:  /* 0101220 */
+  TRACE(T_FLOW, " SLE\n");
+  if (*(short *)(crs+A) <= 0)
+    RPL++;
+  goto fetch;
+
+d_sgt:  /* 0100220 */
+  TRACE(T_FLOW, " SGT\n");
+  if (*(short *)(crs+A) > 0)
+    RPL++;
+  goto fetch;
+
+d_ssc:  /* 0101001 */
+  TRACE(T_FLOW, " SSC\n");
+  if (crs[KEYS] & 0100000)
+    RPL++;
+  goto fetch;
+
+d_src:  /* 0100001 */
+  TRACE(T_FLOW, " SRC\n");
+  if (!(crs[KEYS] & 0100000))
+    RPL++;
+  goto fetch;
+
+d_sar:  /* 0100260 - 0100277 */
+  m = (inst & 017)+1;
+  TRACE(T_FLOW, " SAR %d\n", m);
+  if (!(crs[A] & bitmask16[m]))
+    RPL++;
+  goto fetch;
+
+d_sas:  /* 0101260 - 0101277 */
+  m = (inst & 017)+1;
+  TRACE(T_FLOW, " SAS %d\n", m);
+  if (crs[A] & bitmask16[m])
+    RPL++;
+  goto fetch;
+
+d_snr:  /* 0100240 - 0100257 */
+  m = (inst & 017)+1;
+  TRACE(T_FLOW, " SNR %d\n", m);
+  RESTRICT();
+  if (!(sswitch & bitmask16[m]))
+    RPL++;
+  goto fetch;
+
+d_sns:  /* 0101240 - 0101257 */
+  m = (inst & 017)+1;
+  TRACE(T_FLOW, " SNS %d\n", m);
+  RESTRICT();
+  if (sswitch & bitmask16[m])
+    RPL++;
+  goto fetch;
+
+d_smcr:  /* 0100200 */
+  TRACE(T_FLOW, " SMCR\n");
+  RESTRICT();
+  RPL++;
+  goto fetch;
+
+d_smcs:  /* 0101200 */
+  TRACE(T_FLOW, " SMCS\n");
+  RESTRICT();
+  goto fetch;
+
+#if 0
+  /* NOTE: this is the clock display instruction skip, but appears
+     goofy to me, and looks more like an I/O instruction:
+
+unrecognized skip instruction 101704 at 6/3174
 Fatal error: instruction #106825755 at 6/3173: 101704 677
 keys = 14200, modals=100177
 
-	*/
+  */
+
+  if (inst == 0101704) {    /* skip if machine check flop is set */
+    TRACE(T_FLOW, " clock SKP?\n");
+    RPL++;
+    goto fetch;
 #endif
 
-	if (inst == 0101704) {    /* skip if machine check flop is set */
-	  TRACE(T_FLOW, " clock SKP?\n");
-	  RPL++;
-	  continue;
-	}
+d_badgen:
+  TRACEA(" unrecognized generic instruction!\n");
+  printf("#%d: %o/%o: Unrecognized generic instruction '%o!\n", instcount, RPH, RPL, inst);
+  //traceflags = ~TB_MAP;
+  fault(UIIFAULT, RPL, RP);
+  fatal(NULL);
 
-	printf(" unrecognized skip instruction %o at %o/%o\n", inst, RPH, RPL);
-	fatal(NULL);
 
-      } else {
-	printf("Generic class = %d, inst = '%o\n", class, inst);
-	fatal("Coding error: bad generic class?");
-      }
-    }
-
-    if ((crs[KEYS] & 0016000) != 0010000) goto nonimode;
+imode:
 
     /* branch and register generic instructions don't have ea, so they
        are tested outside the main switch, before an ea is computed */
@@ -6633,7 +6597,7 @@ keys = 14200, modals=100177
 	} else
 	  fault(UIIFAULT, RPL, RP);
       }
-      continue;
+      goto fetch;
     }
 
     if (opcode == 030) {       /* register generic */
@@ -6642,9 +6606,9 @@ keys = 14200, modals=100177
 	TRACE(T_FLOW, " ABQ\n");
 	ea = apea(NULL);
 	if (abq(ea, crs[dr*2], RP))
-	  crs[KEYS] &= ~0100;
+	  CLEAREQ;
 	else
-	  crs[KEYS] |= 0100;
+	  SETEQ;
 	break;
 
       case 0014:
@@ -6666,9 +6630,9 @@ keys = 14200, modals=100177
 	TRACE(T_FLOW, " ATQ\n");
 	ea = apea(NULL);
 	if (atq(ea, crs[dr*2], RP))
-	  crs[KEYS] &= ~0100;
+	  CLEAREQ;
 	else
-	  crs[KEYS] |= 0100;
+	  SETEQ;
 	break;
 
       case 0026:
@@ -6875,7 +6839,7 @@ keys = 14200, modals=100177
 
       case 0101:
 	TRACE(T_FLOW, " INTH 0\n");
-	if (prieee8(crsl+FAC0, &tempd) && -327688.0 <= tempd && tempd <= 327677.0) {
+	if (prieee8(crsl+FAC0, &tempd) && -32768.0 <= tempd && tempd <= 32767.0) {
 	  *(short *)(crs+dr*2) = tempd;
 	  CLEARC;
 	} else
@@ -6884,7 +6848,7 @@ keys = 14200, modals=100177
 
       case 0111:
 	TRACE(T_FLOW, " INTH 1\n");
-	if (prieee8(crsl+FAC1, &tempd) && -327688.0 <= tempd && tempd <= 32767.0) {
+	if (prieee8(crsl+FAC1, &tempd) && -32768.0 <= tempd && tempd <= 32767.0) {
 	  *(short *)(crs+dr*2) = tempd;
 	  CLEARC;
 	} else
@@ -7138,18 +7102,18 @@ keys = 14200, modals=100177
 	TRACE(T_FLOW, " RBQ\n");
 	ea = apea(NULL);
 	if (rbq(ea, crs+dr*2, RP))
-	  crs[KEYS] &= ~0100;
+	  CLEAREQ;
 	else
-	  crs[KEYS] |= 0100;
+	  SETEQ;
 	break;
 
       case 0132:
 	TRACE(T_FLOW, " RTQ\n");
 	ea = apea(NULL);
 	if (rtq(ea,crs+dr*2,RP))
-	  crs[KEYS] &= ~0100;
+	  CLEAREQ;
 	else
-	  crs[KEYS] |= 0100;
+	  SETEQ;
 	break;
 
       case 0076:
@@ -7249,9 +7213,9 @@ keys = 14200, modals=100177
 	ea = apea(NULL);
 	if (get32(ea) == crsl[dr+1]) {
 	  put32(crsl[dr], ea);
-	  crs[KEYS] |= 0100;       /* set EQ */
+	  SETEQ;
 	} else 
-	  crs[KEYS] &= ~0100;      /* reset EQ */
+	  CLEAREQ;
 	break;
 
       case 0136:
@@ -7259,9 +7223,9 @@ keys = 14200, modals=100177
 	ea = apea(NULL);
 	if (get16(ea) == (crs[dr*2+1])) {
 	  put16(crs[dr*2], ea);
-	  crs[KEYS] |= 0100;       /* set EQ */
+	  SETEQ;
 	} else 
-	  crs[KEYS] &= ~0100;      /* reset EQ */
+	  CLEAREQ;
 	break;
 
       case 0027:
@@ -7282,9 +7246,9 @@ keys = 14200, modals=100177
       case 0170:
 	TRACE(T_FLOW, " TCNP\n");
 	if ((crsl[dr] & 0x1FFFFFFF) == 0)
-	  crs[KEYS] |= 0100;
+	  SETEQ;
 	else
-	  crs[KEYS] &= ~0100;
+	  CLEAREQ;
 	break;
 
       case 0163:
@@ -7319,7 +7283,7 @@ keys = 14200, modals=100177
 	warn("IXX 030");
 	fault(ILLINSTFAULT, RPL, RP);
       }
-      continue;
+      goto fetch;
     }
 
     ea = ea32i(earp, inst, &immu32, &immu64);
@@ -7336,7 +7300,7 @@ keys = 14200, modals=100177
 	crsl[dr] = immu32;
       else
 	crsl[dr] = get32(ea);
-      continue;
+      goto fetch;
 
     case 002:
       TRACE(T_FLOW, " A\n");
@@ -7345,7 +7309,7 @@ keys = 14200, modals=100177
       else
         utempl = get32(ea);
       add32(crsl+dr, utempl, 0, ea);
-      continue;
+      goto fetch;
 
     case 003:
       TRACE(T_FLOW, " N\n");
@@ -7353,7 +7317,7 @@ keys = 14200, modals=100177
 	crsl[dr] &= immu32;
       else
         crsl[dr] &= get32(ea);
-      continue;
+      goto fetch;
 
     case 004:
       TRACE(T_FLOW, " LHL1\n");
@@ -7361,7 +7325,7 @@ keys = 14200, modals=100177
 	crs[dr*2] = (immu32 >> 16) << 1;
       else
 	crs[dr*2] = get16(ea) << 1;
-      continue;
+      goto fetch;
 
     case 005:
       TRACE(T_FLOW, " SHL\n");
@@ -7385,7 +7349,7 @@ keys = 14200, modals=100177
 	warn("I-mode SHL switch?");
 	fault(ILLINSTFAULT, RPL, RP);
       }
-      continue;
+      goto fetch;
 
     case 006:  /* Special MR FP format */
       /* FL, DFL, FC, DFC */
@@ -7478,7 +7442,7 @@ keys = 14200, modals=100177
 	warn("I-mode 006 switch?");
 	fault(ILLINSTFAULT, RPL, RP);
       }
-      continue;
+      goto fetch;
 
     case 007:
       warn("I-mode opcode 007?");
@@ -7495,7 +7459,7 @@ keys = 14200, modals=100177
 	crs[dr*2] = immu32 >> 16;
       } else
 	crs[dr*2] = get16(ea);
-      continue;
+      goto fetch;
 
     case 012:
       TRACE(T_FLOW, " AH\n");
@@ -7504,7 +7468,7 @@ keys = 14200, modals=100177
       else
         utempa = get16(ea);
       add16(crs+dr*2, utempa, 0, ea);
-      continue;
+      goto fetch;
 
     case 013:
       TRACE(T_FLOW, " NH\n");
@@ -7512,7 +7476,7 @@ keys = 14200, modals=100177
 	crs[dr*2] &= (immu32 >> 16);
       else
         crs[dr*2] &= get16(ea);
-      continue;
+      goto fetch;
 
     case 014:
       TRACE(T_FLOW, " LHL2\n");
@@ -7520,7 +7484,7 @@ keys = 14200, modals=100177
 	crs[dr*2] = (immu32 >> 16) << 2;
       else
 	crs[dr*2] = get16(ea) << 2;
-      continue;
+      goto fetch;
 
     case 015:
       TRACE(T_FLOW, " SHA\n");
@@ -7547,7 +7511,7 @@ keys = 14200, modals=100177
       default:
 	fatal("SHA?");
       }
-      continue;
+      goto fetch;
 
     case 016:  /* Special MR FP format */
       /* FST, DFST, FA, DFA */
@@ -7633,7 +7597,7 @@ keys = 14200, modals=100177
 	warn("I-mode 016 switch?");
 	fault(ILLINSTFAULT, RPL, RP);
       }
-      continue;
+      goto fetch;
 
     case 017:
       warn("I-mode opcode 017?");
@@ -7649,7 +7613,7 @@ keys = 14200, modals=100177
 	crsl[(inst >> 2) & 7] = crsl[dr];
       else
 	put32(crsl[dr],ea);
-      continue;
+      goto fetch;
 
     case 022:
       TRACE(T_FLOW, " S\n");
@@ -7658,7 +7622,7 @@ keys = 14200, modals=100177
       else
         utempl = get32(ea);
       add32(crsl+dr, ~utempl, 1, ea);
-      continue;
+      goto fetch;
 
     case 023:
       TRACE(T_FLOW, " O\n");
@@ -7666,7 +7630,7 @@ keys = 14200, modals=100177
 	crsl[dr] |= immu32;
       else
         crsl[dr] |= get32(ea);
-      continue;
+      goto fetch;
 
     case 024:
       TRACE(T_FLOW, " ROT\n");
@@ -7690,7 +7654,7 @@ keys = 14200, modals=100177
 	warn("I-mode ROT switch?");
 	fault(ILLINSTFAULT, RPL, RP);
       }
-      continue;
+      goto fetch;
 
     case 025:
       warn("I-mode opcode 025?");
@@ -7798,7 +7762,7 @@ keys = 14200, modals=100177
 	warn("I-mode 026 switch?");
 	fault(ILLINSTFAULT, RPL, RP);
       }
-      continue;
+      goto fetch;
 
     case 027:
       warn("I-mode opcode 027?");
@@ -7814,7 +7778,7 @@ keys = 14200, modals=100177
 	crs[((inst >> 2) & 7)*2] = crs[dr*2];
       else
 	put16(crs[dr*2], ea);
-      continue;
+      goto fetch;
 
     case 032:
       TRACE(T_FLOW, " SH\n");
@@ -7823,7 +7787,7 @@ keys = 14200, modals=100177
       else
         utempa = get16(ea);
       add16(crs+dr*2, ~utempa, 1, ea);
-      continue;
+      goto fetch;
 
     case 033:
       TRACE(T_FLOW, " OH\n");
@@ -7831,12 +7795,12 @@ keys = 14200, modals=100177
 	crs[dr*2] |= (immu32 >> 16);
       else
         crs[dr*2] |= get16(ea);
-      continue;
+      goto fetch;
 
     case 034:
       TRACE(T_FLOW, " EIO\n");
       pio(ea & 0xFFFF);
-      continue;
+      goto fetch;
 
     case 035:
       TRACE(T_FLOW, " LHL3\n");
@@ -7844,7 +7808,7 @@ keys = 14200, modals=100177
 	crs[dr*2] = (immu32 >> 16) << 3;
       else
 	crs[dr*2] = get16(ea) << 3;
-      continue;
+      goto fetch;
 
     case 036:  /* Special MR FP format */
       /* FD, DFD, QFLD, QFST, QFSB, QFAD */
@@ -7901,7 +7865,7 @@ keys = 14200, modals=100177
 	warn("I-mode 036 switch?");
 	fault(ILLINSTFAULT, RPL, RP);
       }
-      continue;
+      goto fetch;
 
     case 037:
       warn("I-mode opcode 037?");
@@ -7921,7 +7885,7 @@ keys = 14200, modals=100177
 	crsl[dr] = get32(ea);
 	put32(utempl, ea);
       }
-      continue;
+      goto fetch;
 
     case 042:
       TRACE(T_FLOW, " M\n");
@@ -7932,7 +7896,7 @@ keys = 14200, modals=100177
         templ = get32(ea);
       *(long long *)(crsl+dr) = (long long)templ * (long long)(*(int *)(crsl+dr));
       CLEARC;
-      continue;
+      goto fetch;
 
     case 043:
       TRACE(T_FLOW, " X\n");
@@ -7940,12 +7904,12 @@ keys = 14200, modals=100177
 	crsl[dr] ^= immu32;
       else
         crsl[dr] ^= get32(ea);
-      continue;
+      goto fetch;
 
     case 044:
       TRACE(T_FLOW, " LDAR\n");
       crsl[dr] = ldar(ea);
-      continue;
+      goto fetch;
 
     case 045:
       if (*(int *)&ea < 0) {
@@ -7968,12 +7932,12 @@ keys = 14200, modals=100177
 	  utempa >>= 8;
 	crs[dr*2] = utempa;
 	if (utempa == 0)
-	  crs[KEYS] |= 0100;
+	  SETEQ;
 	else
-	  crs[KEYS] &= ~0100;
+	  CLEAREQ;
 	TRACE(T_INST, " after load, keys=%o, ea=%o/%o, utempa=0x%x, dr=%d, [dr]=0x%x\n", crs[KEYS], ea>>16, ea&0xFFFF, utempa, dr, crsl[dr]);
       }
-      continue;
+      goto fetch;
 
     case 046:  /* I special MR, GR format: IM, PCL, EALB, ZM, TM, QFMP, QFDV, QFC */
       switch (dr) {
@@ -8045,7 +8009,7 @@ imodepcl:
 	warn("I-mode 006 switch?");
 	fault(ILLINSTFAULT, RPL, RP);
       }
-      continue;
+      goto fetch;
 
     case 047:
       warn("I-mode opcode 047?");
@@ -8065,7 +8029,7 @@ imodepcl:
 	crs[dr*2] = get16(ea);
 	put16(utempa, ea);
       }
-      continue;
+      goto fetch;
 
     case 052:
       TRACE(T_FLOW, " MH\n");
@@ -8075,7 +8039,7 @@ imodepcl:
         tempa = get16(ea);
       crsl[dr] = *(short *)(crs+dr*2) * tempa;
       CLEARC;
-      continue;
+      goto fetch;
 
     case 053:
       TRACE(T_FLOW, " XH\n");
@@ -8083,12 +8047,12 @@ imodepcl:
 	crs[dr*2] ^= (immu32 >> 16);
       else
         crs[dr*2] ^= get16(ea);
-      continue;
+      goto fetch;
 
     case 054:
       TRACE(T_FLOW, " STAR\n");
       star(crsl[dr], ea);
-      continue;
+      goto fetch;
 
     case 055:
       if (*(int *)&ea < 0) {
@@ -8107,7 +8071,7 @@ imodepcl:
 	  utempa = (crs[dr*2] << 8) | (utempa & 0xFF);
 	put16(utempa, ea);
       }
-      continue;
+      goto fetch;
 
     case 056:  /* I special MR, GR format: IMH, JMP, EAXB, ZMH, TMH */
       switch (dr) {
@@ -8146,7 +8110,7 @@ imodepcl:
       default:
 	fault(ILLINSTFAULT, RPL, RP);
       }
-      continue;
+      goto fetch;
 
     case 057:
       warn("I-mode opcode 057?");
@@ -8170,7 +8134,7 @@ imodepcl:
 	SETEQ;
       else if (*(int *)(crsl+dr) < *(int *)&utempl)
 	SETLT;
-      continue;
+      goto fetch;
 
     case 062:
       TRACE(T_FLOW, " D\n");
@@ -8190,7 +8154,7 @@ imodepcl:
 	  mathexception('i', FC_INT_OFLOW, 0);
       } else
 	mathexception('i', FC_INT_ZDIV, 0);
-      continue;
+      goto fetch;
 
     case 063:
       TRACE(T_FLOW, " EAR\n");
@@ -8200,12 +8164,12 @@ imodepcl:
 	warn("Immediate mode EAR?");
 	fault(ILLINSTFAULT, RPL, RP);
       }
-      continue;
+      goto fetch;
 
     case 064:
       TRACE(T_FLOW, " MIA\n");
       fault(UIIFAULT, RPL, RP);
-      continue;
+      goto fetch;
 
     case 065:
       TRACE(T_FLOW, " LIP\n");
@@ -8213,7 +8177,7 @@ imodepcl:
       if (utempl & 0x80000000)
 	fault(POINTERFAULT, utempl>>16, ea);
       crsl[dr] = utempl | (RP & RINGMASK32);  /* CPU.AMGRR, cpuid=26+ */
-      continue;
+      goto fetch;
 
     case 066:  /* I-mode special MR: DM, JSXB */
       switch (dr) {
@@ -8238,7 +8202,7 @@ imodepcl:
       default:
 	fault(ILLINSTFAULT, RPL, RP);
       }
-      continue;
+      goto fetch;
 
     case 067:
       warn("I-mode opcode 067?");
@@ -8262,7 +8226,7 @@ imodepcl:
 	SETEQ;
       else if (*(short *)(crs+dr*2) < *(short *)&utempa)
 	SETLT;
-      continue;
+      goto fetch;
 
     case 072:
       TRACE(T_FLOW, " DH\n");
@@ -8280,18 +8244,18 @@ imodepcl:
 	  mathexception('i', FC_INT_OFLOW, 0);
       } else
 	mathexception('i', FC_INT_ZDIV, 0);
-      continue;
+      goto fetch;
 
     case 073:
       TRACE(T_FLOW, " JSR\n");
       crs[dr*2] = RPL;
       RP = ea;
-      continue;
+      goto fetch;
 
     case 074:
       TRACE(T_FLOW, " MIB\n");
       fault(UIIFAULT, RPL, RP);
-      continue;
+      goto fetch;
 
     case 075:
       TRACE(T_FLOW, " AIP\n");
@@ -8304,7 +8268,7 @@ imodepcl:
 	fault(POINTERFAULT, utempl>>16, ea);
       /* IXX: ISG says C & L are set, ring needs to be weakened */
       crsl[dr] = utempl;
-      continue;
+      goto fetch;
 
     case 076:  /* I-mode special MR: DMH, TCNP */
       switch (dr) {
@@ -8326,7 +8290,7 @@ imodepcl:
 	  if ((get32(ea) & 0x1FFFFFFF) == 0)
 	    SETEQ;
 	  else
-	    crs[KEYS] &= ~0100;   /* clear EQ */
+	    CLEAREQ;
 	else
 	  fault(UIIFAULT, RPL, RP);
 	break;
@@ -8334,7 +8298,7 @@ imodepcl:
       default:
 	fault(ILLINSTFAULT, RPL, RP);
       }
-      continue;
+      goto fetch;
 
     case 077:
       warn("I-mode opcode 077");
@@ -8350,7 +8314,7 @@ nonimode:
 
     if (!(crs[KEYS] & 010000) && (inst & 036000) == 030000) {
       pio(inst);
-      continue;
+      goto fetch;
     }
 
     /* get x bit and adjust opcode so that PMA manual opcode
@@ -8423,7 +8387,7 @@ nonimode:
     case 00100:
       TRACE(T_FLOW, " JMP\n");
       RP = ea;
-      continue;
+      goto fetch;
 
     /* NOTE: don't use get32 for DLD/DST, because it doesn't handle register
        address traps */
@@ -8436,7 +8400,7 @@ nonimode:
       } else {
 	TRACE(T_FLOW, " LDA ='%o/%d\n", crs[A], *(short *)(crs+A));
       }
-      continue;
+      goto fetch;
 
     case 00400:
       put16(crs[A],ea);
@@ -8446,7 +8410,7 @@ nonimode:
       } else {
 	TRACE(T_FLOW, " STA\n");
       }
-      continue;
+      goto fetch;
 
     /* NOTE: EQ and LT can be set in the same instruction if overflow
        occurs, for example, '100000+'100000 */
@@ -8480,7 +8444,7 @@ nonimode:
 	} else if (*(int *)(crs+L) < 0)
 	  SETLT;
       }
-      continue;
+      goto fetch;
 
     case 00700:
       crs[KEYS] &= ~0120300;   /* clear C, L, and CC */
@@ -8511,25 +8475,25 @@ nonimode:
 	} else if (*(int *)(crs+L) < 0)
 	  SETLT;
       }
-      continue;
+      goto fetch;
 
     case 00300:
       m = get16(ea);
       TRACE(T_FLOW, " ANA ='%o\n",m);
       crs[A] &= m;
-      continue;
+      goto fetch;
 
     case 00500:
       m = get16(ea);
       TRACE(T_FLOW, " ERA ='%o\n", m);
       crs[A] ^= m;
-      continue;
+      goto fetch;
 
     case 00302:
       m = get16(ea);
       TRACE(T_FLOW, " ORA ='%o\n", m);
       crs[A] |= m;
-      continue;
+      goto fetch;
 
     case 01000:
       TRACE(T_FLOW, " JST\n");
@@ -8547,7 +8511,7 @@ nonimode:
       RP = INCVA(ea,1);
       if ((RP & RINGMASK32) == 0)
 	inhcount = 1;
-      continue;
+      goto fetch;
 
     case 01100:
       m = get16(ea);
@@ -8584,7 +8548,7 @@ nonimode:
       }
       XSETL(0);
 #endif
-      continue;
+      goto fetch;
 
     case 01200:
       TRACE(T_FLOW, " IRS\n");
@@ -8592,31 +8556,31 @@ nonimode:
       put16(m,ea);
       if (m == 0)
 	RPL++;
-      continue;
+      goto fetch;
 
     case 01300:
       TRACE(T_FLOW, " IMA\n");
       m = get16(ea);
       put16(crs[A],ea);
       crs[A] = m;
-      continue;
+      goto fetch;
 
     case 01400:
       TRACE(T_FLOW, " JSY\n");
       crs[Y] = RPL;
       RP = ea;
-      continue;
+      goto fetch;
 
     case 01402:
       TRACE(T_FLOW, " JSXB\n");
       *(unsigned int *)(crs+XB) = RP;
       RP = ea;
-      continue;
+      goto fetch;
 
     case 01500:
       TRACE(T_FLOW, " STX\n");
       put16(crs[X],ea);
-      continue;
+      goto fetch;
 
     /* MPY can't overflow in V-mode, but in R-mode (31 bits),
        -32768*-32768 can overflow and yields 0x8000/0x0000 */
@@ -8635,7 +8599,7 @@ nonimode:
 	if (utempa == 0x8000 && m == 0x8000)
 	  mathexception('i', FC_INT_OFLOW, 0);
       }
-      continue;
+      goto fetch;
 
     case 01603:
 
@@ -8650,7 +8614,7 @@ nonimode:
       TRACE(T_FLOW, " MPL ='%o/%d\n", templ, *(int *)&templ);
       *(long long *)(crs+L) = (long long)(*(int *)(crs+L)) * (long long)templ;
       CLEARC;
-      continue;
+      goto fetch;
 
     case 01700:
       tempa = get16(ea);
@@ -8671,7 +8635,7 @@ nonimode:
 	  mathexception('i', FC_INT_OFLOW, 0);
       } else
 	mathexception('i', FC_INT_ZDIV, 0);
-      continue;
+      goto fetch;
 
     /* NOTE:  RESET QVFY, DVL runs okay with cpuid=5 (P750), but
        fails with default cpuid (P4450) */
@@ -8690,12 +8654,12 @@ nonimode:
 	  mathexception('i', FC_INT_OFLOW, 0);
       } else
 	mathexception('i', FC_INT_ZDIV, 0);
-      continue;
+      goto fetch;
 
     case 03500:
       TRACE(T_FLOW, " LDX\n");
       crs[X] = get16(ea);
-      continue;
+      goto fetch;
 
     case 00101:
       if (crs[KEYS] & 010000) {          /* V/I mode */
@@ -8705,7 +8669,7 @@ nonimode:
 	TRACE(T_FLOW, " EAA\n");
 	crs[A] = ea;
       }
-      continue;
+      goto fetch;
 
     case 00203:
       if (crs[KEYS] & 010000) {          /* V/I mode */
@@ -8716,7 +8680,7 @@ nonimode:
 	if (*(short *)(crs+A) == 0)
 	  RPL = ea;
       }
-      continue;
+      goto fetch;
 
     case 00703:
       if (crs[KEYS] & 010000) {          /* V/I mode */
@@ -8728,7 +8692,7 @@ nonimode:
 	if (*(short *)(crs+A) >= 0)
 	  RPL = ea;
       }
-      continue;
+      goto fetch;
 
     case 01002:
 
@@ -8739,7 +8703,7 @@ nonimode:
       TRACE(T_FLOW, " CREP\n");
       put16(RPL,crs[S]++);
       RPL = ea;
-      continue;
+      goto fetch;
 
     case 00503:
       if (crs[KEYS] & 010000) {          /* V/I mode */
@@ -8751,7 +8715,7 @@ nonimode:
 	if (*(short *)(crs+A) > 0)
 	  RPL = ea;
       }
-      continue;
+      goto fetch;
 
     case 00403:
       if (crs[KEYS] & 010000) {          /* V/I mode */
@@ -8762,7 +8726,7 @@ nonimode:
 	if (*(short *)(crs+A) <= 0)
 	  RPL = ea;
       }
-      continue;
+      goto fetch;
 
     case 00603:
       if (crs[KEYS] & 010000) {          /* V/I mode */
@@ -8774,7 +8738,7 @@ nonimode:
 	if (*(short *)(crs+A) < 0)
 	  RPL = ea;
       }
-      continue;
+      goto fetch;
 
     case 00303:
       if (crs[KEYS] & 010000) {          /* V/I mode */
@@ -8786,12 +8750,12 @@ nonimode:
 	if (*(short *)(crs+A) != 0)
 	  RPL = ea;
       }
-      continue;
+      goto fetch;
 
     case 01202:
       TRACE(T_FLOW, " EAXB\n");
       *(ea_t *)(crs+XB) = ea;
-      continue;
+      goto fetch;
 
     case 01502:
       if (crs[KEYS] & 010000) {          /* V/I mode */
@@ -8803,12 +8767,12 @@ nonimode:
 	if (crs[X] != 0)
 	  RPL = ea;
       }
-      continue;
+      goto fetch;
 
     case 03502:
       TRACE(T_FLOW, " STY\n");
       put16(crs[Y],ea);
-      continue;
+      goto fetch;
 
     case 01503:
       if (crs[KEYS] & 010000) {          /* V/I mode */
@@ -8820,39 +8784,39 @@ nonimode:
 	if (crs[X] != 0)
 	  RPL = ea;
       }
-      continue;
+      goto fetch;
 
     case 01501:
       TRACE(T_FLOW, " FLX\n");
       crs[X] = get16(ea) * 2;
-      continue;
+      goto fetch;
 
     case 03501:
       TRACE(T_FLOW, " LDY\n");
       crs[Y] = get16(ea);
-      continue;
+      goto fetch;
 
     case 03503:
       TRACE(T_FLOW, " JSX\n");
       crs[X] = RPL;
       RP = ea;
-      continue;
+      goto fetch;
 
     /* XXX: this should set the L bit like subtract */
 
     case 01103:
       TRACE(T_FLOW, " CLS\n");
       templ = get32(ea);
-      crs[KEYS] &= ~0300;
+      CLEARCC;
       if (*(int *)(crs+L) == templ) {
 	RPL++;
-	crs[KEYS] |= 0100;
+	SETEQ;
       } else if (*(int *)(crs+L) < templ) {
 	RPL += 2;
-	crs[KEYS] |= 0200;
+	SETLT;
       }
       XSETL(0);
-      continue;
+      goto fetch;
 
     case 00601:
       TRACE(T_FLOW, " FAD\n");
@@ -8875,7 +8839,7 @@ nonimode:
 	  *(double *)(crsl+FAC1) = *(double *)&immu64;
       else if (*(int *)(crsl+FAC1) == 0)
 	*(double *)(crsl+FAC1) = 0.0;
-      continue;
+      goto fetch;
 
     /* this is implemented as a subtract on some models */
 
@@ -8883,7 +8847,7 @@ nonimode:
       TRACE(T_FLOW, " FCS\n");
       templ = get32(ea);
       RPL += fcs(crsl+FAC1, templ);
-      continue;
+      goto fetch;
 
     case 01701:
       TRACE(T_FLOW, " FDV\n");
@@ -8901,14 +8865,14 @@ nonimode:
 	  mathexception('f', FC_SFP_ZDIV, ea);
       } else            /* clean up (maybe) dirty zero */
 	*(double *)(crsl+FAC1) = 0.0;
-      continue;
+      goto fetch;
 
     case 0201:
       TRACE(T_FLOW, " FLD\n");
       utempl = get32(ea);
       crsl[FAC1] = utempl & 0xFFFFFF00;
       crsl[FAC1+1] = utempl & 0x00FF;
-      continue;
+      goto fetch;
 
     case 01601:
       TRACE(T_FLOW, " FMP\n");
@@ -8926,7 +8890,7 @@ nonimode:
 	  *(double *)(crsl+FAC1) = 0.0;
       } else            /* clean up (maybe) dirty zero */
 	*(double *)(crsl+FAC1) = 0.0;
-      continue;
+      goto fetch;
 
     case 00701:
       TRACE(T_FLOW, " FSB\n");
@@ -8953,7 +8917,7 @@ nonimode:
 	}
       else if (*(int *)(crsl+FAC1) == 0)
 	*(double *)(crsl+FAC1) = 0.0;
-      continue;
+      goto fetch;
 
     case 0401:
       TRACE(T_FLOW, " FST\n");
@@ -8964,7 +8928,7 @@ nonimode:
 	put32((crsl[FAC1] & 0xFFFFFF00) | (crsl[FAC1+1] & 0xFF), ea);
       else
 	mathexception('f', FC_SFP_STORE, ea);
-      continue;
+      goto fetch;
 
     case 0602:
       TRACE(T_FLOW, " DFAD\n");
@@ -8981,7 +8945,7 @@ nonimode:
 	  *(double *)(crsl+FAC1) = *(double *)&immu64;
       else if (*(int *)(crsl+FAC1) == 0)
 	*(double *)(crsl+FAC1) = 0.0;
-      continue;
+      goto fetch;
 
     case 01102:
       TRACE(T_FLOW,  " DFCS\n");
@@ -9025,7 +8989,7 @@ nonimode:
       } else if (crsl[FAC1] & 0x80000000)    /* FAC < mem */
 	RPL += 2;
 #endif
-      continue;
+      goto fetch;
 
     case 01702:
       TRACE(T_FLOW, " DFDV\n");
@@ -9043,12 +9007,12 @@ nonimode:
 	  mathexception('f', FC_DFP_ZDIV, ea);
       } else
 	*(double *)(crsl+FAC1) = 0.0;
-      continue;
+      goto fetch;
 
     case 0202:
       TRACE(T_FLOW, " DFLD\n");
       *(double *)(crs+FLTH) = get64(ea);
-      continue;
+      goto fetch;
 
     case 01602:
       TRACE(T_FLOW, " DFMP\n");
@@ -9065,7 +9029,7 @@ nonimode:
 	  *(double *)(crsl+FAC1) = 0.0;
       } else
 	*(double *)(crsl+FAC1) = 0.0;
-      continue;
+      goto fetch;
 
     case 0702:
       TRACE(T_FLOW, " DFSB\n");
@@ -9084,27 +9048,27 @@ nonimode:
 	}
       else if (*(int *)(crsl+FAC1) == 0)
 	*(double *)(crsl+FAC1) = 0.0;
-      continue;
+      goto fetch;
 
     case 0402:
       TRACE(T_FLOW, " DFST\n");
       put64(*(double *)(crs+FLTH), ea);
-      continue;
+      goto fetch;
 
     case 01302:
       TRACE(T_FLOW, " EALB\n");
       *(ea_t *)(crs+LB) = ea;
-      continue;
+      goto fetch;
 
     case 0301:
       TRACE(T_FLOW, " STLR '%06o\n", ea & 0xFFFF);
       star(*(int *)(crs+L), ea);
-      continue;
+      goto fetch;
 
     case 0501:
       TRACE(T_FLOW, " LDLR '%06o\n", ea & 0xFFFF);
       *(int *)(crs+L) = ldar(ea);
-      continue;
+      goto fetch;
 
     case 0502:
       TRACE(T_FLOW, " QFxx '%06o\n", ea & 0xFFFF);
@@ -9112,9 +9076,9 @@ nonimode:
 
     case 01401:
       TRACE(T_FLOW, " EIO\n");
-      crs[KEYS] &= ~0100;      /* reset EQ */
+      CLEAREQ;
       pio(ea & 0xFFFF);
-      continue;
+      goto fetch;
 
     case 00102:
       TRACE(T_FLOW, " XEC\n");
@@ -9130,14 +9094,13 @@ nonimode:
       utempa = crs[S];
       crs[S] -= ea;
       put16(utempa,crs[S]);
-      continue;
+      goto fetch;
 
     default:
       printf("em: unknown memory reference opcode: %o\n", opcode);
       fault(UIIFAULT, RPL, RP);
       fatal(NULL);
     }
-  }
 }
     
 
