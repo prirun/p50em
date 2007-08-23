@@ -119,14 +119,8 @@ typedef unsigned int pa_t;            /* physical address */
 
 /* procs needing forward declarations */
 
-void fault(unsigned short fvec, unsigned short fcode, ea_t faddr);
-
-
-/* the live program counter register is aka microcode scratch register TR7 */
-
-#define RP regs.sym.tr7
-#define RPH regs.u16[14]
-#define RPL regs.u16[15]
+void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) __attribute__ ((noreturn));
+void fatal(char *msg) __attribute__ ((noreturn));
 
 /* condition code macros */
 
@@ -671,17 +665,18 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
   pa_t pa;
 
   seg = SEGNO32(ea);
-  ring = ((rp | ea) >> 29) & 3;  /* current ring | ea ring = access ring */
 
   /* map virtual address if segmentation is enabled */
 
   if (crs[MODALS] & 4) {
     stlbix = STLBIX(ea);
     stlbp = stlb+stlbix;
+#if DBG
     if (stlbix >= STLBENTS) {
       printf("STLB index %d is out of range for va %o/%o!\n", stlbix, ea>>16, ea&0xffff);
       fatal(NULL);
     }
+#endif
 
     /* if the STLB entry isn't valid, or the segments don't match,
        or the segment is private and the process id doesn't match,
@@ -744,10 +739,11 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
 	iotlb[iotlbix].ppn = ppn;
       }
     }
+    ring = ((rp | ea) >> 29) & 3;  /* current ring | ea ring = access ring */
     *access = stlbp->access[ring];
     if (((intacc & *access) != intacc) || (intacc == PACC && ((*access & 3) == 0)))
       fault(ACCESSFAULT, 0, ea);
-    if (intacc == WACC && stlbp->unmodified) {
+    if (stlbp->unmodified && intacc == WACC) {
       stlbp->unmodified = 0;
       *(stlbp->pmep) &= ~020000;    /* reset unmodified bit in memory */
     }
@@ -757,7 +753,9 @@ pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
     /* XXX: this test looks bogus and should be removed, but causes boot failures related to disk I/O if removed */
     pa = ea & (MEMSIZE-1);
   }
+#if DBG
   if (pa < memlimit)
+#endif
     return pa;
   printf(" map: Memory address '%o (%o/%o) is out of range 0-'%o!\n", ea, ea>>16, ea & 0xffff, memlimit-1);
   fatal(NULL);
@@ -810,16 +808,32 @@ unsigned int mapio(ea_t ea) {
 #define put64(value, ea) (put64r((value),(ea),RP))
 #define put64r0(value, ea) (put64r((value),(ea),0))
 
-/* get16t handles address trap fetches */
+/* get16t handles 16-bit fetches that might cause address traps.
+   These traps can occur:
+   - fetching S/R mode instructions
+   - fetching V-mode instructions when RPL < 010 or 040 (seg enabled/not)
+   - in any S/R mode memory reference or address calculations
+   - in V-mode address calculations (16-bit indirects)
+   - in V-mode short instruction execution
+   These traps CANNOT occur:
+   - in I-mode
+   - in V-mode long instructions
+*/
 
-unsigned short get16t(ea_t ea, ea_t rpring) {
+unsigned short get16t(ea_t ea) {
+  unsigned short access;
+
+  /* sign bit is set for live register access */
+
+  if (*(int *)&ea >= 0)
+    return mem[mapva(ea, RACC, &access, RP)];
 
   ea = ea & 0xFFFF;
   if (ea < 7)
     return crs[memtocrs[ea]];
   if (ea == 7)                   /* PC */
     return RPL;
-  RESTRICTR(rpring);
+  RESTRICTR(RP);
   if (ea < 020)                 /* CRS */
     return crs[memtocrs[ea]];
   if (ea < 040)                 /* DMX */
@@ -831,12 +845,12 @@ unsigned short get16t(ea_t ea, ea_t rpring) {
 unsigned short get16r(ea_t ea, ea_t rpring) {
   unsigned short access;
 
-  /* sign bit is set for live register access */
+#if DBG
+  if (ea & 0x80000000)
+    warn("address trap in get16r");
+#endif
 
-  if (*(int *)&ea >= 0)
-    return mem[mapva(ea, RACC, &access, rpring)];
-  else
-    return get16t(ea, rpring);
+  return mem[mapva(ea, RACC, &access, rpring)];
 }
 
 unsigned int get32r(ea_t ea, ea_t rpring) {
@@ -846,8 +860,10 @@ unsigned int get32r(ea_t ea, ea_t rpring) {
 
   /* check for live register access */
 
+#if DBG
   if (ea & 0x80000000)
     warn("address trap in get32");
+#endif
 
   pa = mapva(ea, RACC, &access, rpring);
 
@@ -867,8 +883,10 @@ double get64r(ea_t ea, ea_t rpring) {
 
   /* check for live register access */
 
+#if DBG
   if (ea & 0x80000000)
     warn("address trap in get64");
+#endif
 
   pa = mapva(ea, RACC, &access, rpring);
 #if 0
@@ -937,39 +955,45 @@ inline unsigned short iget16(ea_t ea) {
 }
 #else
 #define iget16(ea) get16((ea))
+#define iget16t(ea) get16t((ea))
 #endif
 
-/* put16t handles address trap stores */
+/* put16t handles potentially address trapping stores */
 
-put16t(unsigned short value, ea_t ea, ea_t rpring) {
+put16t(unsigned short value, ea_t ea) {
+  unsigned short access;
 
-  ea = ea & 0xFFFF;
-  if (ea < 7)
-    crs[memtocrs[ea]] = value;
-  else if (ea == 7) {
-    RPL = value;
-  } else {
-    RESTRICTR(rpring);
-    if (ea <= 017)                      /* CRS */
+  if (*(int *)&ea >= 0)
+    mem[mapva(ea, WACC, &access, RP)] = value;
+  else {
+    ea = ea & 0xFFFF;
+    if (ea < 7)
       crs[memtocrs[ea]] = value;
-    else if (ea <= 037)                 /* DMX */
-      regs.sym.regdmx[((ea & 036) << 1) | (ea & 1)] = value;
-    else {
-      printf(" Live register store address %o too big!\n", ea);
-      fatal(NULL);
+    else if (ea == 7) {
+      RPL = value;
+    } else {
+      RESTRICTR(RP);
+      if (ea <= 017)                      /* CRS */
+	crs[memtocrs[ea]] = value;
+      else if (ea <= 037)                 /* DMX */
+	regs.sym.regdmx[((ea & 036) << 1) | (ea & 1)] = value;
+      else {
+	printf(" Live register store address %o too big!\n", ea);
+	fatal(NULL);
+      }
     }
   }
 }
 
-/* NOTE: inlining this runs slower on G4; no idea why */
-
 put16r(unsigned short value, ea_t ea, ea_t rpring) {
   unsigned short access;
 
-  if (*(int *)&ea >= 0)
-    mem[mapva(ea, WACC, &access, rpring)] = value;
-  else
-    put16t(value, ea, rpring);
+#if DBG
+  if (ea & 0x80000000)
+    warn("address trap in put16r");
+#endif
+
+  mem[mapva(ea, WACC, &access, rpring)] = value;
 }
 
 put32r(unsigned int value, ea_t ea, ea_t rpring) {
@@ -979,8 +1003,10 @@ put32r(unsigned int value, ea_t ea, ea_t rpring) {
 
   /* check for live register access */
 
+#if DBG
   if (ea & 0x80000000)
     warn("address trap in put32");
+#endif
 
   pa = mapva(ea, WACC, &access, rpring);
   if ((pa & 01777) <= 01776)
@@ -999,8 +1025,10 @@ put64r(double value, ea_t ea, ea_t rpring) {
 
   /* check for live register access */
 
+#if DBG
   if (ea & 0x80000000)
     warn("address trap in put64");
+#endif
 
   pa = mapva(ea, WACC, &access, rpring);
   if ((pa & 01777) <= 01774)
@@ -1056,7 +1084,7 @@ int (*devmap[64])(int, int, int) = {
 
 
 
-fatal(char *msg) {
+void fatal(char *msg) {
   ea_t pcbp, csea;
   unsigned short first,next,last,this;
   unsigned short cs[6];
@@ -1305,6 +1333,10 @@ void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
     }
   }
 
+  /* on longjmp, register globals are reset (PPC); save them before jumping */
+
+  grp = RP;
+  gcrsl = crsl;
   longjmp(jmpbuf, 1);
   fatal("fault: returned after longjmp\n");
 }
@@ -1334,9 +1366,9 @@ ea_t ea16s (unsigned short inst, short x) {
     if (!i)                                      /* not indirect */
       break;
     if (ea < live)
-      m = get16(0x80000000|ea);
+      m = get16t(0x80000000|ea);
     else
-      m = get16(MAKEVA(RPH,ea));
+      m = get16t(MAKEVA(RPH,ea));
     i = m & 0100000;
     x = m & 040000;
     ea = m & 037777;                             /* go indirect */
@@ -1373,9 +1405,9 @@ ea_t ea32s (unsigned short inst, short x) {
   }
   while (i) {
     if (ea < 040)
-      m = get16(0x80000000|ea);
+      m = get16t(0x80000000|ea);
     else
-      m = get16(MAKEVA(RPH,ea));
+      m = get16t(MAKEVA(RPH,ea));
     i = m & 0100000;
     ea = m & 077777;                             /* go indirect */
   }
@@ -1428,9 +1460,9 @@ ea_t ea32r64r (ea_t earp, unsigned short inst, short x, unsigned short *opcode) 
   }
   while (i) {
     if (ea < live)
-      m = get16(0x80000000|ea);
+      m = get16t(0x80000000|ea);
     else
-      m = get16(MAKEVA(rph,ea));
+      m = get16t(MAKEVA(rph,ea));
     TRACE(T_EAR, " Indirect, old ea=%o, [ea]=%o\n", ea, m);
     if ((crs[KEYS] & 016000) == 06000)           /* 32R mode? */
       i = m & 0100000;                           /* yes, multiple indirects */
@@ -1456,7 +1488,7 @@ special:
   TRACE(T_EAR, " special, new opcode=%5#0o, class=%d\n", *opcode, class);
 
   if (class < 2) {                               /* class 0/1 */
-    ea = get16(MAKEVA(RPH,RPL++));               /* get A from next word */
+    ea = get16t(MAKEVA(RPH,RPL++));               /* get A from next word */
     TRACE(T_EAR, " Class %d, new ea=%o\n", class, ea);
     if (class == 1)
       ea += crs[S];
@@ -1467,9 +1499,9 @@ special:
     }
     while (i) {
       if (ea < live)
-	m = get16(0x80000000|ea);
+	m = get16t(0x80000000|ea);
       else
-	m = get16(MAKEVA(rph,ea));
+	m = get16t(MAKEVA(rph,ea));
       TRACE(T_EAR, " Indirect, old ea=%o, [ea]=%o\n", ea, m);
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
@@ -1481,15 +1513,15 @@ special:
 
   } else if (i && x) {                           /* class 2/3, ix=11 */
     TRACE(T_EAR, " class 2/3, ix=11\n");
-    ea = get16(MAKEVA(RPH,RPL++));               /* get A from next word */
+    ea = get16t(MAKEVA(RPH,RPL++));               /* get A from next word */
     TRACE(T_EAR, " ea=%o\n", ea);
     if (class == 3)
       ea += (short) crs[S];
     while (i) {
       if (ea < live)
-	m = get16(0x80000000|ea);
+	m = get16t(0x80000000|ea);
       else
-	m = get16(MAKEVA(rph,ea));
+	m = get16t(MAKEVA(rph,ea));
       TRACE(T_EAR, " Indirect, ea=%o, [ea]=%o\n", ea, m);
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
@@ -1510,18 +1542,18 @@ special:
     TRACE(T_EAR, " Class 2/3, new ea=%o, new S=%o\n", ea, crs[S]);
     if (x) {
       if (ea < live)
-	m = get16(0x80000000|ea);
+	m = get16t(0x80000000|ea);
       else
-	m = get16(MAKEVA(rph,ea));
+	m = get16t(MAKEVA(rph,ea));
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
       ea = m & amask;
     }
     while (i) {
       if (ea < live)
-	m = get16(0x80000000|ea);
+	m = get16t(0x80000000|ea);
       else
-	m = get16(MAKEVA(rph,ea));
+	m = get16t(MAKEVA(rph,ea));
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
       else
@@ -1604,7 +1636,7 @@ ea_t apea(unsigned short *bitarg) {
 #define FC_QFP_QINQ  04003   /* 0x803 */
 
 
-mathexception(unsigned char extype, unsigned short fcode, ea_t faddr)
+void mathexception(unsigned char extype, unsigned short fcode, ea_t faddr)
 {
   crs[KEYS] |= 0x8000;
   switch (extype) {
@@ -2436,7 +2468,8 @@ ors(unsigned short pcbw) {
   rs = (modals & 0340) >> 5;
 #endif
   crsl = regs.sym.userregs[rs];
-  crs = (void *)crsl;
+  //NOTE: following is unnecessary because crs is an alias for crsl
+  //crs = (void *)crsl;
   crs[MODALS] = modals;
   TRACE(T_PX, "ors: rs = %d, reg set in modals = %d, modals = %o\n", rs, (crs[MODALS] & 0340)>>5, crs[MODALS]);
 #if 0
@@ -2893,7 +2926,6 @@ lpsw() {
     /* not sure about doing this... */
     printf("WARNING: LPSW changed current register set: current modals=%o, new modals=%o\n", crs[MODALS], m);
     crsl = regs.sym.userregs[(m & 0340) >> 5];
-    crs = (void *)crsl;
 #endif
   }
 
@@ -3608,8 +3640,7 @@ main (int argc, char **argv) {
   for (i=0; i < 32*REGSETS; i++)
     regs.u32[i] = 0;
 
-  crs = (void *)regs.sym.userregs[0]; /* first user register set */
-  crsl = (void *)crs;
+  crsl = (void *)regs.sym.userregs[0]; /* first user register set */
   
   crs[MODALS] = 0;                    /* interrupts inhibited */
   newkeys(0);
@@ -3927,8 +3958,12 @@ For disk boots, the last 3 digits can be:\n\
   /* main instruction decode loop
      faults longjmp here: the top of the instruction fetch loop */
 
+  grp = RP;
+  gcrsl = crsl;
   if (setjmp(jmpbuf))
     ;
+  crsl = gcrsl;         /* restore dedicated registers after longjmp */
+  RP = grp;
 
 fetch:
 
@@ -4081,13 +4116,24 @@ fetch:
      to this is if the machine is operating in 32I mode."
 
      However, if this code is enabled, the Primos boot fails very
-     early, before verifying memory.  */
+     early, before verifying memory.
 
-  if ((ea & 0xFFFF) < 040)
+     NOTE 8/21/07: I think the problem here is that the test should
+     be:
+
+     if !i-mode
+       if segmented and ealow < 010 or !segmented and ealow < 040
+         set ea to trap
+  */
+
+  if ((ea & 0xFFFF) < 010)
     ea = 0x80000000 | (ea & 0xFFFF);
 #endif
 
-  inst = iget16(ea);
+  /* the Prime allows executing instructions from register locations in
+     R-mode (BASIC TRACE ON does this), so iget16t is needed here */
+
+  inst = iget16t(ea);
   RPL++;
   instcount++;
 
@@ -8393,20 +8439,20 @@ nonimode:
        address traps */
 
     case 00200:
-      crs[A] = get16(ea);
+      crs[A] = get16t(ea);
       if ((crs[KEYS] & 050000) == 040000) {  /* R-mode and DP */
 	TRACE(T_FLOW, " DLD\n");
-	crs[B] = get16(INCVA(ea,1));
+	crs[B] = get16t(INCVA(ea,1));
       } else {
 	TRACE(T_FLOW, " LDA ='%o/%d\n", crs[A], *(short *)(crs+A));
       }
       goto fetch;
 
     case 00400:
-      put16(crs[A],ea);
+      put16t(crs[A],ea);
       if ((crs[KEYS] & 050000) == 040000) {
 	TRACE(T_FLOW, " DST\n");
-	put16(crs[B],INCVA(ea,1));
+	put16t(crs[B],INCVA(ea,1));
       } else {
 	TRACE(T_FLOW, " STA\n");
       }
@@ -8418,13 +8464,13 @@ nonimode:
     case 00600:
       crs[KEYS] &= ~0120300;                 /* clear C, L, LT, EQ */
       utempa = crs[A];
-      m = get16(ea);
+      m = get16t(ea);
       if ((crs[KEYS] & 050000) != 040000) {     /* V/I mode or SP */
 	TRACE(T_FLOW, " ADD ='%o/%d\n", m, *(short *)&m);
 	add16(crs+A, m, 0, ea);
       } else {                                  /* R-mode and DP */
 	TRACE(T_FLOW, " DAD\n");
-	crs[B] += get16(INCVA(ea,1));
+	crs[B] += get16t(INCVA(ea,1));
 	utempl = crs[A];
 	if (crs[B] & 0x8000) {
 	  utempl++;
@@ -8449,13 +8495,13 @@ nonimode:
     case 00700:
       crs[KEYS] &= ~0120300;   /* clear C, L, and CC */
       utempa = crs[A];
-      m = get16(ea);
+      m = get16t(ea);
       if ((crs[KEYS] & 050000) != 040000) {
 	TRACE(T_FLOW, " SUB ='%o/%d\n", m, *(short *)&m);
 	add16(crs+A, ~m, 1, ea);
       } else {
 	TRACE(T_FLOW, " DSB\n");
-	crs[B] -= get16(INCVA(ea,1));
+	crs[B] -= get16t(INCVA(ea,1));
 	utempl = crs[A];
 	if (crs[B] & 0x8000) {
 	  utempl += 0xFFFF;
@@ -8478,19 +8524,19 @@ nonimode:
       goto fetch;
 
     case 00300:
-      m = get16(ea);
+      m = get16t(ea);
       TRACE(T_FLOW, " ANA ='%o\n",m);
       crs[A] &= m;
       goto fetch;
 
     case 00500:
-      m = get16(ea);
+      m = get16t(ea);
       TRACE(T_FLOW, " ERA ='%o\n", m);
       crs[A] ^= m;
       goto fetch;
 
     case 00302:
-      m = get16(ea);
+      m = get16t(ea);
       TRACE(T_FLOW, " ORA ='%o\n", m);
       crs[A] |= m;
       goto fetch;
@@ -8506,15 +8552,15 @@ nonimode:
       if (amask == 0177777)
 	m = RPL;
       else
-	m = (get16(ea) & ~amask) | RPL;
-      put16(m, ea);
+	m = (get16t(ea) & ~amask) | RPL;
+      put16t(m, ea);
       RP = INCVA(ea,1);
       if ((RP & RINGMASK32) == 0)
 	inhcount = 1;
       goto fetch;
 
     case 01100:
-      m = get16(ea);
+      m = get16t(ea);
       TRACE(T_FLOW, " CAS ='%o/%d\n", m, *(short *)&m);
 #if 1
       crs[KEYS] &= ~020300;   /* clear L, and CC */
@@ -8552,16 +8598,16 @@ nonimode:
 
     case 01200:
       TRACE(T_FLOW, " IRS\n");
-      m = get16(ea) + 1;
-      put16(m,ea);
+      m = get16t(ea) + 1;
+      put16t(m,ea);
       if (m == 0)
 	RPL++;
       goto fetch;
 
     case 01300:
       TRACE(T_FLOW, " IMA\n");
-      m = get16(ea);
-      put16(crs[A],ea);
+      m = get16t(ea);
+      put16t(crs[A],ea);
       crs[A] = m;
       goto fetch;
 
@@ -8579,14 +8625,14 @@ nonimode:
 
     case 01500:
       TRACE(T_FLOW, " STX\n");
-      put16(crs[X],ea);
+      put16t(crs[X],ea);
       goto fetch;
 
     /* MPY can't overflow in V-mode, but in R-mode (31 bits),
        -32768*-32768 can overflow and yields 0x8000/0x0000 */
 
     case 01600:
-      m = get16(ea);
+      m = get16t(ea);
       TRACE(T_FLOW, " MPY ='%o/%d\n", m, *(short *)&m);
       templ = *(short *)(crs+A) * *(short *)&m;
       CLEARC;
@@ -8617,7 +8663,7 @@ nonimode:
       goto fetch;
 
     case 01700:
-      tempa = get16(ea);
+      tempa = get16t(ea);
       TRACE(T_FLOW, " DIV ='%o/%d\n", *(unsigned short *)&tempa, tempa);
       if (crs[KEYS] & 010000) {          /* V/I mode */
 	templ = *(int *)(crs+A);
@@ -8658,7 +8704,7 @@ nonimode:
 
     case 03500:
       TRACE(T_FLOW, " LDX\n");
-      crs[X] = get16(ea);
+      crs[X] = get16t(ea);
       goto fetch;
 
     case 00101:
@@ -8701,7 +8747,7 @@ nonimode:
       if (crs[KEYS] & 010000)            /* V/I mode */
 	goto imodepcl;
       TRACE(T_FLOW, " CREP\n");
-      put16(RPL,crs[S]++);
+      put16t(RPL,crs[S]++);
       RPL = ea;
       goto fetch;
 
@@ -8976,7 +9022,7 @@ nonimode:
 
       utempl = get32(ea);
       if ((crsl[FAC1] & 0x80000000) == (utempl & 0x80000000)) {
-	m = get16(INCVA(ea,3));              /* m = FAC exponent */
+	m = get16t(INCVA(ea,3));              /* m = FAC exponent */
 	if (crs[FEXP] == m)
 	  if (crsl[FAC1] == utempl)
 	    RPL += 1;
@@ -9082,9 +9128,9 @@ nonimode:
 
     case 00102:
       TRACE(T_FLOW, " XEC\n");
-      utempa = get16(ea);
+      utempa = get16t(ea);
       //utempl = RP-2;
-      //printf("RPL %o/%o: XEC instruction %o|%o, ea is %o/%o, new inst = %o \n", utempl>>16, utempl&0xFFFF, inst, get16(utempl+1), ea>>16, ea&0xFFFF, utempa);
+      //printf("RPL %o/%o: XEC instruction %o|%o, ea is %o/%o, new inst = %o \n", utempl>>16, utempl&0xFFFF, inst, get16t(utempl+1), ea>>16, ea&0xFFFF, utempa);
       inst = utempa;
       earp = INCVA(ea,1);
       goto xec;
@@ -9093,7 +9139,7 @@ nonimode:
       TRACE(T_FLOW, " ENTR\n");
       utempa = crs[S];
       crs[S] -= ea;
-      put16(utempa,crs[S]);
+      put16t(utempa,crs[S]);
       goto fetch;
 
     default:

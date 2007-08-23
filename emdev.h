@@ -637,23 +637,28 @@ readasr:
     15 = 1 for Unit 2
     16 = 1 for Unit 3
 
+    If the tape device file is empty, then BOT and EOT occur together.
+    But, this doesn't happen with real magtapes, and some Prime software
+    doesn't like it (Rev 23 Magsav+).  So instead of returning EOT when
+    positioned to BOT, we return a read error, like a real tape would.
+
 */
 
-int mtread (int fd, unsigned short *iobuf, int nw, int fw, int *mtstat) {
+int mtread (int fd, unsigned short *iobuf, int nw, int cmd, int *mtstat) {
   unsigned char buf[4];
   int n,reclen,reclen2,bytestoread;
 
   TRACE(T_TIO, " mtread, nw=%d, initial tape status is 0x%04x\n", nw, *mtstat);
-  if (fw) {
+  if (cmd & 0x80) {                 /* forward motion */
     if (*mtstat & 0x20)             /* already at EOT, can't read */
       return 0;
     n = read(fd, buf, 4);
     TRACE(T_TIO, " mtread read foward, %d bytes for reclen\n", n);
     if (n == 0) {                   /* now we're at EOT */
       if (*mtstat & 0x8)            /* were we at BOT? */
-	*mtstat |= 0x200;           /* yes, return error */
+	*mtstat |= 0x200;           /* yes, return error instead of EOT */
       else
-	*mtstat |= 0x20;            /* no, return EOT */
+	*mtstat |= 0x20;            /* no, EOT is okay now */
       return 0;
     }
     *mtstat &= ~8;                   /* not at BOT now */
@@ -703,7 +708,7 @@ fmterr:
 
     /* now either position or read forward */
 
-    if (nw == 0) {                 /* spacing only */
+    if (cmd & 0x2000) {            /* spacing only */
       if ((n=lseek(fd, reclen, SEEK_CUR)) == -1) {
 	perror("em: unable to forward space record");
 	goto fmterr;
@@ -745,8 +750,8 @@ fmterr:
 
     /* spacing backward, see if we're at BOT */
 
-    if ((*mtstat & 8) || (lseek(fd, 0, SEEK_CUR) == 0)) {
-      *mtstat = (*mtstat | 8) & ~0x20;;   /* at BOT, not EOT */
+    if (lseek(fd, 0, SEEK_CUR) == 0) {
+      *mtstat = (*mtstat | 8) & ~0x20;   /* at BOT, clear EOT */
       return 0;
     }
 
@@ -769,6 +774,7 @@ fmterr:
     if (reclen & 0x8000)       /* error record (don't report) */
       goto repo;
     if (reclen == 0xFFFF) {
+      warn("em: devmt: read EOT backwards??");
       reclen = 0;
       goto repo;
     }
@@ -790,7 +796,7 @@ repo:
     if ((n = lseek(fd, -4, SEEK_CUR)) == -1)
       goto readerr;
     if (n == 0)
-      *mtstat |= 8;                    /* now at BOT */
+      *mtstat = (*mtstat | 8) & ~0x20;   /* at BOT, clear EOT */
     return 0;
   }
 }
@@ -1039,11 +1045,11 @@ int devmt (int class, int func, int device) {
 	  warn("Motion = 0 for tape spacing operation");
 	else if (crs[A] & 0x4000) {    /* record operation */
 	  TRACE(T_TIO, " space record, dir=%x\n", crs[A] & 0x80);
-	  mtread(unit[u].fd, iobuf, 0, crs[A] & 0x80, &unit[u].mtstat);
+	  mtread(unit[u].fd, iobuf, 0, crs[A], &unit[u].mtstat);
 	} else {                       /* file spacing operation */
 	  TRACE(T_TIO, " space file, dir=%x\n", crs[A] & 0x80);
 	  do {
-	    mtread(unit[u].fd, iobuf, 0, crs[A] & 0x80, &unit[u].mtstat);
+	    mtread(unit[u].fd, iobuf, 0, crs[A], &unit[u].mtstat);
 	  } while (!(unit[u].mtstat & 0x128));  /* FM, EOT, BOT */
 	}
 	IOSKIP;
@@ -1073,7 +1079,7 @@ int devmt (int class, int func, int device) {
 	iobufp = iobuf+2;
       } else {
 	TRACE(T_TIO, " read record\n");
-	dmxtotnw = mtread(unit[u].fd, iobuf, MAXTAPEWORDS, 1, &unit[u].mtstat);
+	dmxtotnw = mtread(unit[u].fd, iobuf, MAXTAPEWORDS, crs[A], &unit[u].mtstat);
 	iobufp = iobuf;
       }
 
@@ -1102,9 +1108,11 @@ int devmt (int class, int func, int device) {
 	    fatal("Tape write is too big");
 	  for (i=0; i < dmxnw; i++) {
 	    ioword = get16io(dmxaddr+i);
+#if 0
 	    if (i%10 == 0)
 	      TRACE(T_TIO, "\n %04d: ", i);
 	    TRACE(T_TIO, " %03o %03o", (unsigned)ioword>>8, ioword&0xff);
+#endif
 	    *iobufp++ = ioword;
 	  }
 	  TRACE(T_TIO, "\n");
@@ -1114,9 +1122,11 @@ int devmt (int class, int func, int device) {
 	    dmxnw = dmxtotnw;
 	  for (i=0; i < dmxnw; i++) {
 	    ioword = *iobufp++;
+#if 0
 	    if (i%10 == 0)
 	      TRACE(T_TIO, "\n %04d: ", i);
 	    TRACE(T_TIO, " %03o %03o", (unsigned)ioword>>8, ioword&0xff);
+#endif
 	    put16io(ioword, dmxaddr+i);
 	  }
 	  TRACE(T_TIO, "\n");

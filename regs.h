@@ -120,8 +120,60 @@
     } sym;
   } regs;
 
-unsigned short *crs;
-unsigned int *crsl;
+/* the Prime program counter (RP) and pointer to current register set (crsl)
+   can be either in a dedicated register or regular global variables.
+   Putting them in dedicated registers gives about an 11% performance boost
+   and reduces the code size from 146K to 136K */
+
+#if 1
+
+/* store RP and crsl in dedicated registers 29-30 (Power PC) */
+
+#define RP rpreg.ul
+#define RPH rpreg.s.rph
+#define RPL rpreg.s.rpl
+
+unsigned int grp;      /* global RP for restore after longjmp */
+register union {
+  struct {
+    unsigned short rph;
+    unsigned short rpl;
+  } s;
+  unsigned int ul;
+} rpreg asm ("r29");
+
+unsigned int *gcrsl;   /* global crs pointer for restore after longjmp */
+register union {
+  short *i16;
+  unsigned short *u16;
+  int *i32;
+  unsigned int *u32;
+  long long *i64;
+  unsigned long long *u64;
+} cr asm ("r30");
+
+#else
+
+/* the live program counter register is aka microcode scratch register TR7 */
+
+#define RP regs.sym.tr7
+#define RPH regs.u16[14]
+#define RPL regs.u16[15]
+#define grp RP              /* turns grp assignments into dummies */
+#define gcrsl crsl          /* turns gcrsl assignments into dummies */
+
+union {
+  short *i16;
+  unsigned short *u16;
+  int *i32;
+  unsigned int *u32;
+  long long *i64;
+  unsigned long long *u64;
+} cr;
+#endif
+
+#define crs  cr.u16
+#define crsl cr.u32
 
 /* define mapping between memory addresses and the current register set */
 
