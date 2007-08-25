@@ -1,6 +1,6 @@
 #define IMM_EA 0x80000000
 
-inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32, unsigned long long *immu64) {
+static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32, unsigned long long *immu64) {
 
   int tm, sr, br, ring;
   unsigned short d;

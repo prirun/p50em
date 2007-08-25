@@ -444,7 +444,6 @@ readasr:
 	    savetraceflags = ~0;
 	  } else {
 	    TRACEA("\nTRACE DISABLED:\n\n");
-	    dumpsegs();
 	    savetraceflags = 0;
 	  }
 	  fflush(tracefile);

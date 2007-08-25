@@ -1,7 +1,7 @@
 /* this version is derived from the flowchart in the preliminary P400
    release notes */
 
-inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned short *opcode) {
+static inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned short *opcode) {
 
   ea_t ea;                                       /* full seg/word va */
   unsigned short ea_s;                           /* eff address segno */

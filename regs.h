@@ -84,7 +84,7 @@
 #define FAC1 10
 #define BR 12
 
-  union {
+static union {
     int rs[REGSETS][32];
 
     unsigned short rs16[REGSETS][64];
@@ -133,7 +133,7 @@
 #define RPH rpreg.s.rph
 #define RPL rpreg.s.rpl
 
-unsigned int grp;      /* global RP for restore after longjmp */
+static unsigned int grp;      /* global RP for restore after longjmp */
 register union {
   struct {
     unsigned short rph;
@@ -142,7 +142,7 @@ register union {
   unsigned int ul;
 } rpreg asm ("r29");
 
-unsigned int *gcrsl;   /* global crs pointer for restore after longjmp */
+static unsigned int *gcrsl;   /* global crs pointer for restore after longjmp */
 register union {
   short *i16;
   unsigned short *u16;
@@ -162,7 +162,7 @@ register union {
 #define grp RP              /* turns grp assignments into dummies */
 #define gcrsl crsl          /* turns gcrsl assignments into dummies */
 
-union {
+static union {
   short *i16;
   unsigned short *u16;
   int *i32;
@@ -174,26 +174,6 @@ union {
 
 #define crs  cr.u16
 #define crsl cr.u32
-
-/* define mapping between memory addresses and the current register set */
-
-unsigned short memtocrs[] = {
-  X,      /* 0 = X */
-  A,      /* 1 = A */
-  B,      /* 2 = B */
-  Y,      /* 3 = Y */
-  FLTH,   /* 4 = FAC1/FLTH */
-  FLTL,   /* 5 = FAC1/FLTL */
-  FEXP,   /* 6 = FAC1/FEXP */
-  -1,     /* 7 = PC (this is in the microcode scratch register set - TR7) */
-  32,     /* 10 = unnamed */
-  FCODE,  /* 11 = FCODE */
-  FADDR+1,/* 12 = FADDR (word) */
-  16,     /* 13 = unnamed */
-  SBH,    /* 14 = unnamed (SB seg) */
-  SBL,    /* 15 = unnamed (SB word) */
-  LBH,    /* 16 = unnamed (LB seg) */
-  LBL};    /* 17 = unnamed (LB word) */
 
 #define PCBLEV 0
 #define PCBLINK 1
