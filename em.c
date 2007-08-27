@@ -117,6 +117,10 @@ OK:
 typedef unsigned int ea_t;            /* effective address */
 typedef unsigned int pa_t;            /* physical address */
 
+/* fine-grained timer stuff (thanks Jeff!) */
+
+#include "stopwatch.h"
+
 /* procs needing forward declarations */
 
 static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) __attribute__ ((noreturn));
@@ -677,6 +681,7 @@ static pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
   unsigned int dtar,sdw,staddr,ptaddr,pmaddr,ppn;
   pa_t pa;
 
+  stopwatch_push(&sw_mapva);
   seg = SEGNO32(ea);
 
   /* map virtual address if segmentation is enabled */
@@ -766,6 +771,7 @@ static pa_t mapva(ea_t ea, short intacc, unsigned short *access, ea_t rp) {
     /* XXX: this test looks bogus and should be removed, but causes boot failures related to disk I/O if removed */
     pa = ea & (MEMSIZE-1);
   }
+  stopwatch_pop(&sw_mapva);
 #if DBG
   if (pa < memlimit)
 #endif
@@ -1228,6 +1234,19 @@ static void fatal(char *msg) {
   unsigned short cs[6];
   int i;
 
+  stopwatch_stop(&sw_all);
+  printf("\n");
+  stopwatch_report(&sw_all);
+  stopwatch_report(&sw_fault);
+  stopwatch_report(&sw_ea);
+  stopwatch_report(&sw_mapva);
+  stopwatch_report(&sw_io);
+  stopwatch_report(&sw_add16);
+  stopwatch_report(&sw_zmv);
+  stopwatch_report(&sw_zmvd);
+  stopwatch_report(&sw_pcl);
+  stopwatch_report(&sw_idle);
+
   printf("Fatal error: instruction #%d at %o/%o %s: %o %o\nowner=%o %s, keys=%o, modals=%o\n", instcount, prevpc >> 16, prevpc & 0xFFFF, searchloadmap(prevpc,' '), get16(prevpc), get16(prevpc+1), crs[OWNERL], searchloadmap(*(unsigned int *)(crs+OWNER),' '), crs[KEYS], crs[MODALS]);
   
   /* dump concealed stack entries */
@@ -1313,6 +1332,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
   /* NOTE: Prime Hackers Guide says RP is backed for SVC fault, other
      docs say it is current */
 
+  stopwatch_push(&sw_fault);
   if (fvec == PROCESSFAULT || fvec == SVCFAULT || fvec == ARITHFAULT)
     faultrp = RP;
   else
@@ -3476,6 +3496,7 @@ static int add16(unsigned short *a1, unsigned short a2, unsigned short a3, ea_t 
   unsigned int utemp;
   short link, eq, lt;
 
+  stopwatch_push(&sw_add16);
   crs[KEYS] &= ~0120300;
   link = eq = lt = 0;
   uorig = *a1;                             /* save original for sign check */
@@ -3499,6 +3520,7 @@ static int add16(unsigned short *a1, unsigned short a2, unsigned short a3, ea_t 
     if (crs[KEYS] & 0400)               /* integer exceptions enabled? */
       fault(ARITHFAULT, FC_INT_OFLOW, ea);
   }
+  stopwatch_pop(&sw_add16);
 }
 
 static adlr(int dr) {
@@ -3569,12 +3591,14 @@ static pio(unsigned int inst) {
   int func;
   int device;
 
+  stopwatch_push(&sw_io);
   RESTRICT();
   class = inst >> 14;
   func = (inst >> 6) & 017;
   device = inst & 077;
   TRACE(T_INST, " pio, class=%d, func='%o, device='%o\n", class, func, device);
   devmap[device](class, func, device);
+  stopwatch_pop(&sw_io);
 }
 
 main (int argc, char **argv) {
@@ -4004,15 +4028,33 @@ For disk boots, the last 3 digits can be:\n\
     fatal(NULL);
   }
 
-  /* main instruction decode loop
-     faults longjmp here: the top of the instruction fetch loop */
+  stopwatch_init(&sw_all, "All");
+  stopwatch_init(&sw_ea, "ea");
+  stopwatch_init(&sw_mapva, "mapva");
+  stopwatch_init(&sw_add16, "add16");
+  stopwatch_init(&sw_zmv, "zmv");
+  stopwatch_init(&sw_zmvd, "zmvd");
+  stopwatch_init(&sw_io, "io");
+  stopwatch_init(&sw_pcl, "pcl");
+  stopwatch_init(&sw_fault, "fault");   sw_fault.m_bClear = 1;
+  stopwatch_init(&sw_idle, "idle");
+
+  stopwatch_start(&sw_all);
+
+  /* main instruction decode loop */
 
   grp = RP;             /* see similar assignments in fault, before longjmp */
   gcrsl = crsl;
-  if (setjmp(jmpbuf))
-    ;
-  crsl = gcrsl;         /* restore dedicated registers trashed by longjmp */
-  RP = grp;
+
+  /* faults longjmp back here: the top of the instruction fetch loop.
+     Stop the fault timer and restore dedicated registers trashed by longjmp */
+
+  if (setjmp(jmpbuf)) {              /* returns 1 on longjmp */
+    stopwatch_stop(&sw_fault);
+    crsl = gcrsl;
+    RP = grp;
+  }
+
 
 fetch:
 
@@ -4106,10 +4148,12 @@ fetch:
 
   /* poll any devices that requested a poll */
 
+  stopwatch_push(&sw_io);
   for (i=0; i<64; i++)
     if (devpoll[i] && (--devpoll[i] <= 0)) {
       devmap[i](4, 0, i);
     }
+  stopwatch_pop(&sw_io);
 
   /* is an interrupt pending, with interrupts enabled? */
 
@@ -4155,7 +4199,6 @@ fetch:
      and maintain a prefetch queue */
 
   prevpc = RP;
-  ea = RP;
 #if 0
   /* NOTE: Rev 21 Sys Arch Guide, 2nd Ed, pg 3-32 says:
 
@@ -4175,6 +4218,7 @@ fetch:
          set ea to trap
   */
 
+  ea = RP;
   if ((ea & 0xFFFF) < 010)
     ea = 0x80000000 | (ea & 0xFFFF);
 #endif
@@ -4182,7 +4226,7 @@ fetch:
   /* the Prime allows executing instructions from register locations in
      R-mode (BASIC TRACE ON does this), so iget16t is needed here */
 
-  inst = iget16t(ea);
+  inst = iget16t(RP);
   INCRP;
   instcount++;
 
@@ -4402,6 +4446,7 @@ d_tfll1:  /* 001333 */
 
 d_prtn:  /* 000611 */
   TRACE(T_FLOW, " PRTN\n");
+  stopwatch_push(&sw_pcl);
   prtn();
 
   /* if this PRTN is for a procedure being traced, disable
@@ -4418,6 +4463,7 @@ d_prtn:  /* 000611 */
 	}
 	break;
       }
+  stopwatch_pop(&sw_pcl);
   goto fetch;
 
 d_tka:  /* 001005 */
@@ -4510,7 +4556,9 @@ d_stlc:  /* 001204 */
 
 d_argt:  /* 000605 */
   TRACE(T_FLOW|T_PCL, " ARGT\n");
+  stopwatch_push(&sw_pcl);
   argt();
+  stopwatch_pop(&sw_pcl);
   goto fetch;
 
 d_calf:  /* 000705 */
@@ -4588,6 +4636,8 @@ d_calf:  /* 000705 */
   */
 
 d_zmv:  /* 001114 */
+  //traceflags = -1; /***/
+  stopwatch_push(&sw_zmv);
   TRACE(T_FLOW, " ZMV\n");
   zspace = 0240;
   if (crs[KEYS] & 020)
@@ -4634,9 +4684,13 @@ d_zmv:  /* 001114 */
   } while (!(crs[KEYS] & 0100));
   crs[KEYS] = utempa1;
 #endif
+  traceflags = 0;
+  stopwatch_pop(&sw_zmv);
   goto fetch;
 
 d_zmvd:  /* 001115 */
+  stopwatch_push(&sw_zmvd);
+  //traceflags = -1; /***/
   TRACE(T_FLOW, " ZMVD\n");
   zlen1 = GETFLR(1);
   zlen2 = zlen1;
@@ -4654,6 +4708,8 @@ d_zmvd:  /* 001115 */
     TRACE(T_INST, " zch1=%o (%c)\n", zch1, zch1&0x7f);
     ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
   }
+  stopwatch_pop(&sw_zmvd);
+  traceflags = 0;
   goto fetch;
 
   /* NOTE: ZFIL is used early after PX enabled, and can be used to cause
@@ -5556,6 +5612,7 @@ d_bdx:  /* 0140734 */
        much longer sleeps here, ie, CPU overhead is 0.7% while idle.
     */
 
+    stopwatch_start(&sw_idle);
     utempl = instpermsec*100;         /* limit delay to 100 msecs */
     for (i=0; i<64; i++)              /* check device timers */
       if (devpoll[i])                 /* poll set? */
@@ -5595,7 +5652,8 @@ d_bdx:  /* 0140734 */
       }
       instcount += actualmsec*instpermsec;
     }
-	}
+    stopwatch_stop(&sw_idle);
+  }
 #endif
   BXNE;
   goto fetch;
@@ -8052,6 +8110,7 @@ imode:
 
       case 1:
 imodepcl:
+	stopwatch_push(&sw_pcl);
 	TRACE(T_FLOW|T_PCL, " PCL %s\n", searchloadmap(ea, 'e'));
 	//TRACE(T_FLOW|T_PCL, "#%d %o/%o: PCL %o/%o\n", instcount, RPH, RPL-2, ea>>16, ea&0xFFFF);
 	if (numtraceprocs > 0 && TRACEUSER)
@@ -8064,6 +8123,7 @@ imodepcl:
 	      break;
 	    }
 	pcl(ea);
+	stopwatch_pop(&sw_pcl);
 	break;
 
       case 2:
@@ -8450,6 +8510,7 @@ nonimode:
 
     TRACE(T_INST, " opcode=%5#0o, i=%o, x=%o\n", opcode, i != 0, x != 0);
 
+    stopwatch_push(&sw_ea);
     switch (crs[KEYS] & 016000) {
     case 0:  /* 16S */
       ea = ea16s(inst, x);
@@ -8470,6 +8531,7 @@ nonimode:
       printf("Bad CPU mode in EA calculation, keys = %o\n", crs[KEYS]);
       fatal(NULL);
     }
+    stopwatch_pop(&sw_ea);
 
     TRACE(T_INST, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
 
@@ -8489,21 +8551,21 @@ nonimode:
 
     case 00200:
       crs[A] = get16t(ea);
-      if ((crs[KEYS] & 050000) == 040000) {  /* R-mode and DP */
+      if ((crs[KEYS] & 050000) != 040000) {  /* not R-mode or not DP */
+	TRACE(T_FLOW, " LDA ='%o/%d\n", crs[A], *(short *)(crs+A));
+      } else {
 	TRACE(T_FLOW, " DLD\n");
 	crs[B] = get16t(INCVA(ea,1));
-      } else {
-	TRACE(T_FLOW, " LDA ='%o/%d\n", crs[A], *(short *)(crs+A));
       }
       goto fetch;
 
     case 00400:
       put16t(crs[A],ea);
-      if ((crs[KEYS] & 050000) == 040000) {
+      if ((crs[KEYS] & 050000) != 040000) {
+	TRACE(T_FLOW, " STA\n");
+      } else {
 	TRACE(T_FLOW, " DST\n");
 	put16t(crs[B],INCVA(ea,1));
-      } else {
-	TRACE(T_FLOW, " STA\n");
       }
       goto fetch;
 
@@ -8703,12 +8765,13 @@ nonimode:
 	 This is a general problem with all instructions: they don't
 	 ensure the instruction is legal in the current mode */
 
-      if (!(crs[KEYS] & 010000))          /* V/I mode */
+      if ((crs[KEYS] & 010000)) {        /* V/I mode */
+	templ = get32(ea);
+	TRACE(T_FLOW, " MPL ='%o/%d\n", templ, *(int *)&templ);
+	*(long long *)(crs+L) = (long long)(*(int *)(crs+L)) * (long long)templ;
+	CLEARC;
+      } else 
 	fault(UIIFAULT, RPL, RP);
-      templ = get32(ea);
-      TRACE(T_FLOW, " MPL ='%o/%d\n", templ, *(int *)&templ);
-      *(long long *)(crs+L) = (long long)(*(int *)(crs+L)) * (long long)templ;
-      CLEARC;
       goto fetch;
 
     case 01700:
