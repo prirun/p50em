@@ -896,7 +896,7 @@ static unsigned int get32r(ea_t ea, ea_t rpring) {
   }
 }
 
-static double get64r(ea_t ea, ea_t rpring) {
+static long long get64r(ea_t ea, ea_t rpring) {
   pa_t pa;
   unsigned short access;
   unsigned short m[4];
@@ -946,32 +946,30 @@ static double get64r(ea_t ea, ea_t rpring) {
       fatal("Page cross error in get64r");
     }
 #endif
-  return *(double *)m;
+  return *(long long *)m;
 }
 
 /* Instruction version of get16 (can be replaced by get16 too...)
    This needs to be checked more... not sure it actually improves
-   performance all that much and is potentially dangerous.  I tried
-   using get64 (with appropriate mask changes) and performance was
-   much worse than not prefetching at all on a G4
+   performance all that much and is potentially incompatible, ie,
+   iget16t isn't implemented (V-mode executing from registers) */
 
-   NOTE: disabled 3/22/07 because an informal test showed instpermsec
-   was lower with iget16 enabled. :( */
+#if 1
+#define iget16t(ea) iget16((ea))
 
-#if 0
-inline unsigned short iget16(ea_t ea) {
+unsigned short iget16(ea_t ea) {
   static ea_t eafirst = -1;             /* ea of instruction buffer */
-  static unsigned short insts[2];       /* instruction buffer */
+  static unsigned short insts[4];       /* instruction buffer */
 
-  if (!(crs[KEYS] & 010000)) {          /* don't buffer in R-mode */
-    eafirst = -1;
-    return get16(ea);
+  if ((crs[KEYS] & 010000)) {           /* only buffer in VI-mode */
+    if ((ea & 0xFFFFFFFC) != eafirst) { /* load instruction buffer */
+      eafirst = ea & 0xFFFFFFFC;
+      *(long long *)insts = get64(eafirst);
+    }
+    return insts[ea & 3];
   }
-  if ((ea & 0xFFFFFFFE) != eafirst) {   /* load instruction buffer */
-    eafirst = ea & 0xFFFFFFFE;
-    *(int *)insts = get32(eafirst);
-  }
-  return insts[ea & 1];
+  eafirst = -1;
+  return get16t(ea);
 }
 #else
 #define iget16(ea) get16((ea))
@@ -1039,7 +1037,7 @@ static put32r(unsigned int value, ea_t ea, ea_t rpring) {
   }
 }
 
-static put64r(double value, ea_t ea, ea_t rpring) {
+static put64r(long long value, ea_t ea, ea_t rpring) {
   pa_t pa;
   unsigned short access;
   unsigned short *m;
@@ -1053,7 +1051,7 @@ static put64r(double value, ea_t ea, ea_t rpring) {
 
   pa = mapva(ea, WACC, &access, rpring);
   if ((pa & 01777) <= 01774)
-    *(double *)(mem+pa) = value;
+    *(long long *)(mem+pa) = value;
   else {
     m = (void *)&value;
     mem[pa] = m[0];
@@ -1243,6 +1241,7 @@ static void fatal(char *msg) {
   stopwatch_report(&sw_io);
   stopwatch_report(&sw_add16);
   stopwatch_report(&sw_zmv);
+  stopwatch_report(&sw_zfil);
   stopwatch_report(&sw_zmvd);
   stopwatch_report(&sw_pcl);
   stopwatch_report(&sw_idle);
@@ -1260,7 +1259,7 @@ static void fatal(char *msg) {
       this = next-6;
       csea = MAKEVA(crs[OWNERH]+csoffset, this);
       *(unsigned int *)(cs+0) = get32r0(csea+0);
-      *(double *)(cs+2) = get64r0(csea+2);
+      *(long long *)(cs+2) = get64r0(csea+2);
       printf("Fault: RP=%o/%o, keys=%06o, fcode=%o, faddr=%o/%o\n", cs[0], cs[1], cs[2], cs[3], cs[4], cs[5]);
       next = this;
     }
@@ -2148,7 +2147,7 @@ static argt() {
   /* reload the caller's base registers for EA calculations */
   
   brsave[0] = rp >> 16;    brsave[1] = 0;
-  *(double *)(brsave+2) = get64(stackfp+4);
+  *(long long *)(brsave+2) = get64(stackfp+4);
   
   argdisp = crs[Y];
   argsleft = crs[YL];
@@ -2263,8 +2262,8 @@ static pcl (ea_t ecbea) {
   } else if ((pa & 01777) <= 01750) {
     memcpy(ecb,mem+pa,sizeof(ecb));
   } else {
-    *(double *)(ecb+0) = get64(ecbea+0);
-    *(double *)(ecb+4) = get64(ecbea+4);
+    *(long long *)(ecb+0) = get64(ecbea+0);
+    *(long long *)(ecb+4) = get64(ecbea+4);
     ecb[8] = get16(ecbea+8);
   }
 
@@ -2467,7 +2466,7 @@ static void calf(ea_t ea) {
   /* get the concealed stack entries and adjust the new stack frame */
 
   *(unsigned int *)(cs+0) = get32r0(csea+0);
-  *(double *)(cs+2) = get64r0(csea+2);
+  *(long long *)(cs+2) = get64r0(csea+2);
 
   TRACE(T_FAULT, "CALF: cs entry: retpb=%o/%o, retkeys=%o, fcode=%o, faddr=%o/%o\n", cs[0], cs[1], cs[2], cs[3], cs[4], cs[5]);
 
@@ -4033,6 +4032,7 @@ For disk boots, the last 3 digits can be:\n\
   stopwatch_init(&sw_mapva, "mapva");
   stopwatch_init(&sw_add16, "add16");
   stopwatch_init(&sw_zmv, "zmv");
+  stopwatch_init(&sw_zfil, "zfil");
   stopwatch_init(&sw_zmvd, "zmvd");
   stopwatch_init(&sw_io, "io");
   stopwatch_init(&sw_pcl, "pcl");
@@ -4148,12 +4148,14 @@ fetch:
 
   /* poll any devices that requested a poll */
 
-  stopwatch_push(&sw_io);
-  for (i=0; i<64; i++)
-    if (devpoll[i] && (--devpoll[i] <= 0)) {
-      devmap[i](4, 0, i);
-    }
-  stopwatch_pop(&sw_io);
+  if ((instcount & 7) == 0) {
+    stopwatch_push(&sw_io);
+    for (i=0; i<64; i++)
+      if (devpoll[i] && (--devpoll[i] <= 0)) {
+	devmap[i](4, 0, i);
+      }
+    stopwatch_pop(&sw_io);
+  }
 
   /* is an interrupt pending, with interrupts enabled? */
 
@@ -4287,9 +4289,9 @@ xec:
 
 d_iab:  /* 000201 */
   TRACE(T_FLOW, " IAB\n");
-  tempa = crs[B];
+  utempa = crs[B];
   crs[B] = crs[A];
-  crs[A] = tempa;
+  crs[A] = utempa;
   goto fetch;
 
 d_cgt:  /* 001314 */
@@ -4316,7 +4318,7 @@ d_pidl:  /* 000305 */
 
 d_pima: /* 000015 */
   TRACE(T_FLOW, " PIMA\n");
-  templ = crsl[GR2];
+  templ = *(int *)(crsl+GR2);
   crsl[GR2] = (crsl[GR2] << 16) | (crsl[GR2] >> 16);
   templ2 = (templ << 16) >> 16;
   if (templ != templ2)
@@ -4569,8 +4571,8 @@ d_calf:  /* 000705 */
 
   /* Decimal and character instructions
 
-    IMPORTANT NOTE: when using the ZGETC and ZPUTC macros, 
-    be sure to use curly braces, ie,
+    IMPORTANT NOTE: when using the Z macros, be sure to use curly
+    braces, ie,
 
 	 Instead of:
 
@@ -4584,18 +4586,21 @@ d_calf:  /* 000705 */
 	   }
   */
 
+#define ZSTEP(zea, zlen, zcp, zclen, zacc) \
+  zcp = (unsigned char *) (mem+mapva(zea, zacc, &zaccess, RP)); \
+  zclen = 2048 - (zea & 01777)*2; \
+  if (zea & EXTMASK32) { \
+    zcp++; \
+    zclen--; \
+  } \
+  if (zclen >= zlen) \
+    zclen = zlen; \
+  else \
+    zea = (zea & 0xEFFF0000) | ((zea+0x400) & 0xFC00) \
+
 #define ZGETC(zea, zlen, zcp, zclen, zch) \
   if (zclen == 0) { \
-    zcp = (unsigned char *) (mem+mapva(zea, RACC, &zaccess, RP)); \
-    zclen = 2048 - (zea & 01777)*2; \
-    if (zea & EXTMASK32) { \
-      zcp++; \
-      zclen--; \
-    } \
-    if (zclen >= zlen) \
-      zclen = zlen; \
-    else \
-      zea = (zea & 0xEFFF0000) | ((zea+0x400) & 0xFC00); \
+    ZSTEP(zea, zlen, zcp, zclen, RACC); \
   } \
   zch = *zcp; \
   zcp++; \
@@ -4604,36 +4609,12 @@ d_calf:  /* 000705 */
 
 #define ZPUTC(zea, zlen, zcp, zclen, zch) \
   if (zclen == 0) { \
-    zcp = (unsigned char *) (mem+mapva(zea, WACC, &zaccess, RP)); \
-    zclen = 2048 - (zea & 01777)*2; \
-    if (zea & EXTMASK32) { \
-      zcp++; \
-      zclen--; \
-    } \
-    if (zclen >= zlen) \
-      zclen = zlen; \
-    else \
-      zea = (zea & 0xEFFF0000) | ((zea+0x400) & 0xFC00); \
+    ZSTEP(zea, zlen, zcp, zclen, WACC); \
   } \
   *zcp = (zch); \
   zcp++; \
   zclen--; \
   zlen--
-
-#if 1
-  /* if the high-speed code is enabled, and eafa doesn't mask the far,
-     Primos boots but emacs fails badly:
-     1. garbage display on the mode line
-     2. ^x^f won't load a file (filename is off by one character)
-     3. explore P command (dive) doesn't work
-
-     if the medium-speed code is enabled (ldc/stc loop), Primos
-     boots and emacs mostly works except:
-     1. explore P command (dive) doesn't work
-
-     if the Prime UII library is used, which is identical to the medium
-     speed loop as far as I can tell, everything works. ??  :(
-  */
 
 d_zmv:  /* 001114 */
   //traceflags = -1; /***/
@@ -4644,7 +4625,6 @@ d_zmv:  /* 001114 */
     zspace = 040;
   TRACE(T_INST, "ZMV: source=%o/%o, len=%d, dest=%o/%o, len=%d, keys=%o\n", crsl[FAR0]>>16, crsl[FAR0]&0xffff, GETFLR(0), crsl[FAR1]>>16, crsl[FAR1]&0xffff, GETFLR(1), crs[KEYS]);
 
-#if 1
   zlen1 = GETFLR(0);
   zlen2 = GETFLR(1);
   zea1 = crsl[FAR0];
@@ -4664,26 +4644,6 @@ d_zmv:  /* 001114 */
     TRACE(T_INST, " zch1=%o (%c)\n", zch1, zch1&0x7f);
     ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
   }
-#else
-  /* this should work, but emacs explore "dive" (P) breaks :(
-
-  I think what might happen is that if a fault occurs in
-  the loop because of the ldc/stc memory references, the
-  ZMVD is completely restarted but the field address/length
-  registers (and keys) have been modified and are not in
-  the same state as when the ZMVD started.  Emulating ZMVD
-  via UII works because the individual stc/ldc causing the
-  fault is restarted rather than the whole ZMVD */
-
-  utempa1 = crs[KEYS];   /* UII does this because of fault */
-  do {
-    utempa = ldc(0,0);
-    if (crs[KEYS] & 0100)
-      utempa = zspace;
-    stc(1, utempa);
-  } while (!(crs[KEYS] & 0100));
-  crs[KEYS] = utempa1;
-#endif
   traceflags = 0;
   stopwatch_pop(&sw_zmv);
   goto fetch;
@@ -4704,9 +4664,39 @@ d_zmvd:  /* 001115 */
   zclen1 = 0;
   zclen2 = 0;
   while (zlen2) {
+#if 0
+    /* this code doesn't run much faster than the 3-line ZGETC/PUTC loop,
+       and sometimes slower.  Suspect there are cache differences. */
+
+    if (zclen1 == 0) {
+      ZSTEP(zea1, zlen1, zcp1, zclen1, RACC);
+    }
+    if (zclen2 == 0) {
+      ZSTEP(zea2, zlen2, zcp2, zclen2, WACC);
+    }
+    if (zclen1 < zclen2)
+      utempa = zclen1;
+    else
+      utempa = zclen2;
+    zclen1 -= utempa;
+    zclen2 -= utempa;
+    zlen1 -= utempa;
+    zlen2 -= utempa;
+#if 1
+    /* this works */
+    while (utempa--)
+      *zcp2++ = *zcp1++;
+#else
+    /* this causes error: 
+          Coldstarting PRIMOS, Please wait...
+	  Unable to initialize gate segment.  (GATE_INIT) */
+    memcpy(zcp2, zcp1, utempa);
+#endif
+#else
     ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
     TRACE(T_INST, " zch1=%o (%c)\n", zch1, zch1&0x7f);
     ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+#endif
   }
   stopwatch_pop(&sw_zmvd);
   traceflags = 0;
@@ -4714,11 +4704,10 @@ d_zmvd:  /* 001115 */
 
   /* NOTE: ZFIL is used early after PX enabled, and can be used to cause
      a UII fault to debug CALF etc.
-
-     Could use memset(zcp2, zch2, zclen2) to fill by pieces.
-  */
+     I tried using memset, but it was much slower than a manual loop. */
 
 d_zfil:  /* 001116 */
+  stopwatch_push(&sw_zfil);
   TRACE(T_FLOW, " ZFIL\n");
   zlen2 = GETFLR(1);
   zea2 = crsl[FAR1];
@@ -4726,11 +4715,19 @@ d_zfil:  /* 001116 */
     zea2 |= EXTMASK32;
   zch2 = crs[A];
   TRACE(T_INST, " ea=%o/%o, len=%d, fill=%o (%c)\n", zea2>>16, zea2&0xffff, zlen2, zch2, zch2&0x7f);
-  //printf("ZFIL: ea=%o/%o, len=%d\n", zea2>>16, zea2&0xffff, zlen2);
   zclen2 = 0;
   while (zlen2) {
+#if 1
+    ZSTEP(zea2, zlen2, zcp2, zclen2, WACC);
+    zlen2 -= zclen2;
+    while (zclen2--) {
+      *zcp2++ = zch2;
+    }
+#else
     ZPUTC(zea2, zlen2, zcp2, zclen2, zch2);
+#endif
   }
+  stopwatch_pop(&sw_zfil);
   goto fetch;
 
 d_zcm:  /* 001117 */
@@ -5039,7 +5036,6 @@ d_xed:  /* 001112 */
       break;
   }
   goto fetch;
-#endif
 
   /* unimplemented decimal instructions:
 
@@ -5158,8 +5154,8 @@ d_stpm:  /* 000024 */
     stpm[i] = 0;
   stpm[1] = cpuid;
   ea = *(unsigned int *)(crs+XB);
-  put64(*(double *)(stpm+0), ea);
-  put64(*(double *)(stpm+4), INCVA(ea,4));
+  put64(*(long long *)(stpm+0), ea);
+  put64(*(long long *)(stpm+4), INCVA(ea,4));
   goto fetch;
 
 d_dbgill:  /*  001700, 001701 */
@@ -5824,14 +5820,22 @@ d_tya:  /* 0141124 */
 
 d_xca:  /* 0140104 */
   TRACE(T_FLOW, " XCA\n");
+#if 1
+  crsl[GR2] = crsl[GR2] >> 16;
+#else
   crs[B] = crs[A];
   crs[A] = 0;
+#endif
   goto fetch;
 
 d_xcb:  /* 0140204 */
   TRACE(T_FLOW, " XCB\n");
+#if 1
+  crsl[GR2] = crsl[GR2] << 16;
+#else
   crs[A] = crs[B];
   crs[B] = 0;
+#endif
   goto fetch;
 
 d_tca:  /* 0140407 */
@@ -7512,7 +7516,7 @@ imode:
 	dr &= 2;
 	TRACE(T_INST, " FL\n");
 	if (*(int *)&ea < 0)
-	  *(double *)(crsl+FAC0+dr) = *(double *)&immu64;
+	  *(long long *)(crsl+FAC0+dr) = immu64;
 	else {
 	  utempl = get32(ea);
 	  crsl[FAC0+dr]   = utempl & 0xFFFFFF00;
@@ -7525,9 +7529,9 @@ imode:
 	dr &= 2;
 	TRACE(T_INST, " DFL\n");
 	if (*(int *)&ea < 0)
-	  *(double *)(crsl+FAC0+dr) = *(double *)&immu64;
+	  *(long long *)(crsl+FAC0+dr) = immu64;
 	else
-	  *(double *)(crsl+FAC0+dr) = get64(ea);
+	  *(long long *)(crsl+FAC0+dr) = get64(ea);
 	break;
 
       case 4:
@@ -7546,49 +7550,8 @@ imode:
 	dr &= 2;
 	TRACE(T_INST, " DFC\n");
 	if (*(int *)&ea >= 0)
-	  *(double *)&immu64 = get64(ea);
+	  immu64 = get64(ea);
 	dfcs(crsl+FAC0+dr, immu64);
-#if 0
-	CLEARCC;
-	if (*(int *)&ea < 0)
-	  tempd2 = *(double *)&immu64;
-	else
-	  tempd2 = get64(ea);
-	if (prieee8(crsl+FAC0+dr, &tempd1) && prieee8(&tempd2, &tempd2))
-	  if (tempd1 == tempd2)
-	    SETEQ;
-	  else if (tempd1 < tempd2)
-	    SETLT;
-	  else
-	    ;
-	else
-	  mathexception('f', FC_DFP_OFLOW, ea);
-#endif
-#if 0
-      /* this is the "compare signs, exponents, fraction" method.
-	 See similar code in V-mode DFCS */
-
-      CLEARCC;
-      if (*(int *)&ea < 0)
-	utempll = immu64;
-      else
-	*(double *)&utempll = get64(ea);
-      CLEARCC;
-      if ((crsl[FAC0+dr] & 0x80000000) == (*(unsigned int *)&utempll & 0x80000000)) {
-	m = utempll & 0xffff;              /* m = operand exponent */
-	m2 = crsl[FAC0+dr+1] & 0xffff;     /* m2 = FAC exponent */
-	if (m2 == m)
-	  if (crsl[FAC0+dr] == *(unsigned int *)&utempll)
-	    SETEQ;
-	  else if (*(int *)(crsl+FAC0+dr) < *(int *)&utempll)
-	    SETLT;
-	  else
-	    ;                                /* FAC > mem: next instruction */
-	else if (*(short *)&m2 < *(short *)&m)
-	  SETLT;
-      } else if (crsl[FAC0+dr] & 0x80000000)    /* FAC < mem */
-	SETLT;
-#endif
       break;
 
       default:
@@ -7692,7 +7655,7 @@ imode:
 	dr &= 2;
 	TRACE(T_INST, " DFST\n");
 	if (*(int *)&ea >= 0)
-	  put64(*(double *)(crsl+FAC0+dr), ea);
+	  put64(*(long long *)(crsl+FAC0+dr), ea);
 	else {
 	  warn("I-mode immediate DFST?");
 	  fault(ILLINSTFAULT, RPL, RP);
@@ -7719,11 +7682,11 @@ imode:
 	      } else
 		mathexception('f', FC_SFP_OFLOW, ea);
 	  else if (tempa1 < tempa2)
-	    *(double *)(crsl+FAC0+dr) = *(double *)&immu64;
+	    *(long long *)(crsl+FAC0+dr) = immu64;
 	} else
-	    *(double *)(crsl+FAC0+dr) = *(double *)&immu64;
+	    *(long long *)(crsl+FAC0+dr) = immu64;
 	else if (*(int *)(crsl+FAC0+dr) == 0)
-	  *(double *)(crsl+FAC0+dr) = 0.0;
+	  *(long long *)(crsl+FAC0+dr) = 0;
 	break;
 
       case 5:
@@ -7732,7 +7695,7 @@ imode:
 	TRACE(T_INST, " DFA\n");
 	CLEARC;
 	if (*(int *)&ea >= 0)
-	  *(double *)&immu64 = get64(ea);
+	  immu64 = get64(ea);
 	if (*(int *)&immu64)
 	  if (*(int *)(crsl+FAC0+dr))
 	    if (prieee8(crsl+FAC0+dr, &tempd1) && prieee8(&immu64, &tempd2)) {
@@ -7741,9 +7704,9 @@ imode:
 	    } else
 	      mathexception('f', FC_DFP_OFLOW, ea);
 	  else
-	    *(double *)(crsl+FAC0+dr) = *(double *)&immu64;
+	    *(long long *)(crsl+FAC0+dr) = immu64;
 	else if (*(int *)(crsl+FAC0+dr) == 0)
-	  *(double *)(crsl+FAC0+dr) = 0.0;
+	  *(long long *)(crsl+FAC0+dr) = 0;
 	break;
 
       default:
@@ -7836,15 +7799,15 @@ imode:
 	      } else
 		mathexception('f', FC_SFP_OFLOW, ea);
 	    else if (tempa1 < tempa2) {
-	      *(double *)(crsl+FAC0+dr) = *(double *)&immu64;
+	      *(long long *)(crsl+FAC0+dr) = immu64;
 	      dfcm(crsl+FAC0+dr);
 	    }
 	  } else {
-	    *(double *)(crsl+FAC0+dr) = *(double *)&immu64;
+	    *(long long *)(crsl+FAC0+dr) = immu64;
 	    dfcm(crsl+FAC0+dr);
 	  }
 	else if (*(int *)(crsl+FAC0+dr) == 0)
-	  *(double *)(crsl+FAC0+dr) = 0.0;
+	  *(long long *)(crsl+FAC0+dr) = 0;
 	break;
 
       case 1:
@@ -7853,7 +7816,7 @@ imode:
 	TRACE(T_INST, " DFS\n");
 	CLEARC;
 	if (*(int *)&ea >= 0)
-	  *(double *)&immu64 = get64(ea);
+	  immu64 = get64(ea);
 	if (*(int *)&immu64)
 	  if (*(int *)(crsl+FAC0+dr))
 	    if (prieee8(crsl+FAC0+dr, &tempd1) && prieee8(&immu64, &tempd2)) {
@@ -7862,11 +7825,11 @@ imode:
 	    } else
 	      mathexception('f', FC_DFP_OFLOW, ea);
 	  else {
-	    *(double *)(crsl+FAC0+dr) = *(double *)&immu64;
+	    *(long long *)(crsl+FAC0+dr) = immu64;
 	    dfcm(crsl+FAC0+dr);
 	  }
 	else if (*(int *)(crsl+FAC0+dr) == 0)
-	  *(double *)(crsl+FAC0+dr) = 0.0;
+	  *(long long *)(crsl+FAC0+dr) = 0;
 	break;
 
       case 4:
@@ -7886,9 +7849,9 @@ imode:
 	    } else
 	      mathexception('f', FC_SFP_OFLOW, ea);
 	  else            /* operand = 0.0: no multiply */
-	    *(double *)(crsl+FAC0+dr) = 0.0;
+	    *(long long *)(crsl+FAC0+dr) = 0;
 	} else            /* clean up (maybe) dirty zero */
-	  *(double *)(crsl+FAC0+dr) = 0.0;
+	  *(long long *)(crsl+FAC0+dr) = 0;
 	break;
 
       case 5:
@@ -7898,7 +7861,7 @@ imode:
 	CLEARC;
 	if (*(int *)(crsl+FAC0+dr)) {
 	  if (*(int *)&ea >= 0)
-	    *(double *)&immu64 = get64(ea);
+	    immu64 = get64(ea);
 	  if (*(int *)&immu64)
 	    if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC0+dr, &tempd1)) {
 	      *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1*tempd2);
@@ -7906,9 +7869,9 @@ imode:
 	    } else
 	      mathexception('f', FC_DFP_OFLOW, ea);
 	  else             /* operand = 0.0: no multiply */
-	    *(double *)(crsl+FAC0+dr) = 0.0;
+	    *(long long *)(crsl+FAC0+dr) = 0;
 	} else
-	  *(double *)(crsl+FAC0+dr) = 0.0;
+	  *(long long *)(crsl+FAC0+dr) = 0;
 	break;
 
       default:
@@ -7985,7 +7948,7 @@ imode:
 	  else            /* operand = 0.0 */
 	    mathexception('f', FC_SFP_ZDIV, ea);
 	} else            /* clean up (maybe) dirty zero */
-	  *(double *)(crsl+FAC0+dr) = 0.0;
+	  *(long long *)(crsl+FAC0+dr) = 0;
 	break;
 
       case 1:
@@ -7995,7 +7958,7 @@ imode:
 	CLEARC;
 	if (*(int *)(crsl+FAC0+dr)) {
 	  if (*(int *)&ea >= 0)
-	    *(double *)&immu64 = get64(ea);
+	    immu64 = get64(ea);
 	  if (*(int *)&immu64)
 	    if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC0+dr, &tempd1)) {
 	      *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1/tempd2);
@@ -8005,7 +7968,7 @@ imode:
 	  else
 	    mathexception('f', FC_DFP_ZDIV, ea);
 	} else
-	  *(double *)(crsl+FAC0+dr) = 0.0;
+	  *(long long *)(crsl+FAC0+dr) = 0;
 	break;
 
       case 4:  /* QFLD */
@@ -8478,7 +8441,6 @@ nonimode:
        manual says the opcode is '11, then use 01100 (the XX extended
        opcode bits are zero) */
 
-    i = inst & 0100000;           /* (for trace) indirect is bit 1 */
     x = inst & 040000;            /* indexed is bit 2 */
     opcode = (inst & 036000) >> 4;  /* isolate opcode bits */
 
@@ -8508,7 +8470,7 @@ nonimode:
       TRACE(T_INST, " ldx/stx opcode adjusted\n");
     }
 
-    TRACE(T_INST, " opcode=%5#0o, i=%o, x=%o\n", opcode, i != 0, x != 0);
+    TRACE(T_INST, " opcode=%5#0o, i=%o, x=%o\n", opcode, inst & 0100000, x);
 
     stopwatch_push(&sw_ea);
     switch (crs[KEYS] & 016000) {
@@ -8709,6 +8671,7 @@ nonimode:
 
     case 01200:
       TRACE(T_FLOW, " IRS\n");
+      /* XXX: change to use mapva, saving a map call on the put */
       m = get16t(ea) + 1;
       put16t(m,ea);
       if (m == 0)
@@ -8717,6 +8680,7 @@ nonimode:
 
     case 01300:
       TRACE(T_FLOW, " IMA\n");
+      /* XXX: change to use mapva, saving a map call on the put */
       m = get16t(ea);
       put16t(crs[A],ea);
       crs[A] = m;
@@ -8992,11 +8956,11 @@ nonimode:
 	    } else
 	      mathexception('f', FC_SFP_OFLOW, ea);
 	  else if (tempa1 < tempa2)
-	    *(double *)(crsl+FAC1) = *(double *)&immu64;
+	    *(long long *)(crsl+FAC1) = immu64;
 	} else
-	  *(double *)(crsl+FAC1) = *(double *)&immu64;
+	  *(long long *)(crsl+FAC1) = immu64;
       else if (*(int *)(crsl+FAC1) == 0)
-	*(double *)(crsl+FAC1) = 0.0;
+	*(long long *)(crsl+FAC1) = 0;
       goto fetch;
 
     /* this is implemented as a subtract on some models */
@@ -9022,7 +8986,7 @@ nonimode:
 	else            /* operand = 0.0 */
 	  mathexception('f', FC_SFP_ZDIV, ea);
       } else            /* clean up (maybe) dirty zero */
-	*(double *)(crsl+FAC1) = 0.0;
+	*(long long *)(crsl+FAC1) = 0;
       goto fetch;
 
     case 0201:
@@ -9045,9 +9009,9 @@ nonimode:
 	  } else
 	    mathexception('f', FC_SFP_OFLOW, ea);
 	else            /* operand = 0.0: no multiply */
-	  *(double *)(crsl+FAC1) = 0.0;
+	  *(long long *)(crsl+FAC1) = 0;
       } else            /* clean up (maybe) dirty zero */
-	*(double *)(crsl+FAC1) = 0.0;
+	*(long long *)(crsl+FAC1) = 0;
       goto fetch;
 
     case 00701:
@@ -9066,15 +9030,15 @@ nonimode:
 	    } else
 	      mathexception('f', FC_SFP_OFLOW, ea);
 	  else if (tempa1 < tempa2) {
-	    *(double *)(crsl+FAC1) = *(double *)&immu64;
+	    *(long long *)(crsl+FAC1) = immu64;
 	    dfcm(crsl+FAC1);
 	  }
 	} else {
-	  *(double *)(crsl+FAC1) = *(double *)&immu64;
+	  *(long long *)(crsl+FAC1) = immu64;
 	  dfcm(crsl+FAC1);
 	}
       else if (*(int *)(crsl+FAC1) == 0)
-	*(double *)(crsl+FAC1) = 0.0;
+	*(long long *)(crsl+FAC1) = 0;
       goto fetch;
 
     case 0401:
@@ -9091,7 +9055,7 @@ nonimode:
     case 0602:
       TRACE(T_FLOW, " DFAD\n");
       CLEARC;
-      *(double *)&immu64 = get64(ea);
+      immu64 = get64(ea);
       if (*(int *)&immu64)
 	if (*(int *)(crsl+FAC1))
 	  if (prieee8(crsl+FAC1, &tempd1) && prieee8(&immu64, &tempd2)) {
@@ -9100,53 +9064,15 @@ nonimode:
 	  } else
 	    mathexception('f', FC_DFP_OFLOW, ea);
 	else
-	  *(double *)(crsl+FAC1) = *(double *)&immu64;
+	  *(long long *)(crsl+FAC1) = immu64;
       else if (*(int *)(crsl+FAC1) == 0)
-	*(double *)(crsl+FAC1) = 0.0;
+	*(long long *)(crsl+FAC1) = 0;
       goto fetch;
 
     case 01102:
       TRACE(T_FLOW,  " DFCS\n");
-      *(double *)&templl = get64(ea);
+      templl = get64(ea);
       RPL += dfcs(crsl+FAC1, templl);
-#if 0
-      /* the subtract method for DFCS doesn't work so well.  Some
-	 Prime software (DSM for example) used DFCS to compare 8-byte
-	 ASCII strings for equal or not equal.  These strings will not
-	 convert to IEEE floating point and comparisons tend to
-	 fail. */
-
-      tempd2 = get64(ea);
-      if (prieee8(crs+FLTH, &tempd1) && prieee8(&tempd2, &tempd2)) {
-	if (tempd1 == tempd2) {
-	  INCRP;
-	  SETEQ;
-	} else if (tempd1 < tempd2) {
-	  RPL += 2;
-	  SETLT;
-	}
-      } else
-	mathexception('f', FC_DFP_OFLOW, ea);
-#endif
-#if 0
-      /* this is the "compare signs, exponents, fraction" method.
-	 See similar code in I-mode DFC */
-
-      utempl = get32(ea);
-      if ((crsl[FAC1] & 0x80000000) == (utempl & 0x80000000)) {
-	m = get16t(INCVA(ea,3));              /* m = FAC exponent */
-	if (crs[FEXP] == m)
-	  if (crsl[FAC1] == utempl)
-	    RPL += 1;
-	  else if (*(int *)(crsl+FAC1) < *(int *)&utempl)
-	    RPL += 2;
-	  else
-	    ;                                /* FAC > mem: next instruction */
-	else if (*(short *)(crs+FEXP) < *(short *)&m)
-	  RPL += 2;
-      } else if (crsl[FAC1] & 0x80000000)    /* FAC < mem */
-	RPL += 2;
-#endif
       goto fetch;
 
     case 01702:
@@ -9154,7 +9080,7 @@ nonimode:
       CLEARC;
       if (*(int *)(crsl+FAC1)) {
 	if (*(int *)&ea >= 0)
-	  *(double *)&immu64 = get64(ea);
+	  immu64 = get64(ea);
 	if (*(int *)&immu64)
 	  if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC1, &tempd1)) {
 	    *(double *)(crsl+FAC1) = ieeepr8(tempd1/tempd2);
@@ -9164,19 +9090,19 @@ nonimode:
 	else
 	  mathexception('f', FC_DFP_ZDIV, ea);
       } else
-	*(double *)(crsl+FAC1) = 0.0;
+	*(long long *)(crsl+FAC1) = 0;
       goto fetch;
 
     case 0202:
       TRACE(T_FLOW, " DFLD\n");
-      *(double *)(crs+FLTH) = get64(ea);
+      *(long long *)(crs+FLTH) = get64(ea);
       goto fetch;
 
     case 01602:
       TRACE(T_FLOW, " DFMP\n");
       CLEARC;
       if (*(int *)(crsl+FAC1)) {
-	*(double *)&immu64 = get64(ea);
+	immu64 = get64(ea);
 	if (*(int *)&immu64)
 	  if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC1, &tempd1)) {
 	    *(double *)(crsl+FAC1) = ieeepr8(tempd1*tempd2);
@@ -9184,15 +9110,15 @@ nonimode:
 	  } else
 	    mathexception('f', FC_DFP_OFLOW, ea);
 	else             /* operand = 0.0: no multiply */
-	  *(double *)(crsl+FAC1) = 0.0;
+	  *(long long *)(crsl+FAC1) = 0;
       } else
-	*(double *)(crsl+FAC1) = 0.0;
+	*(long long *)(crsl+FAC1) = 0;
       goto fetch;
 
     case 0702:
       TRACE(T_FLOW, " DFSB\n");
       CLEARC;
-      *(double *)&immu64 = get64(ea);
+      immu64 = get64(ea);
       if (*(int *)&immu64)
 	if (*(int *)(crsl+FAC1))
 	  if (prieee8(crsl+FAC1, &tempd1) && prieee8(&immu64, &tempd2)) {
@@ -9201,16 +9127,16 @@ nonimode:
 	  } else
 	    mathexception('f', FC_DFP_OFLOW, ea);
 	else {
-	  *(double *)(crsl+FAC1) = *(double *)&immu64;
+	  *(long long *)(crsl+FAC1) = immu64;
 	  dfcm(crsl+FAC1);
 	}
       else if (*(int *)(crsl+FAC1) == 0)
-	*(double *)(crsl+FAC1) = 0.0;
+	*(long long *)(crsl+FAC1) = 0;
       goto fetch;
 
     case 0402:
       TRACE(T_FLOW, " DFST\n");
-      put64(*(double *)(crs+FLTH), ea);
+      put64(*(long long *)(crs+FLTH), ea);
       goto fetch;
 
     case 01302:
