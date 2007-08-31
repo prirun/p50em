@@ -377,7 +377,7 @@ int devasr (int class, int func, int device) {
       else {
 	timeout.tv_sec = 1;        /* single user: okay to delay */
 #if 0
-	fflush(tracefile);         /* hack to flush for testing */
+	fflush(gvp->tracefile);         /* hack to flush for testing */
 #endif
       }
       timeout.tv_usec = 0;
@@ -413,7 +413,7 @@ int devasr (int class, int func, int device) {
       ttyflags = newflags;
 #if 1
       if (doblock)
-	fflush(tracefile);         /* hack to flush for 32i testing */
+	fflush(gvp->tracefile);         /* hack to flush for 32i testing */
 #endif
 
       if (doblock && needflush) {
@@ -438,15 +438,15 @@ readasr:
       } else if (n == 1) {
 	if (ch == '') {
 	  printf("Trace owner = %o/%o\n", crs[OWNER], crs[OWNERL]);
-	  if (savetraceflags == 0) {
+	  if (gvp->savetraceflags == 0) {
 	    TRACEA("\nTRACE ENABLED:\n\n");
-	    savetraceflags = ~TB_MAP;
-	    savetraceflags = ~0;
+	    gvp->savetraceflags = ~TB_MAP;
+	    gvp->savetraceflags = ~0;
 	  } else {
 	    TRACEA("\nTRACE DISABLED:\n\n");
-	    savetraceflags = 0;
+	    gvp->savetraceflags = 0;
 	  }
-	  fflush(tracefile);
+	  fflush(gvp->tracefile);
 	  goto readasr;
 	}
 	if (func >= 010)
@@ -456,7 +456,7 @@ readasr:
 	if (!(terminfo.c_lflag & ECHO) && ch != 015) /* log all except CR */
 	  fputc(ch, conslog);
 	fflush(conslog);         /* immediately flush when typing */
-	fflush(tracefile);
+	fflush(gvp->tracefile);
 	IOSKIP;
       } else {
 	printf("Unexpected error reading from tty, n=%d\n", n);
@@ -515,7 +515,7 @@ readasr:
 	putc(ch, conslog);
       needflush = 1;
       if (devpoll[device] == 0)
-	devpoll[device] = instpermsec*100;
+	devpoll[device] = gvp->instpermsec*100;
       IOSKIP;
     } else if (func == 1) {       /* write control word */
       TRACEA("OTA 4, func %d, A='%o/%d\n", func, crs[A], *(short *)(crs+A));
@@ -573,7 +573,7 @@ readasr:
       if (fflush(stdout) == 0)
 	needflush = 0;
       else
-	devpoll[device] = instpermsec*100;
+	devpoll[device] = gvp->instpermsec*100;
       fflush(conslog);
     }
   }
@@ -1005,7 +1005,7 @@ int devmt (int class, int func, int device) {
       devpoll[device] = 10;
 
       if ((crs[A] & 0x00E0) == 0x0020) {       /* rewind */
-	//traceflags = ~TB_MAP;
+	//gvp->traceflags = ~TB_MAP;
 	TRACE(T_TIO, " rewind\n");
 	if (lseek(unit[u].fd, 0, SEEK_SET) == -1) {
 	  perror("Unable to rewind tape drive file");
@@ -1227,9 +1227,9 @@ int devmt (int class, int func, int device) {
     TRACE(T_TIO,  " POLL device '%02o, enabled=%d, interrupting=%d\n", device, enabled, interrupting);
     if (enabled && (interrupting == 1)) {
       devpoll[device] = 100;         /* assume interrupt will be deferred */
-      if (intvec == -1 && (crs[MODALS] & 0100000) && inhcount == 0) {
+      if (gvp->intvec == -1 && (crs[MODALS] & 0100000) && gvp->inhcount == 0) {
 	TRACE(T_TIO,  " CPU interrupt to vector '%o\n", mtvec);
-	intvec = mtvec;
+	gvp->intvec = mtvec;
 	devpoll[device] = 0;
 	interrupting = 2;
       }
@@ -1312,7 +1312,7 @@ int devcp (int class, int func, int device) {
   unsigned long elapsedms,targetticks;
   int i;
 
-#define SETCLKPOLL devpoll[device] = instpermsec*(-clkpic*clkrate)/1000;
+#define SETCLKPOLL devpoll[device] = gvp->instpermsec*(-clkpic*clkrate)/1000;
 
   switch (class) {
 
@@ -1345,7 +1345,7 @@ int devcp (int class, int func, int device) {
 
     } else if (func == 015) {   /* set interrupt mask */
       /* this enables tracing when the clock process initializes */
-      //traceflags = ~TB_MAP;
+      //gvp->traceflags = ~TB_MAP;
       //TRACEA("Clock interrupt enabled!\n");
       enabled = 1;
       SETCLKPOLL;
@@ -1372,7 +1372,7 @@ int devcp (int class, int func, int device) {
     if (func == 011) {             /* input ID */
       crs[A] = 020;                /* this is the Option-A board */
       crs[A] = 0120;               /* this is the SOC board */
-      //traceflags = ~TB_MAP;
+      //gvp->traceflags = ~TB_MAP;
     } else if (func == 016) {
       crs[A] = sswitch;
     } else if (func == 017) {      /* read switches pushed down */
@@ -1446,8 +1446,8 @@ int devcp (int class, int func, int device) {
     /* interrupt if enabled and no interrupt active */
 
     if (enabled) {
-      if (intvec == -1) {
-	intvec = clkvec;
+      if (gvp->intvec == -1) {
+	gvp->intvec = clkvec;
 	SETCLKPOLL;
 	ticks++;
 	if (gettimeofday(&tv, NULL) != 0)
@@ -1455,7 +1455,7 @@ int devcp (int class, int func, int device) {
 	if (ticks == 0) {
 	  start_tv = tv;
 	  prev_tv = tv;
-	  previnstcount = instcount;
+	  previnstcount = gvp->instcount;
 	  if (datnowea != 0)
 	    initclock(datnowea);
 	} 
@@ -1491,12 +1491,12 @@ int devcp (int class, int func, int device) {
 	   NB: this should probably be done whether the clock is running
 	   or not */
 
-	if (instcount-previnstcount > instpermsec*1000*5) {
-	  instpermsec = (instcount-previnstcount) /
+	if (gvp->instcount-previnstcount > gvp->instpermsec*1000*5) {
+	  gvp->instpermsec = (gvp->instcount-previnstcount) /
 	    ((tv.tv_sec-prev_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-prev_tv.tv_usec)/1000);
-	  //printf("instcount = %d, previnstcount = %d, diff=%d, instpermsec=%d\n", instcount, previnstcount, instcount-previnstcount, instpermsec);
-	  //printf("\ninstpermsec=%d\n", instpermsec);
-	  previnstcount = instcount;
+	  //printf("instcount = %d, previnstcount = %d, diff=%d, instpermsec=%d\n", gvp->instcount, previnstcount, gvp->instcount-previnstcount, gvp->instpermsec);
+	  printf("\ninstpermsec=%d\n", gvp->instpermsec);
+	  previnstcount = gvp->instcount;
 	  prev_tv = tv;
 	}
       } else {
@@ -1664,7 +1664,7 @@ int devdisk (int class, int func, int device) {
   char rtfile[16];          /* read trace file name */
   int rtnw;                 /* total number of words read (all channels) */
 
-  //traceflags |= TB_DIO;
+  //gvp->traceflags |= TB_DIO;
 
   switch (class) {
 
@@ -1722,7 +1722,7 @@ int devdisk (int class, int func, int device) {
     TRACE(T_INST|T_DIO, " INA '%2o%2o\n", func, device);
 
     /* this turns tracing on when the Primos disk processes initialize */
-    //traceflags = ~TB_MAP;
+    //gvp->traceflags = ~TB_MAP;
 
     /* INA's are only accepted when the controller is not busy */
 
@@ -1808,9 +1808,11 @@ int devdisk (int class, int func, int device) {
 	  break;
 	}
 	if (track != dc[device].unit[u].curtrack) {
-	  fprintf(stderr," Device '%o, order %d at track %d, but already positioned to track %d\n", device, order, track, dc[device].unit[u].curtrack);
+	  fprintf(stderr," Device '%o, order %d at track %d, but positioned to track %d\n", device, order, track, dc[device].unit[u].curtrack);
+#if 0
 	  dc[device].status |= 4;      /* illegal seek */
 	  break;
+#endif
 	}
 	/* XXX: could check for head > max head on drive here... */
 	if (dc[device].unit[u].devfd == -1) {
@@ -1940,6 +1942,7 @@ int devdisk (int class, int func, int device) {
 	  dc[device].status |= 4;    /* set bit 14: seek error */
 	  track = -1;
 	}
+#
 	dc[device].unit[u].curtrack = track;
 	break;
 
@@ -2024,7 +2027,7 @@ int devdisk (int class, int func, int device) {
 
 	if (crs[MODALS] & 010)             /* PX enabled? */
 	  break;                           /* yes, no stall */
-	devpoll[device] = instpermsec/5;   /* 200 microseconds, sb 210 */
+	devpoll[device] = gvp->instpermsec/5;   /* 200 microseconds, sb 210 */
 	return;
 
       case 9: /* DSTAT = Store status to memory */
@@ -2045,13 +2048,13 @@ int devdisk (int class, int func, int device) {
 
       case 14: /* DINT = generate interrupt through vector address */
 	TRACE(T_INST|T_DIO,  " interrupt through '%o\n", m1);
-	if (intvec >= 0 || !(crs[MODALS] & 0100000) || inhcount > 0)
+	if (gvp->intvec >= 0 || !(crs[MODALS] & 0100000) || gvp->inhcount > 0)
 	  dc[device].oar -= 2;     /* can't take interrupt right now */
 	else {
-	  intvec = m1;
+	  gvp->intvec = m1;
 	  dc[device].state = S_INT;
 	}
-	//traceflags = ~TB_MAP;
+	//gvp->traceflags = ~TB_MAP;
 	devpoll[device] = 10;
 	return;
 
@@ -2367,11 +2370,11 @@ int devamlc (int class, int func, int device) {
       lx = crs[A] >> 12;
       //printf("OTA '01%02o: AMLC line %d config = %x\n", device, lx, crs[A]);
       /* if DTR drops on a connected line, disconnect */
-      if (!(crs[A] & 0x400) && (dc[device].dss & bitmask16[lx+1])) {
+      if (!(crs[A] & 0x400) && (dc[device].dss & BITMASK16(lx+1))) {
 	/* see similar code below */
 	write(dc[device].sockfd[lx], "\r\nDisconnecting logged out session\r\n", 36);
 	close(dc[device].sockfd[lx]);
-	dc[device].dss &= ~bitmask16[lx+1];
+	dc[device].dss &= ~BITMASK16(lx+1);
 	//printf("em: closing AMLC line %d on device '%o\n", lx, device);
       }
       IOSKIP;
@@ -2380,19 +2383,19 @@ int devamlc (int class, int func, int device) {
       //printf("OTA '02%02o: AMLC line control = %x\n", device, crs[A]);
       lx = (crs[A]>>12);
       if (crs[A] & 040)           /* character time interrupt enable/disable */
-	dc[device].ctinterrupt |= bitmask16[lx+1];
+	dc[device].ctinterrupt |= BITMASK16(lx+1);
       else
-	dc[device].ctinterrupt &= ~bitmask16[lx+1];
+	dc[device].ctinterrupt &= ~BITMASK16(lx+1);
       if (crs[A] & 010)           /* transmit enable/disable */
-	dc[device].xmitenabled |= bitmask16[lx+1];
+	dc[device].xmitenabled |= BITMASK16(lx+1);
       else
-	dc[device].xmitenabled &= ~bitmask16[lx+1];
+	dc[device].xmitenabled &= ~BITMASK16(lx+1);
       if (crs[A] & 01)            /* receive enable/disable */
-	dc[device].recvenabled |= bitmask16[lx+1];
+	dc[device].recvenabled |= BITMASK16(lx+1);
       else
-	dc[device].recvenabled &= ~bitmask16[lx+1];
+	dc[device].recvenabled &= ~BITMASK16(lx+1);
       if ((dc[device].ctinterrupt || dc[device].xmitenabled || dc[device].recvenabled) && devpoll[device] == 0)
-	devpoll[device] = AMLCPOLL*instpermsec;  /* setup another poll */
+	devpoll[device] = AMLCPOLL*gvp->instpermsec;  /* setup another poll */
       IOSKIP;
 
     } else if (func == 03) {      /* set room in input buffer */
@@ -2454,11 +2457,11 @@ int devamlc (int class, int func, int device) {
 	  /* NOTE: don't allow connections on clock line */
 	  if (lx == 15 && (i+1 == MAXBOARDS || !devices[i+1]))
 	      break;
-	  if (!(dc[devices[i]].dss & bitmask16[lx+1])) {
+	  if (!(dc[devices[i]].dss & BITMASK16(lx+1))) {
 	    newdevice = devices[i];
 	    socktoline[fd].device = newdevice;
 	    socktoline[fd].line = lx;
-	    dc[newdevice].dss |= bitmask16[lx+1];
+	    dc[newdevice].dss |= BITMASK16(lx+1);
 	    dc[newdevice].sockfd[lx] = fd;
 	    dc[newdevice].tstate[lx] = TS_DATA;
 	    dc[newdevice].room[lx] = 64;
@@ -2536,11 +2539,11 @@ OK, ");
 	   avoid lots of get16/mapva calls and the write select could
 	   be removed. */
 
-	if (dc[device].xmitenabled & bitmask16[lx+1]) {
+	if (dc[device].xmitenabled & BITMASK16(lx+1)) {
 	  n = 0;
 	  if (dc[device].dmqmode) {
 	    qcbea = dc[device].baseaddr + lx*4;
-	    if (dc[device].dss & bitmask16[lx+1]) {
+	    if (dc[device].dss & BITMASK16(lx+1)) {
 
 	      /* ensure there's some room in the socket buffer */
 
@@ -2567,7 +2570,7 @@ OK, ");
 	  } else {  /* DMT */
 	    utempa = get16io(dc[device].baseaddr + lx);
 	    if (utempa != 0) {
-	      if ((utempa & 0x8000) && (dc[device].dss & bitmask16[lx+1])) {
+	      if ((utempa & 0x8000) && (dc[device].dss & BITMASK16(lx+1))) {
 		//printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
 		buf[n++] = utempa & 0x7F;
 	      }
@@ -2633,7 +2636,7 @@ OK, ");
       dmcnw = dmcbufendea - dmcbufbegea + 1;
       lx = dc[device].recvlx;
       for (lcount = 0; lcount < 16 && dmcnw > 0; lcount++) {
-	if ((dc[device].dss & dc[device].recvenabled & bitmask16[lx+1])
+	if ((dc[device].dss & dc[device].recvenabled & BITMASK16(lx+1))
 	    && dc[device].room[lx] >= 8) {
 
 	  /* dmcnw is the # of characters left in the dmc buffer, but
@@ -2665,7 +2668,7 @@ OK, ");
 
 	      /* see similar code above */
 	      close(dc[device].sockfd[lx]);
-	      dc[device].dss &= ~bitmask16[lx+1];
+	      dc[device].dss &= ~BITMASK16(lx+1);
 	      //printf("em: closing AMLC line %d on device '%o\n", lx, device);
 	    } else {
 	      perror("Reading AMLC");
@@ -2739,8 +2742,8 @@ OK, ");
     /* time to interrupt? */
 
     if (dc[device].intenable && (dc[device].ctinterrupt || dc[device].eor)) {
-      if (intvec == -1) {
-	intvec = dc[device].intvector;
+      if (gvp->intvec == -1) {
+	gvp->intvec = dc[device].intvector;
 	dc[device].interrupting = 1;
       } else
 	devpoll[device] = 100;         /* come back soon! */
@@ -2757,7 +2760,7 @@ OK, ");
        for new incoming connections */
 
     if ((dc[device].ctinterrupt || dc[device].xmitenabled || (dc[device].recvenabled & dc[device].dss)) && devpoll[device] == 0)
-      devpoll[device] = AMLCPOLL*instpermsec;  /* setup another poll */
+      devpoll[device] = AMLCPOLL*gvp->instpermsec;  /* setup another poll */
     break;
   }
 }
@@ -2997,7 +3000,7 @@ int devpnc (int class, int func, int device) {
 #define DELIM " \t\n"
 #define PDELIM ":"
 
-  //traceflags = ~TB_MAP;
+  //gvp->traceflags = ~TB_MAP;
 
   if (nport <= 0) {
     if (class == -1)
@@ -3330,7 +3333,7 @@ int devpnc (int class, int func, int device) {
       /* read the first word, the to and from node id's, and map them
 	 to the remote hosts' expected to and from node id's */
 
-      xmit.iobufp = mem + mapva(xmit.dmaaddr, RACC, &access, 0);
+      xmit.iobufp = mem + mapva(xmit.dmaaddr, 0, RACC, &access);
       dmaword = *xmit.iobufp++;
       xmit.toid = dmaword >> 8;
       xmit.fromid = dmaword & 0xFF;
@@ -3397,8 +3400,8 @@ xmitdone1:
 
 xmitdone:
       if (enabled && (pncstat & 0xC000))
-	if (intvec == -1)
-	  intvec = pncvec;
+	if (gvp->intvec == -1)
+	  gvp->intvec = pncvec;
 	else
 	  devpoll[device] = 100;
       IOSKIP;
@@ -3495,11 +3498,11 @@ xmitdone:
       newdevice = 0;
       for (i=0; devices[i] && !newdevice && i<MAXBOARDS; i++)
 	for (lx=0; lx<16; lx++)
-	  if (!(dc[devices[i]].dss & bitmask16[lx+1])) {
+	  if (!(dc[devices[i]].dss & BITMASK16(lx+1))) {
 	    newdevice = devices[i];
 	    socktoline[fd].device = newdevice;
 	    socktoline[fd].line = lx;
-	    dc[newdevice].dss |= bitmask16[lx+1];
+	    dc[newdevice].dss |= BITMASK16(lx+1);
 	    dc[newdevice].sockfd[lx] = fd;
 	    //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
 	    break;
@@ -3516,7 +3519,7 @@ if (xmitstat == 0x0040) {             /* complete w/o errors? */
 	xmitstat |= 0x8000;                 /* yes, set ACK xmit status */
     }
 #endif
-    devpoll[device] = PNCPOLL*instpermsec;
+    devpoll[device] = PNCPOLL*gvp->instpermsec;
     break;
 
   default:
