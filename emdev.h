@@ -1646,12 +1646,6 @@ int devdisk (int class, int func, int device) {
   unsigned char *hashp;
   int lockkey;
 
-  /* NOTE: this iobuf size looks suspicious; probably should be 1040 words,
-     the largest disk record size, and there probably should be some checks
-     that no individual DMA exceeds this size, that no individual disk
-     read or write exceeds 1040 words.  Maybe it's 4096 bytes because this
-     is the largest DMA transfer request size... */
-
   unsigned short iobuf[1040];             /* local I/O buf (for mapped I/O) */
   unsigned short *iobufp;
   unsigned short access;
@@ -1807,13 +1801,21 @@ int devdisk (int class, int func, int device) {
 	  dc[device].status |= 02000;  /* header check (right error?) */
 	  break;
 	}
+#if 0
+	/* this has been disabled because preseeks in the disk driver sometimes
+	   goof up, depending on timings in the emulator */
+
 	if (track != dc[device].unit[u].curtrack) {
 	  fprintf(stderr," Device '%o, order %d at track %d, but positioned to track %d\n", device, order, track, dc[device].unit[u].curtrack);
-#if 0
 	  dc[device].status |= 4;      /* illegal seek */
 	  break;
-#endif
 	}
+#endif
+	if (track > dc[device].unit[u].maxtrack) {
+	  fprintf(stderr," Device '%o, unit %d, seek to track %d > cylinder limit of %d\n", device, u, track, dc[device].unit[u].maxtrack);
+	  fatal("Invalid seek");
+	}
+
 	/* XXX: could check for head > max head on drive here... */
 	if (dc[device].unit[u].devfd == -1) {
 	  TRACE(T_INST|T_DIO, " Device '%o unit %d not ready\n", device, u);
@@ -1937,12 +1939,16 @@ int devdisk (int class, int func, int device) {
 	  track = m1 & 03777;
 	}
 	TRACE(T_INST|T_DIO, " seek track %d, restore=%d, clear=%d\n", track, (m1 & 0100000) != 0, (m1 & 040000) != 0);
+#if 0
+	/* this has been disabled because SCSI drives sometimes seek to 
+	   track 512 (special meaning in controller?) */
+
 	if (track > dc[device].unit[u].maxtrack) {
 	  fprintf(stderr," Device '%o, unit %d, seek to track %d > cylinder limit of %d\n", device, u, track, dc[device].unit[u].maxtrack);
 	  dc[device].status |= 4;    /* set bit 14: seek error */
 	  track = -1;
 	}
-#
+#endif
 	dc[device].unit[u].curtrack = track;
 	break;
 

@@ -449,6 +449,9 @@ static int memlimit;                    /* user's desired memory limit (-mem) */
 
    DIAG cpu.pcl test 42 does check for segment wraparound, so -DFAST
    will cause this test to fail.
+
+   Update: when cpuid=40 (6650), cpu.pcl test 42 *expects* 32-bit
+   increment on RP (segment gets incremented too)!
  */
 
 #if FAST
@@ -2042,118 +2045,14 @@ static ea_t pclea(unsigned short brsave[6], ea_t rp, unsigned short *bitarg, sho
     if (ea & 0x80000000)
       fault(POINTERFAULT, ea>>16, 0);    /* XXX: faddr=0? */
     iwea = ea;
-    ea = get32(iwea) | (RP & RINGMASK32);
+    ea = get32(iwea);
     TRACE(T_PCL, " Indirect pointer is %o/%o\n", ea>>16, ea & 0xFFFF);
-
-    /* Case 35 wants a fault when the IP is 120000/0:
-
-	 #28307386 24000/27740: PCL 24000/30045
-	  ecb @ 24000/30045, access=7
-	  ecb.pb: 4000/30041
-	  ecb.framesize: 16
-	  ecb.stackroot 4000
-	  ecb.argdisp: 12
-	  ecb.nargs: 1
-	  ecb.lb: 4000/60000
-	  ecb.keys: 14000
-	  stack free pointer: 4000/70000, current ring=20000
-	  before update, stackfp=24000/70000, SB=0/0
-	  new SB=24000/70000
-	  new RP=24000/30041
-	 Entered ARGT
-	  Transferring arg, 1 left, Y=12
-	  PCLAP ibr=4300, br=0, i=1, bit=0, store=1, lastarg=1, a=27117
-	  PCLAP ea = 24000/27117, bit=0
-	  Indirect pointer is 120000/0
-	  After indirect, PCLAP ea = 120000/0, bit=0
-	  Storing arg, 1 left, Y=12
-	  Stored
-	 #29019968: fault '62, fcode=0, faddr=0/0, faultrp=24000/1356
-
-	 [ Failure Report ]
-
-		address           instruction         scope loop 
-	     024000/027740       021410/030045       024000/027547 
-
-	     Actual: NO POINTER FAULT
-	     Expected: POINTER FAULT 
-
-       But, Case 37 doesn't want a fault:
-
-	 #28891410 24000/30760: PCL 24000/31065
-	  ecb @ 24000/31065, access=7
-	  ecb.pb: 4000/31054
-	  ecb.framesize: 16
-	  ecb.stackroot 4000
-	  ecb.argdisp: 12
-	  ecb.nargs: 1
-	  ecb.lb: 4000/60000
-	  ecb.keys: 14000
-	  stack free pointer: 4000/70000, current ring=20000
-	  before update, stackfp=24000/70000, SB=0/0
-	  new SB=24000/70000
-	  new RP=24000/31054
-	 Entered ARGT
-	  Transferring arg, 1 left, Y=12
-	  PCLAP ibr=4300, br=0, i=1, bit=0, store=1, lastarg=1, a=27117
-	  PCLAP ea = 24000/27117, bit=0
-	  Indirect pointer is 120000/0
-	 #28891410: fault '77, fcode=120000, faddr=24000/27117, faultrp=24000/30760
-
-	 0003  Unexpected POINTER fault.  Returning to 030760
-
-       Changing <= to < in the ring comparison makes Case 37 work and Case 35 fail.
-    */
-
-#if 0
-    /* NOTE: this code causes every command to give a pointer fault:
-
-
-                        #281037430 [SUPPCB 100100] SB: 6003/754 LB: 6/100112 PGMAPA XB: 6/100272
-6/100367: 11415         A='201/129 B='11/9 X=2/2 Y=20/16 C=0 L=0 LT=0 EQ=0 K=14000 M=100177
- opcode=00400, i=0, x=0
- 2-word format, a=22
- new opcode=00403, y=0, br=1, ixy=0, xok=1
- 2-word format, a=1142
- new opcode=01002, y=1, br=2, ixy=3, xok=1
- Long indirect, ea=60013/24350, ea_s=60013, ea_w=24350
- After indirect, ea_s=60013, ea_w=60422, bit=0
- EA: 60013/60422  MISSIN
- PCL MISSIN
- ecb @ 60013/60422, access=6
- ecb.pb: 13/60404
- ecb.framesize: 14
- ecb.stackroot 0
- ecb.argdisp: 12
- ecb.nargs: 1
- ecb.lb: 13/60022
- ecb.keys: 14000
- stack root in ecb was zero, stack root from caller is 6002
- stack free pointer: 6002/3770, current ring=3, new ring=3
- before update, stackfp=66002/3770, SB=66002/1434
- new SB=66002/3770
-Entering 64V mode, keys=14000
- new RP=60013/60404
-Entered ARGT
- Transferring arg, 1 left, Y=12
- PCLAP ibr=4700, br=1, i=1, bit=0, store=1, lastarg=1, a=143
- PCLAP ea = 66002/1577, bit=0
- Indirect pointer is 160000/0
-fault '77, fcode=160000, faddr=66002/1577, faultrp=60013/60404
-fault: PX enabled, pcbp=65/100100, cs first=1026, next=1026, last=1064
-fault: updated cs next=1034
-Entering 64V mode, keys=14000
-fault: jumping to fault table entry at RP=60013/61212
-
-    */
-
-    if (ea & 0x80000000)
-      if ((ea & 0xFFFF0000) != 0x80000000)
-	if ((ea & 0x1FFF0000) || ((RP & RINGMASK32) <= (ea & RINGMASK32)))
-	  fault(POINTERFAULT, ea>>16, iwea);
-#else
-    if ((ea & 0x80000000) && (ea & 0x1FFF0000))
-      fault(POINTERFAULT, ea>>16, iwea);
+#if 1
+    if (ea & 0x80000000) {
+      if (!*store || (ea & 0x8FFF0000) != 0x80000000)
+	fault(POINTERFAULT, ea>>16, iwea);
+    } else
+      ea |= (RP & RINGMASK32);             /* weaken */
 #endif
     bit = 0;
     if (ea & EXTMASK32)
@@ -2161,26 +2060,17 @@ fault: jumping to fault table entry at RP=60013/61212
     TRACE(T_PCL, " After indirect, PCLAP ea = %o/%o, bit=%d\n", ea>>16, ea & 0xFFFF, bit);
   }
 
-  if (!*store) {
-#if 0
-    /* Case 36 wants a pointer fault here... See Case 31, 34, 37 also */
-    if (ea & 0x80000000)
-      if ((ea & 0xFFFF0000) != 0x80000000)
-	if ((ea & 0x1FFF0000) || ((RP & RINGMASK32) <= (ea & RINGMASK32)))
-	  fault(POINTERFAULT, ea>>16, iwea);
-#else
-    if (ea & 0x80000000)
-      fault(POINTERFAULT, ea>>16, iwea);
-#endif
-    *(unsigned int *)(crs+XB) = ea;
-    crs[X] = bit;
-  }
   if (bit) {
     ea |= EXTMASK32;
     *bitarg = bit;
-  } else {
+  } else
     *bitarg = 0;
+
+  if (!*store) {
+    *(unsigned int *)(crs+XB) = ea | (RP & RINGMASK32);;
+    crs[X] = bit;
   }
+
   return ea;
 }
 
@@ -2235,7 +2125,7 @@ static argt() {
       store = 1;
       advancepb = 0;
     } else {
-      ea = pclea(brsave, rp, &bit, &store, &lastarg) | (RP & RINGMASK32);
+      ea = pclea(brsave, rp, &bit, &store, &lastarg);
       advancepb = 1;
     }
     if (argsleft > 0 && store) {
@@ -2349,20 +2239,11 @@ static pcl (ea_t ecbea) {
     ecb[8] = get16(ecbea+8);
   }
 
-  /* XXX: P400 docs say "no ring change takes place if not a
-     gate"; does that mean that if R0 calls a R3 ecb, it's
-     still in R0, or should it be weakened to the ecb ring?
-     (Case 24 of CPU.PCL indicates it should be weakened) */
-
   TRACE(T_PCL, " ecb.pb: %o/%o\n ecb.framesize: %d\n ecb.stackroot %o\n ecb.argdisp: %o\n ecb.nargs: %d\n ecb.lb: %o/%o\n ecb.keys: %o\n", ecb[0], ecb[1], ecb[2], ecb[3], ecb[4], ecb[5], ecb[6], ecb[7], ecb[8]);
 
   newrp = *(unsigned int *)(ecb+0);
-  if (access != 1)
-#if 0
-    newrp = (newrp & ~RINGMASK32) | (RP & RINGMASK32);  /* no ring change */
-#else
-    newrp = newrp | (RP & RINGMASK32);    /* Case 24 indicates to weaken ring */
-#endif
+  if (access != 1)    /* not a gate, but weaken ring (outward calls) */
+    newrp = newrp | (RP & RINGMASK32);
 
   /* setup stack frame
      NOTE: newrp must be used here so that accesses succeed when calling 
@@ -2373,17 +2254,7 @@ static pcl (ea_t ecbea) {
     stackrootseg = get16((*(unsigned int *)(crs+SB)) + 1);
     TRACE(T_PCL, " stack root in ecb was zero, stack root from caller is %o\n", stackrootseg);
   }
-#if 0
-  /* NOTE: higher revs of Primos establish stacks in segment zero
-     during coldstart and bomb if this check is enabled */
-  if (stackrootseg == 0)
-    fatal("Stack base register root segment is zero");
-#endif
   stackfp = get32r(MAKEVA(stackrootseg,0), newrp);
-#if 0
-  if (stackfp == 0)
-    fatal("Stack free pointer is zero");
-#endif
   TRACE(T_PCL, " stack free pointer: %o/%o, current ring=%o, new ring=%o\n", stackfp>>16, stackfp&0xFFFF, (RPH&RINGMASK16)>>13, (newrp&RINGMASK32)>>29);
   stacksize = ecb[2];
 
@@ -2792,6 +2663,7 @@ static dispatcher() {
     printf("disp: rl bol=%o, != process dispatched=%o\n", rlbol, pcbw);
     fatal(NULL);
   }
+#endif
 #if 0
   /* NOTE: if a running process has its priority changed (in the pcb), this
      test fails, so it has been disabled  */
@@ -2800,7 +2672,6 @@ static dispatcher() {
     printf("disp: dispatched process level=%o, != pla=%o\n", get16r0(pcbp+PCBLEV), regs.sym.pla);
     fatal(NULL);
   }
-#endif
 #endif
   
   /* pcbp now points to the process we're going to run (pcbw is the
@@ -4157,7 +4028,7 @@ For disk boots, the last 3 digits can be:\n\
 fetch:
 
 #if 0
-  if (gvp->instcount > 10300000)
+  if (gvp->instcount > 20500000)
     gvp->savetraceflags = ~0;
 #endif
 
@@ -4574,7 +4445,7 @@ d_tka:  /* 001005 */
 
 d_tak:  /* 001015 */
   TRACE(T_FLOW, " TAK\n");
-  newkeys(crs[A] & 0177774);
+  newkeys(crs[A] & 0177770);
   goto fetch;
 
 d_nop:  /* 000001 */
@@ -5690,7 +5561,7 @@ d_bdy:  /* 0140724 */
 d_bdx:  /* 0140734 */
   TRACE(T_FLOW, " BDX\n");
   crs[X]--;
-#if 0
+#if 1
   m = iget16(RP);
   if (crs[X] > 100 && m == RPL-1) {
     struct timeval tv0,tv1;
@@ -8178,8 +8049,7 @@ imode:
       case 1:
 imodepcl:
 	stopwatch_push(&sw_pcl);
-	TRACE(T_FLOW|T_PCL, " PCL %s\n", searchloadmap(ea, 'e'));
-	//TRACE(T_FLOW|T_PCL, "#%d %o/%o: PCL %o/%o\n", gvp->instcount, RPH, RPL-2, ea>>16, ea&0xFFFF);
+	TRACE(T_FLOW|T_PCL, "#%d %o/%o: PCL %o/%o %s\n", gvp->instcount, RPH, RPL-2, ea>>16, ea&0xFFFF, searchloadmap(ea, 'e'));
 	if (gvp->numtraceprocs > 0 && TRACEUSER)
 	  for (i=0; i<gvp->numtraceprocs; i++)
 	    if (traceprocs[i].ecb == (ea & 0xFFFFFFF) && traceprocs[i].sb == -1) {
