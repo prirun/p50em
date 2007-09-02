@@ -104,20 +104,20 @@ static union {
 
     /* symbolic register file locations */
     struct {
-      unsigned int tr0,tr1,tr2,tr3,tr4,tr5,tr6,tr7;
-      unsigned int rdmx1,rdmx2;
-      unsigned short rdum1[1],ratmpl;
-      unsigned int rsgt1,rsgt2,recc1,recc2;
-      unsigned short rdum2[1],reoiv,zero,one;
-      unsigned int pbsave,rdmx3,rdmx4,c377,rdum3[3];
-      unsigned int pswpb;
-      unsigned short pswkeys,rdum4[1];
-      unsigned short pla,pcba,plb,pcbb;
-      unsigned int dswrma;
-      unsigned int dswstat;
-      unsigned int dswpb,rsavptr;
-      unsigned short regdmx[64];
-      unsigned int userregs[REGSETS-2][32];
+      unsigned int tr0,tr1,tr2,tr3,tr4,tr5,tr6,tr7;     /*  '0-7  */
+      unsigned int rdmx1,rdmx2;                         /* '10-11 */
+      unsigned short rdum1[1],ratmpl;                   /* '12    */
+      unsigned int rsgt1,rsgt2,recc1,recc2;             /* '13-16 */
+      unsigned short rdum2[1],reoiv,zero,one;           /* '17-20 */
+      unsigned int pbsave,rdmx3,rdmx4,c377,rdum3[3];    /* '21-27 */
+      unsigned int pswpb;                               /* '30    */
+      unsigned short pswkeys,rdum4[1];                  /* '31    */
+      unsigned short pla,pcba,plb,pcbb;                 /* '32-33 */
+      unsigned int dswrma;                              /* '34    */
+      unsigned int dswstat;                             /* '35    */
+      unsigned int dswpb,rsavptr;                       /* '36-37 */
+      unsigned short regdmx[64];                        /* '40-77 */
+      unsigned int userregs[REGSETS-2][32];             /* '100-  */
     } sym;
   } regs;
 

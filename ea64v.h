@@ -17,7 +17,10 @@ static inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned shor
   unsigned short m;
   unsigned short rph,rpl;
 
-  i = inst & 0100000;           /* indirect is bit 1 (left/MS bit) */
+  if (crs[MODALS] & 4)                       /* segmentation enabled? */
+    live = 010;                              /* yes, limit register traps */
+  else
+    live = 040;
 
   /* rph/rpl (and earp) are usually = RPH/RPL in the register file,
      except for the case of an XEC instruction; in that case, these
@@ -27,12 +30,40 @@ static inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned shor
   rpl = earp & 0xFFFF;
   //TRACE(T_EAV, " inst=%o, rph=%o, rpl=%o\n", inst, rph, rpl);
 
-  if (crs[MODALS] & 4)                           /* segmentation enabled? */
-    live = 010;                                  /* yes, limit register traps */
-  else
-    live = 040;
-
   ea_s = rph;
+
+  /* first check for direct short-form - the most commonly occurring case */
+
+  if ((inst & 0101000) == 0) {
+    ea_w = (inst & 0777);
+    if (x) {
+      TRACE(T_EAV, " Postindex, old ea_w=%o, X='%o/%d\n", ea_w, crs[X], *(short *)(crs+X));
+      ea_w += crs[X];
+      TRACE(T_EAV, " Postindex, new ea_w=%o\n", ea_w);
+    }
+    if (inst & 0400) {
+      TRACE(T_EAV, " Short LB relative, LB=%o/%o\n", crs[LBH], crs[LBL]);
+#if 1
+      ea_s = crs[LBH] | (ea_s & RINGMASK16);
+      ea_w += crs[LBL];
+      return MAKEVA(ea_s, ea_w);
+#else
+      ea_w += crs[LBL];
+      return (((*(int *)(crs+LBH) | (earp & RINGMASK32)) & 0xFFFF0000) | ea_w);
+#endif;
+    }
+    if (ea_w >= live) {
+      ea_s = crs[SBH] | (ea_s & RINGMASK16);
+      ea_w += crs[SBL];
+      TRACE(T_EAV, " Short SB relative, SB=%o/%o\n", crs[SBH], crs[SBL]);
+      return MAKEVA(ea_s, ea_w);
+    }
+    TRACE(T_EAV, " Live register '%o\n", ea_w);
+    return 0x80000000 | ea_w;
+  }
+
+  i = inst & 0100000;           /* indirect is bit 1 (left/MS bit) */
+
   if (inst & 001000)                             /* sector bit 7 set? */
     if ((inst & 0740) != 0400) {                 /* PC relative? */
       ea_w = rpl + (((short) (inst << 7)) >> 7);   /* yes, sign extend D */
@@ -50,7 +81,7 @@ static inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned shor
       x = 0;
     }
   } else 
-    goto labA;
+    fatal("goto labA?");
 
   if (i) {
     if (ea_w < live) {
@@ -75,34 +106,11 @@ static inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned shor
   return 0x80000000 | ea_w;
 
 
-labA:
-  ea_w = (inst & 0777);
-  if (x) {
-    TRACE(T_EAV, " Postindex, old ea_w=%o, X='%o/%d\n", ea_w, crs[X], *(short *)(crs+X));
-    ea_w += crs[X];
-    TRACE(T_EAV, " Postindex, new ea_w=%o\n", ea_w);
-  }
-  if ((inst & 0777) >= 0400) {
-    ea_s = crs[LBH] | (ea_s & RINGMASK16);
-    ea_w += crs[LBL];
-    TRACE(T_EAV, " Short LB relative, LB=%o/%o\n", crs[LBH], crs[LBL]);
-    return MAKEVA(ea_s, ea_w);
-  }
-  if (ea_w >= live) {
-    ea_s = crs[SBH] | (ea_s & RINGMASK16);
-    ea_w += crs[SBL];
-    TRACE(T_EAV, " Short SB relative, SB=%o/%o\n", crs[SBH], crs[SBL]);
-    return MAKEVA(ea_s, ea_w);
-  }
-  TRACE(T_EAV, " Live register '%o\n", ea_w);
-  return 0x80000000 | ea_w;
-  
-
   /* here for long, 2-word, V-mode memory reference */
 
 labB:
   a = iget16(RP);
-  RPL++;
+  INCRP;
   TRACE(T_EAV, " 2-word format, a=%o\n", a);
   y = (inst & 020);
   ixy = ((i != 0)<<2) | ((x != 0)<<1) | (y != 0);

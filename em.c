@@ -98,6 +98,7 @@ OK:
 #include <setjmp.h>
 #include <sys/time.h>
 #include <signal.h>
+#include <unistd.h>
 
 /* In SR modes, Prime CPU registers are mapped to memory locations
    0-'37, but only 0-7 are user accessible.  In the post-P300
@@ -121,6 +122,7 @@ typedef unsigned int pa_t;            /* physical address */
 
 static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) __attribute__ ((noreturn));
 static void fatal(char *msg) __attribute__ ((noreturn));
+static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int dswstat, unsigned int dswrma) __attribute__ ((noreturn));
 
 /* condition code macros */
 
@@ -454,7 +456,7 @@ static int memlimit;                    /* user's desired memory limit (-mem) */
    increment on RP (segment gets incremented too)!
  */
 
-#if FAST
+#ifdef FAST
 #define RPADD(n) (RP+n)
 #define INCRP RP++
 #else
@@ -777,17 +779,23 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
     pa = (stlbp->ppn << 10) | (ea & 0x3FF);
     TRACE(T_MAP,"        for ea %o/%o, stlbix=%d, pa=%o	loaded at #%d\n", ea>>16, ea&0xffff, stlbix, pa, stlbp->load_ic);
   } else {
-    /* XXX: this test looks bogus and should be removed, but causes boot failures related to disk I/O if removed */
-    pa = ea & (MEMSIZE-1);
+    pa = ea;
   }
   stopwatch_pop(&sw_mapva);
-#if DBG
+#ifndef FAST
   if (pa < memlimit)
 #endif
     return pa;
-  printf(" map: Memory address '%o (%o/%o) is out of range 0-'%o!\n", ea, ea>>16, ea & 0xffff, memlimit-1);
-  fatal(NULL);
-  /* NOTE: could also take a missing memory check here... */
+#if DBG
+  printf(" map: Memory address '%o (%o/%o) is out of range 0-'%o (%o/%o) at #%d!\n", pa, pa>>16, pa & 0xffff, memlimit-1, (memlimit-1)>>16, (memlimit-1) & 0xffff, gvp->instcount);
+#endif
+
+  /* take a missing memory check
+     XXX: not sure if dswstat and dswrma are right, but Primos doesn't
+     seem to look at them for this check */
+
+  macheck(071, 0310, 0xd000, pa);
+  fatal("Return from macheck");
 }
 
 /* for I/O, ea is either an 18-bit physical address (which is just
@@ -809,6 +817,7 @@ static unsigned int mapio(ea_t ea) {
   }
   return ea;
 }
+
 
 /* these are I/O versions of get/put that use the IOTLB rather than
    the STLB */
@@ -1146,6 +1155,39 @@ static put64r(long long value, ea_t ea, ea_t rpring) {
     put16r(m[3], INCVA(ea,3), rpring);
   }
 }
+
+/* machine check handler, called with check vector locations
+   The first arg is used when PX is disabled, the 2nd when PX is enabled. */
+
+void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int dswstat, unsigned int dswrma) {
+  unsigned short m;
+
+  /* set check registers in the register file */
+
+  regs.sym.dswpb = RP;
+  regs.sym.dswstat = dswstat;
+  regs.sym.dswrma = dswrma;
+
+  /* if process exchange is enabled, follow the standard check protocol;
+     if PX not enabled, simulate JST p300vec,* to invoke the check.
+     Then longjmp back to the fetch loop */
+
+  if (crs[MODALS] & 010) {
+    printf(" map: missing memory while PX enabled\n");
+  } else {
+    m = get16(p300vec);
+    put16(RPL, m);
+    RP = m+1;
+  }
+
+  /* similar code in the fault handler */
+
+  grp = RP;
+  gcrsl = crsl;
+  longjmp(jmpbuf, 1);
+  fatal("macheck: returned after longjmp\n");
+}
+
 
 static warn(char *msg) {
   printf("emulator warning:\n  instruction #%d at %o/%o: %o %o keys=%o, modals=%o\n  %s\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, get16(gvp->prevpc), get16(gvp->prevpc+1),crs[KEYS], crs[MODALS], msg);
@@ -1517,7 +1559,8 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
     }
   }
 
-  /* on longjmp, register globals are reset (PPC); save them before jumping */
+  /* on longjmp, register globals are reset (PPC); save them before jumping
+     See also macheck */
 
   grp = RP;
   gcrsl = crsl;
@@ -2301,7 +2344,7 @@ static pcl (ea_t ecbea) {
   /* load new execution state from ecb */
 
   TRACE(T_PCL, " before update, stackfp=%o/%o, SB=%o/%o\n", stackfp>>16, stackfp&0xFFFF, crs[SBH], crs[SBL]);
-  if (access == 1)
+  if (access == 1)                 /* for gate access, don't weaken ring */
     *(unsigned int *)(crs+SB) = stackfp;
   else
     *(unsigned int *)(crs+SB) = (stackfp & ~RINGMASK32) | (RP & RINGMASK32);
@@ -2311,12 +2354,16 @@ static pcl (ea_t ecbea) {
 
   /* update the stack free pointer; this has to wait until after all
      memory accesses, in case of stack page faults (PCL restarts).
+
      Some ucode versions incorrectly store the ring in the free
-     pointer if the extension pointer was followed.  Set EHDB to
-     suppress this spurious DIAG error. */
+     pointer if the extension pointer was followed.  Try setting EHDB
+     to suppress this spurious DIAG error. */
 
   ea = MAKEVA(stackrootseg,0) | (newrp & RINGMASK32);
-  put32r((stackfp+stacksize) & ~RINGMASK32, ea, newrp);
+  if (cpuid == 15)
+    put32r(stackfp+stacksize, ea, newrp);
+  else
+    put32r((stackfp+stacksize) & ~RINGMASK32, ea, newrp);
 
   /* transfer arguments if arguments are expected.  There is no
      documentation explaining how the Y register is used during
@@ -3727,6 +3774,7 @@ main (int argc, char **argv) {
 	  fatal("-cpuid arg range is 0 to 44\n");
       } else
 	fatal("-cpuid needs an argument\n");
+#ifndef FAST
     } else if (strcmp(argv[i],"-mem") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
@@ -3736,6 +3784,7 @@ main (int argc, char **argv) {
 	  fatal("-mem arg range is 1 to 1024 (megabytes)\n");
       } else
 	fatal("-mem needs an argument\n");
+#endif
     } else if (strcmp(argv[i],"-tport") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
@@ -4028,7 +4077,7 @@ For disk boots, the last 3 digits can be:\n\
 fetch:
 
 #if 0
-  if (gvp->instcount > 20500000)
+  if (gvp->instcount > 32727500)
     gvp->savetraceflags = ~0;
 #endif
 
@@ -5561,7 +5610,7 @@ d_bdy:  /* 0140724 */
 d_bdx:  /* 0140734 */
   TRACE(T_FLOW, " BDX\n");
   crs[X]--;
-#if 1
+#if 0
   m = iget16(RP);
   if (crs[X] > 100 && m == RPL-1) {
     struct timeval tv0,tv1;
@@ -8610,7 +8659,17 @@ nonimode:
       stopwatch_push(&sw_cas);
       m = get16t(ea);
       TRACE(T_FLOW, " CAS ='%o/%d\n", m, *(short *)&m);
-#if 1
+#ifdef FAST
+      CLEARCC;
+      if (crs[A] == m) {
+	INCRP;
+	SETEQ;
+      } else if (*(short *)(crs+A) < *(short *)&m) {
+	RPL += 2;
+	SETLT;
+      }
+      XSETL(0);
+#else
       crs[KEYS] &= ~020300;   /* clear L, and CC */
       utempa = crs[A];
       utempl = crs[A];
@@ -8631,16 +8690,6 @@ nonimode:
 	INCRP;
       else if (*(short *)(crs+A) < *(short *)&m)
 	RPL += 2;
-#else
-      CLEARCC;
-      if (crs[A] == m) {
-	INCRP;
-	SETEQ;
-      } else if (*(short *)(crs+A) < *(short *)&m) {
-	RPL += 2;
-	SETLT;
-      }
-      XSETL(0);
 #endif
       stopwatch_pop(&sw_cas);
       goto fetch;
