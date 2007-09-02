@@ -8,7 +8,6 @@ static inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned shor
   unsigned short ea_r;                           /* eff address ring */
   unsigned short ea_w;                           /* eff address wordno */
   unsigned short br;
-  unsigned short live;                           /* max live register addr */
   unsigned short i;
   unsigned short y;
   unsigned short xok;
@@ -16,11 +15,6 @@ static inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned shor
   unsigned short ixy;
   unsigned short m;
   unsigned short rph,rpl;
-
-  if (crs[MODALS] & 4)                       /* segmentation enabled? */
-    live = 010;                              /* yes, limit register traps */
-  else
-    live = 040;
 
   /* rph/rpl (and earp) are usually = RPH/RPL in the register file,
      except for the case of an XEC instruction; in that case, these
@@ -52,7 +46,7 @@ static inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned shor
       return (((*(int *)(crs+LBH) | (earp & RINGMASK32)) & 0xFFFF0000) | ea_w);
 #endif;
     }
-    if (ea_w >= live) {
+    if (ea_w >= gvp->livereglim) {
       ea_s = crs[SBH] | (ea_s & RINGMASK16);
       ea_w += crs[SBL];
       TRACE(T_EAV, " Short SB relative, SB=%o/%o\n", crs[SBH], crs[SBL]);
@@ -84,7 +78,7 @@ static inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned shor
     fatal("goto labA?");
 
   if (i) {
-    if (ea_w < live) {
+    if (ea_w < gvp->livereglim) {
       TRACE(T_EAV, " Indirect through live register '%o\n", ea_w);
       ea_w = get16t(0x80000000 | ea_w);
     } else {
@@ -99,7 +93,7 @@ static inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned shor
     TRACE(T_EAV, " Postindex, new ea_w=%o\n", ea_w);
   }
 
-  if (ea_w >= live)
+  if (ea_w >= gvp->livereglim)
     return MAKEVA(ea_s, ea_w);
 
   TRACE(T_EAV, " Live register '%o\n", ea_w);

@@ -402,6 +402,8 @@ typedef struct {
   int pmap32mask;               /* mask for 32-bit page maps */
 
   int csoffset;                 /* concealed stack segment offset */
+
+  int livereglim;               /* 010 if seg enabled, 040 if disabled */
 } gv_t;
 
 static gv_t gv;
@@ -1573,14 +1575,10 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
 
 static ea_t ea16s (unsigned short inst, short x) {
   
-  unsigned short ea, m, rpl, amask, live, i;
+  unsigned short ea, m, rpl, amask, i;
   ea_t va;
 
   i = inst & 0100000;                            /* indirect */
-  if (crs[MODALS] & 4)                           /* segmentation enabled? */
-    live = 010;                                  /* yes, limit register traps */
-  else
-    live = 040;
   amask = 037777;
   rpl = gvp->prevpc;
   if (inst & 001000)
@@ -1592,7 +1590,7 @@ static ea_t ea16s (unsigned short inst, short x) {
       ea += crs[X];
     if (!i)                                      /* not indirect */
       break;
-    if (ea < live)
+    if (ea < gvp->livereglim)
       m = get16t(0x80000000|ea);
     else
       m = get16t(MAKEVA(RPH,ea));
@@ -1601,7 +1599,7 @@ static ea_t ea16s (unsigned short inst, short x) {
     ea = m & 037777;                             /* go indirect */
   }
   va = MAKEVA(RPH, ea);
-  if (ea < live)                                 /* flag live register ea */
+  if (ea < gvp->livereglim)                      /* flag live register ea */
     return va | 0x80000000;
   return va;
 }
@@ -1611,14 +1609,10 @@ static ea_t ea16s (unsigned short inst, short x) {
 
 static ea_t ea32s (unsigned short inst, short x) {
   
-  unsigned short ea, m,rpl, amask, live, i;
+  unsigned short ea, m,rpl, amask, i;
   ea_t va;
 
   i = inst & 0100000;                            /* indirect */
-  if (crs[MODALS] & 4)                           /* segmentation enabled? */
-    live = 010;                                  /* yes, limit register traps */
-  else
-    live = 040;
   amask = 077777;
   rpl = gvp->prevpc;
   if (inst & 001000)
@@ -1631,7 +1625,7 @@ static ea_t ea32s (unsigned short inst, short x) {
     }
   }
   while (i) {
-    if (ea < 040)
+    if (ea < gvp->livereglim)
       m = get16t(0x80000000|ea);
     else
       m = get16t(MAKEVA(RPH,ea));
@@ -1642,7 +1636,7 @@ static ea_t ea32s (unsigned short inst, short x) {
     ea += crs[X];
   ea &= amask;
   va = MAKEVA(RPH, ea);
-  if (ea < live)                                 /* flag live register ea */
+  if (ea < gvp->livereglim)                      /* flag live register ea */
     return va | 0x80000000;
   return va;
 }
@@ -1654,14 +1648,10 @@ static ea_t ea32s (unsigned short inst, short x) {
 
 static ea_t ea32r64r (ea_t earp, unsigned short inst, short x, unsigned short *opcode) {
 
-  unsigned short live, ea, m, rph, rpl, amask, class, i;
+  unsigned short ea, m, rph, rpl, amask, class, i;
   ea_t va;
 
   i = inst & 0100000;                            /* indirect */
-  if (crs[MODALS] & 4)                           /* segmentation enabled? */
-    live = 010;                                  /* yes, limit register traps */
-  else
-    live = 040;
   amask = 0177777;
   if ((crs[KEYS] & 016000) == 06000)             /* 32R mode? */
     amask = 077777;
@@ -1686,7 +1676,7 @@ static ea_t ea32r64r (ea_t earp, unsigned short inst, short x, unsigned short *o
     }
   }
   while (i) {
-    if (ea < live)
+    if (ea < gvp->livereglim)
       m = get16t(0x80000000|ea);
     else
       m = get16t(MAKEVA(rph,ea));
@@ -1705,7 +1695,7 @@ static ea_t ea32r64r (ea_t earp, unsigned short inst, short x, unsigned short *o
   }
   ea &= amask;
   va = MAKEVA(rph, ea);
-  if (ea < live)                                 /* flag live register ea */
+  if (ea < gvp->livereglim)                      /* flag live register ea */
     return va | 0x80000000;
   return va;
 
@@ -1726,7 +1716,7 @@ special:
       TRACE(T_EAR, " Preindex, new ea=%o\n", ea);
     }
     while (i) {
-      if (ea < live)
+      if (ea < gvp->livereglim)
 	m = get16t(0x80000000|ea);
       else
 	m = get16t(MAKEVA(rph,ea));
@@ -1747,7 +1737,7 @@ special:
     if (class == 3)
       ea += (short) crs[S];
     while (i) {
-      if (ea < live)
+      if (ea < gvp->livereglim)
 	m = get16t(0x80000000|ea);
       else
 	m = get16t(MAKEVA(rph,ea));
@@ -1770,7 +1760,7 @@ special:
       ea = --crs[S];
     TRACE(T_EAR, " Class 2/3, new ea=%o, new S=%o\n", ea, crs[S]);
     if (x) {
-      if (ea < live)
+      if (ea < gvp->livereglim)
 	m = get16t(0x80000000|ea);
       else
 	m = get16t(MAKEVA(rph,ea));
@@ -1779,7 +1769,7 @@ special:
       ea = m & amask;
     }
     while (i) {
-      if (ea < live)
+      if (ea < gvp->livereglim)
 	m = get16t(0x80000000|ea);
       else
 	m = get16t(MAKEVA(rph,ea));
@@ -1794,7 +1784,7 @@ special:
   }
   ea &= amask;
   va = MAKEVA(rph, ea);
-  if (ea < live)                                  /* flag live register ea */
+  if (ea < gvp->livereglim)                     /* flag live register ea */
     return va | 0x80000000;
   return va;
 }
@@ -3103,9 +3093,9 @@ static lpsw() {
     TRACE(T_PX, "Mapped I/O enabled\n");
   if (crs[MODALS] & 4) {
     TRACE(T_PX, "Segmentation enabled\n");
-    if (domemdump) dumpsegs();
-    //traceflags = ~TB_MAP;
-  }
+    gvp->livereglim = 010;
+  } else 
+    gvp->livereglim = 040;
 #if 0
   gvp->savetraceflags |= TB_FLOW;    /****/
 #endif
@@ -3678,6 +3668,7 @@ main (int argc, char **argv) {
   gvp->instcount = 0;
   gvp->inhcount = 0;
   gvp->instpermsec = 2000;
+  gvp->livereglim = 040;
 
   /* ignore SIGPIPE signals (sockets) or they'll kill the emulator */
 
