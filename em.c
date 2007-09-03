@@ -4207,9 +4207,6 @@ fetch:
     crs[MODALS] &= 077777;   /* inhibit interrupts */
   }
 
-  /* as a speedup later, fetch 32/64 bits (or the rest of the page)
-     and maintain a prefetch queue */
-
   gvp->prevpc = RP;
 #if 0
   /* NOTE: Rev 21 Sys Arch Guide, 2nd Ed, pg 3-32 says:
@@ -6538,25 +6535,9 @@ d_smcs:  /* 0101200 */
   RESTRICT();
   goto fetch;
 
-#if 0
-  /* NOTE: this is the clock display instruction skip, but appears
-     goofy to me, and looks more like an I/O instruction:
-
-unrecognized skip instruction 101704 at 6/3174
-Fatal error: instruction #106825755 at 6/3173: 101704 677
-keys = 14200, modals=100177
-
-  */
-
-  if (inst == 0101704) {    /* skip if machine check flop is set */
-    TRACE(T_FLOW, " clock SKP?\n");
-    INCRP;
-    goto fetch;
-#endif
-
 d_badgen:
   TRACEA(" unrecognized generic instruction!\n");
-  printf("#%d: %o/%o: Unrecognized generic instruction '%o!\n", gvp->instcount, RPH, RPL, inst);
+  printf("em: #%d %o/%o: Unrecognized generic instruction '%o!\n", gvp->instcount, RPH, RPL, inst);
   //gvp->traceflags = ~TB_MAP;
   fault(UIIFAULT, RPL, RP);
   fatal(NULL);
@@ -8441,14 +8422,6 @@ imodepcl:
 
 nonimode:
 
-    /* here for non-generic instructions: memory references or pio */
-    /* pio can only occur in S/R modes */
-
-    if (!(crs[KEYS] & 010000) && (inst & 036000) == 030000) {
-      pio(inst);
-      goto fetch;
-    }
-
     /* get x bit and adjust opcode so that PMA manual opcode
        references can be used directly, ie, if the PMA manual says the
        opcode is '15 02, then 01502 can be used here.  If the PMA
@@ -8489,13 +8462,25 @@ nonimode:
     stopwatch_push(&sw_ea);
     switch ((crs[KEYS] >> 10) & 7) {
     case 0:  /* 16S */
+      if (opcode == 01400) {
+ 	pio(inst);
+ 	goto fetch;
+      }
       ea = ea16s(inst, x);
       break;
     case 1:  /* 32S */
+      if (opcode == 01400) {
+ 	pio(inst);
+ 	goto fetch;
+      }
       ea = ea32s(inst, x);
       break;
     case 2:  /* 64R */
     case 3:  /* 32R */
+      if (opcode == 01400) {
+ 	pio(inst);
+ 	goto fetch;
+      }
       ea = ea32r64r(earp, inst, x, &opcode);
       break;
     case 4:  /* 32I */
