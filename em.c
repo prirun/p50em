@@ -1028,11 +1028,11 @@ unsigned short iget16(ea_t ea) {
   static ea_t prevvpn = 0xFFFFFC00;   /* virtual page address */
 
   if (*(int *)&ea >= 0) {
-    thisvpn = ea & 0x8FFFFC00;          /* no match if ea faulted */
+    thisvpn = ea & 0x0FFFFC00;          /* segment and page number */
     if ((thisvpn != prevvpn) || (((ea & 0x0FFF0000) >= 0x800) && (crsl[OWNER32] != prevowner))) {
-      prevppa = mapva(ea, RP, RACC, &access) & 0xFFFFFC00;
-      prevowner = crsl[OWNER32];
       prevvpn = thisvpn;
+      prevowner = crsl[OWNER32];
+      prevppa = mapva(ea, RP, RACC, &access) & 0xFFFFFC00;
     }
     return mem[prevppa + (ea & 0x3FF)];
   }
@@ -4244,8 +4244,12 @@ fetch:
      process stops running, RP is copied to PB.  When a process
      starts running again, PB is copied to RP. */
 
+#ifdef FAST
+  *(int *)(crs+PBH) = RP & 0xFFFF0000;
+#else
   crs[PBH] = RPH;
   crs[PBL] = 0;
+#endif
   earp = RP;
 
   if (crs[MODALS] & 010) {     /* px enabled, bump 1ms process timer */
