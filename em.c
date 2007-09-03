@@ -954,17 +954,7 @@ static long long get64r(ea_t ea, ea_t rpring) {
 #endif
 
   pa = mapva(ea, rpring, RACC, &access);
-#if 0
-  if ((pa & 01777) <= 01774) {          /* no page wrap */
-    *(int *)(m+0) = *(int *)(mem+pa);
-    *(int *)(m+2) = *(int *)(mem+pa+2);
-  } else {
-    m[0] = mem[pa];
-    m[1] = get16r(INCVA(ea,1), rpring);
-    m[2] = get16r(INCVA(ea,2), rpring);
-    m[3] = get16r(INCVA(ea,3), rpring);
-  }
-#else
+#if FAST
   if ((ea & 01777) <= 01774) {          /* no page wrap */
     *(int *)(m+0) = *(int *)(mem+pa);
     *(int *)(m+2) = *(int *)(mem+pa+2);
@@ -990,6 +980,16 @@ static long long get64r(ea_t ea, ea_t rpring) {
     default:
       fatal("Page cross error in get64r");
     }
+#else
+  if ((pa & 01777) <= 01774) {          /* no page wrap */
+    *(int *)(m+0) = *(int *)(mem+pa);
+    *(int *)(m+2) = *(int *)(mem+pa+2);
+  } else {
+    m[0] = mem[pa];
+    m[1] = get16r(INCVA(ea,1), rpring);
+    m[2] = get16r(INCVA(ea,2), rpring);
+    m[3] = get16r(INCVA(ea,3), rpring);
+  }
 #endif
   return *(long long *)m;
 }
@@ -8462,37 +8462,25 @@ nonimode:
     }
 
     TRACE(T_INST, " opcode=%5#0o, i=%o, x=%o\n", opcode, inst & 0100000, x);
-
     stopwatch_push(&sw_ea);
-    switch ((crs[KEYS] >> 10) & 7) {
-    case 0:  /* 16S */
-      if (opcode == 01400) {
- 	pio(inst);
- 	goto fetch;
-      }
-      ea = ea16s(inst, x);
-      break;
-    case 1:  /* 32S */
-      if (opcode == 01400) {
- 	pio(inst);
- 	goto fetch;
-      }
-      ea = ea32s(inst, x);
-      break;
-    case 2:  /* 64R */
-    case 3:  /* 32R */
-      if (opcode == 01400) {
- 	pio(inst);
- 	goto fetch;
-      }
-      ea = ea32r64r(earp, inst, x, &opcode);
-      break;
-    case 4:  /* 32I */
-      fatal("32I mode invalid here");
-    case 6:  /* 64V */
+
+    if (crs[KEYS] & 010000)                 /* really is only V-mode */
       ea = ea64v(earp, inst, x, &opcode);
-      break;
-    default:
+
+    else if (opcode == 01400) {             /* check for pio in R-mode */
+      pio(inst);
+      goto fetch;
+
+    } else if (crs[KEYS] & 004000)
+      ea = ea32r64r(earp, inst, x, &opcode);
+
+    else if (crs[KEYS] & 002000)
+      ea = ea32s(inst, x);
+
+    else if ((crs[KEYS] & 016000) == 0)
+      ea = ea16s(inst, x);
+
+    else {
       printf("Bad CPU mode in EA calculation, keys = %o\n", crs[KEYS]);
       fatal(NULL);
     }
