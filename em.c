@@ -333,20 +333,25 @@ static unsigned short cpuid = 5;            /* STPM CPU model, set with -cpuid *
 
 /* STLB cache structure is defined here; the actual stlb is in gv.
    There are several different styles on Prime models.  This is
-   modeled after the 6350 STLB, but is only 1-way associative. */
+   modeled after the 6350 STLB, but is only 1-way associative.
+
+   Instead of using a valid/invalid bit, a segment number of 0xFFFF
+   means "invalid", since it won't match any real segment number */
 
 #define STLBENTS 512
 
 typedef struct {
-  char valid;                 /* 1 if STLB entry is valid, zero otherwise */
-  char unmodified;            /* 1 if page hasn't been modified, 0 if modified */
-  //  char shared;                /* 1 if page is shared and can't be cached */
-  char access[4];             /* ring n access rights */
-  unsigned short procid;      /* process id for segments >= '4000 */
-  unsigned short seg;         /* segment number */
-  unsigned int ppn;           /* physical page number */
   unsigned short *pmep;       /* pointer to page table flag word */
-  unsigned long load_ic;      /* instruction where STLB was loaded (for debug) */
+  unsigned int ppn;           /* physical page number */
+  unsigned short procid;      /* process id for segments >= '4000 */
+  short seg;                  /* segment number (0-0xFFF) */
+  char access[4];             /* ring n access rights */
+  char unmodified;            /* 1 if page hasn't been modified, 0 if it has */
+  //char shared;                /* 1 if page is shared and can't be cached */
+  //char valid;                 /* 1 if STLB entry is valid, zero otherwise */
+#ifndef NOTRACE
+  unsigned long load_ic;      /* instruction where STLB was loaded, (debug) */
+#endif
 } stlbe_t;
 
 /* The IOTLB stores translations for each page of the I/O segments 0-3 */
@@ -354,8 +359,8 @@ typedef struct {
 #define IOTLBENTS 64*4
 
 typedef struct {
-  char valid;                 /* 1 if IOTLB entry is valid, zero otherwise */
   unsigned int ppn;           /* physical page number */
+  char valid;                 /* 1 if IOTLB entry is valid, zero otherwise */
 } iotlbe_t;
 
 /* "gv" is a static structure used to hold "hot" global variables.  These
@@ -718,11 +723,11 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
     }
 #endif
 
-    /* if the STLB entry isn't valid, or the segments don't match,
-       or the segment is private and the process id doesn't match,
-       then the STLB has to be loaded first */
+    /* if the segments don't match, or the segment is private and the
+       process id doesn't match, then the STLB has to be loaded
+       first (invalid entries have a segment of 0xFFFF and won't match) */
 
-    if (!stlbp->valid || stlbp->seg != seg || (seg >= 04000 && stlbp->procid != crs[OWNERL])) {
+    if (stlbp->seg != seg || (seg >= 04000 && stlbp->procid != crs[OWNERL])) {
 #ifndef NOTRACE
       gvp->mapvamisses++;
 #endif
@@ -759,7 +764,6 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       if (!(pte & 0x8000))
 	fault(PAGEFAULT, 0, ea);
       mem[pmaddr] |= 040000;     /* set referenced bit */
-      stlbp->valid = 1;
       stlbp->unmodified = 1;
       stlbp->access[0] = 7;
       stlbp->access[1] = (sdw >> 12) & 7;
@@ -768,7 +772,9 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       stlbp->seg = seg;
       stlbp->ppn = ppn;
       stlbp->pmep = mem+pmaddr;
+#ifndef NOTRACE
       stlbp->load_ic = gvp->instcount;
+#endif
 
       /* if this is an I/O segment reference, load the I/O TLB too.
 	 This is done because earlier machines didn't have the LIOT
@@ -828,11 +834,11 @@ static pa_t fastmap (ea_t ea, ea_t rp, short intacc) {
     seg = SEGNO32(ea);
     stlbp = gvp->stlb+STLBIX(ea);
 
-    /* if the STLB entry is valid and the segments match, and the
-       segment is common to all or the process id matches, then the STLB
-       cache can be used for this access  */
+    /* if the STLB segments match, and the segment is common to all or
+       the process id matches, then the STLB cache can be used for
+       this access  */
 
-    if (stlbp->valid && (stlbp->seg == seg) && ((seg < 04000) || (stlbp->procid == crs[OWNERL]))) {
+    if ((stlbp->seg == seg) && ((seg < 04000) || (stlbp->procid == crs[OWNERL]))) {
       ring = ((rp | ea) >> 29) & 3;  /* current ring | ea ring = access ring */
       access = stlbp->access[ring];
       if ((intacc & access) == intacc) {
@@ -3762,7 +3768,7 @@ main (int argc, char **argv) {
   newkeys(0);
   RP = 01000;
   for (i=0; i < STLBENTS; i++)
-    gvp->stlb[i].valid = 0;
+    gvp->stlb[i].seg = 0xFFFF;        /* marker for invalid STLB entry */
   for (i=0; i < IOTLBENTS; i++)
     gvp->iotlb[i].valid = 0;
   bzero(mem, 64*1024*2);              /* zero first 64K words */
@@ -5160,7 +5166,7 @@ d_liot:  /* 000044 */
   RESTRICT();
   ea = apea(NULL);
   utempa = STLBIX(ea);
-  gvp->stlb[utempa].valid = 0;
+  gvp->stlb[utempa].seg = 0xFFFF;
   TRACE(T_INST, " invalidated STLB index %d\n", utempa);
   mapva(ea, RP, RACC, &access);
   TRACE(T_INST, " loaded STLB for %o/%o\n", ea>>16, ea&0xffff);
@@ -5172,7 +5178,7 @@ d_ptlb:  /* 000064 */
   utempl = *(unsigned int *)(crs+L);
   for (utempa = 0; utempa < STLBENTS; utempa++)
     if ((utempl & 0x80000000) || gvp->stlb[utempa].ppn == utempl)
-      gvp->stlb[utempa].valid = 0;
+      gvp->stlb[utempa].seg = 0xFFFF;
   goto fetch;
 
 d_itlb:  /* 000615 */
@@ -5187,11 +5193,11 @@ d_itlb:  /* 000615 */
 
   if (utempl == 0x10000) {
     for (utempa = 0; utempa < STLBENTS; utempa++)
-      gvp->stlb[utempa].valid = 0;
+      gvp->stlb[utempa].seg = 0xFFFF;
     TRACE(T_INST, " purged entire STLB\n");
   } else {
     utempa = STLBIX(utempl);
-    gvp->stlb[utempa].valid = 0;
+    gvp->stlb[utempa].seg = 0xFFFF;
     TRACE(T_INST, " invalidated STLB index %d\n", utempa);
     if (((utempl >> 16) & 07777) < 4)
       gvp->iotlb[(utempl >> 10) & 0xFF].valid = 0;
@@ -5643,7 +5649,7 @@ d_bdy:  /* 0140724 */
 d_bdx:  /* 0140734 */
   TRACE(T_FLOW, " BDX\n");
   crs[X]--;
-#if 1
+#ifndef FAST2
   m = iget16(RP);
   if (crs[X] > 100 && m == RPL-1) {
     struct timeval tv0,tv1;
@@ -8668,16 +8674,12 @@ nonimode:
       stopwatch_push(&sw_cas);
       m = get16t(ea);
       TRACE(T_FLOW, " CAS ='%o/%d\n", m, *(short *)&m);
-#ifdef FAST
-      CLEARCC;
+#if 0
       if (crs[A] == m) {
 	INCRP;
-	// SETEQ;
       } else if (*(short *)(crs+A) < *(short *)&m) {
 	RPL += 2;
-	//SETLT;
       }
-      //XSETL(0);
 #else
       crs[KEYS] &= ~020300;   /* clear L, and CC */
       utempa = crs[A];
