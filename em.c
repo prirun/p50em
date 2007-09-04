@@ -404,6 +404,10 @@ typedef struct {
   int csoffset;                 /* concealed stack segment offset */
 
   int livereglim;               /* 010 if seg enabled, 040 if disabled */
+
+  int mapvacalls;               /* # of mapva calls */
+  int mapvamisses;              /* STLB misses */
+
 } gv_t;
 
 static gv_t gv;
@@ -667,7 +671,8 @@ char *searchloadmap(int addr, char type) {
 #define XACC 4
 
 
-/* NOTE: this is the 6350 STLB hash function, giving a 9-bit index 0-511 */
+/* NOTE: this is the 6350 STLB hash function, giving a 9-bit index 0-511.
+   The hit rate is over 99% for booting and compiling Primos */
 
 #define STLBIX(ea) ((((((ea) >> 12) ^ (ea)) & 0xc000) >> 7) | (((ea) & 0x70000) >> 12) | ((ea) & 0x3c00) >> 10)
 
@@ -699,6 +704,9 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
   /* map virtual address if segmentation is enabled */
 
   if (crs[MODALS] & 4) {
+#ifndef NOTRACE
+    gvp->mapvacalls++;
+#endif
     seg = SEGNO32(ea);
     stlbix = STLBIX(ea);
     stlbp = gvp->stlb+stlbix;
@@ -714,6 +722,9 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
        then the STLB has to be loaded first */
 
     if (!stlbp->valid || stlbp->seg != seg || (seg >= 04000 && stlbp->procid != crs[OWNERL])) {
+#ifndef NOTRACE
+      gvp->mapvamisses++;
+#endif
       dtar = *(unsigned int *)(crs+DTAR0-2*DTAR32(ea));  /* get dtar register */
       nsegs = 1024-(dtar>>22);
       relseg = seg & 0x3FF;     /* segment within segment table */
@@ -1418,6 +1429,10 @@ static void fatal(char *msg) {
       next = this;
     }
   }
+
+#ifndef NOTRACE
+  printf("STLB calls: %d  misses: %d  hitrate: %5.2f%%\n", gvp->mapvacalls, gvp->mapvamisses, (double)(gvp->mapvacalls-gvp->mapvamisses)/gvp->mapvacalls*100.0);
+#endif
 
   if (msg)
     printf("%s\n", msg);
@@ -3691,6 +3706,8 @@ main (int argc, char **argv) {
   gvp->inhcount = 0;
   gvp->instpermsec = 2000;
   gvp->livereglim = 040;
+  gvp->mapvacalls = 0;
+  gvp->mapvamisses = 0;
 
   /* ignore SIGPIPE signals (sockets) or they'll kill the emulator */
 
