@@ -800,11 +800,48 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
   fatal("Return from macheck");
 }
 
+#if 0
+/* Use fastmap only when intacc = RACC or WACC, ie, get/put, not PACC!): 
+
+  (pa_t) pa = fastmap(ea, intacc, rp);
+
+*/
+
+static pa_t fastmap (ea_t ea, ea_t rp, short intacc) {
+  short seg, ring;
+  stlbe_t *stlbp;
+  unsigned short access;
+
+  if (crs[MODALS] & 4) {
+    seg = SEGNO32(ea);
+    stlbp = gvp->stlb+STLBIX(ea);
+
+    /* if the STLB entry is valid and the segments match, and the
+       segment is common to all or the process id matches, then the STLB
+       cache can be used for this access  */
+
+    if (stlbp->valid && (stlbp->seg == seg) && ((seg < 04000) || (stlbp->procid == crs[OWNERL]))) {
+      ring = ((rp | ea) >> 29) & 3;  /* current ring | ea ring = access ring */
+      access = stlbp->access[ring];
+      if ((intacc & access) == intacc) {
+	if (stlbp->unmodified && intacc == WACC) {
+	  stlbp->unmodified = 0;
+	  *(stlbp->pmep) &= ~020000;    /* reset unmodified bit in memory */
+	}
+	return ((stlbp->ppn << 10) | (ea & 0x3FF));
+      }
+    }
+    return mapva(ea, intacc, rp, &access);
+  }
+  return ea;
+}
+#endif
+
 /* for I/O, ea is either an 18-bit physical address (which is just
    returned if not in mapped I/O mode), or a 2-bit segment number and
    16-bit word number for mapped I/O.  A physical address is returned. */
 
-static unsigned int mapio(ea_t ea) {
+const static unsigned int mapio(ea_t ea) {
   int iotlbix;
 
   ea &= 0x3FFFF;
@@ -885,7 +922,12 @@ static inline unsigned short get16(ea_t ea) {
     warn("address trap in get16");
 #endif
 
+#ifdef FASTxxx
+  /* Primos rev 19 won't boot with this enabled... */
+  return mem[fastmap(ea, RP, RACC)];
+#else
   return mem[mapva(ea, RP, RACC, &access)];
+#endif
 }
 
 static unsigned short get16r(ea_t ea, ea_t rpring) {
@@ -999,27 +1041,9 @@ static long long get64r(ea_t ea, ea_t rpring) {
    performance all that much and is potentially incompatible, ie,
    iget16t isn't implemented (V-mode executing from registers) */
 
-#if 1
+#ifdef FAST
 #define iget16t(ea) iget16((ea))
 
-#if 0
-unsigned short iget16(ea_t ea) {
-  static ea_t eafirst = -1;             /* ea of instruction buffer */
-  static unsigned short insts[4];       /* instruction buffer */
-
-  if ((crs[KEYS] & 010000)) {           /* only buffer in VI-mode */
-    if ((ea & 0xFFFFFFFC) != eafirst) { /* load instruction buffer */
-      eafirst = ea & 0xFFFFFFFC;
-      *(long long *)insts = get64(eafirst);
-    }
-    return insts[ea & 3];
-  }
-  eafirst = -1;
-  return get16t(ea);
-}
-#endif
-
-#if 1
 unsigned short iget16(ea_t ea) {
   unsigned short access;
   ea_t thisvpn;
@@ -1038,8 +1062,6 @@ unsigned short iget16(ea_t ea) {
   }
   return get16t(ea);
 }
-#endif
-
 #else
 #define iget16(ea) get16((ea))
 #define iget16t(ea) get16t((ea))
@@ -7934,21 +7956,21 @@ imode:
 	dr &= 2;
 	TRACE(T_INST, " FD\n");
 	CLEARC;
-	if (*(int *)(crsl+FAC0+dr)) {
-	  if (*(int *)&ea >= 0) {
-	    immu64 = get32(ea);
-	    immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
-	  }
-	  if (*(int *)&immu64)
+	if (*(int *)&ea >= 0) {
+	  immu64 = get32(ea);
+	  immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
+	}
+	if (*(int *)&immu64)
+	  if (*(int *)(crsl+FAC0+dr))
 	    if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC0+dr, &tempd1)) {
 	      *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1/tempd2);
 	      XCLEARC;   /* XXX: test overflow */
 	    } else
 	      mathexception('f', FC_SFP_OFLOW, ea);
 	  else            /* operand = 0.0 */
-	    mathexception('f', FC_SFP_ZDIV, ea);
-	} else            /* clean up (maybe) dirty zero */
-	  *(long long *)(crsl+FAC0+dr) = 0;
+	    *(long long *)(crsl+FAC0+dr) = 0;
+	else            /* clean up (maybe) dirty zero */
+	  mathexception('f', FC_SFP_ZDIV, ea);
 	break;
 
       case 1:
@@ -7956,19 +7978,19 @@ imode:
 	dr &= 2;
 	TRACE(T_INST, " DFD\n");
 	CLEARC;
-	if (*(int *)(crsl+FAC0+dr)) {
-	  if (*(int *)&ea >= 0)
-	    immu64 = get64(ea);
-	  if (*(int *)&immu64)
+	if (*(int *)&ea >= 0)
+	  immu64 = get64(ea);
+	if (*(int *)&immu64)
+	  if (*(int *)(crsl+FAC0+dr))
 	    if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC0+dr, &tempd1)) {
 	      *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1/tempd2);
 	      XCLEARC;   /* XXX: test overflow */
 	    } else
 	      mathexception('f', FC_DFP_OFLOW, ea);
 	  else
-	    mathexception('f', FC_DFP_ZDIV, ea);
-	} else
-	  *(long long *)(crsl+FAC0+dr) = 0;
+	    *(long long *)(crsl+FAC0+dr) = 0;
+	else
+	  mathexception('f', FC_DFP_ZDIV, ea);
 	break;
 
       case 4:  /* QFLD */
@@ -8977,19 +8999,19 @@ nonimode:
     case 01701:
       TRACE(T_FLOW, " FDV\n");
       CLEARC;
-      if (*(int *)(crsl+FAC1)) {
-	immu64 = get32(ea);
-	immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
-	if (*(int *)&immu64)
+      immu64 = get32(ea);
+      immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
+      if (*(int *)&immu64)
+	if (*(int *)(crsl+FAC1))
 	  if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC1, &tempd1)) {
 	    *(double *)(crsl+FAC1) = ieeepr8(tempd1/tempd2);
 	    XCLEARC;   /* XXX: test overflow */
 	  } else
 	    mathexception('f', FC_SFP_OFLOW, ea);
 	else            /* operand = 0.0 */
-	  mathexception('f', FC_SFP_ZDIV, ea);
-      } else            /* clean up (maybe) dirty zero */
-	*(long long *)(crsl+FAC1) = 0;
+	  *(long long *)(crsl+FAC1) = 0;
+      else            /* clean up (maybe) dirty zero */
+	mathexception('f', FC_SFP_ZDIV, ea);
       goto fetch;
 
     case 0201:
@@ -9081,19 +9103,19 @@ nonimode:
     case 01702:
       TRACE(T_FLOW, " DFDV\n");
       CLEARC;
-      if (*(int *)(crsl+FAC1)) {
-	if (*(int *)&ea >= 0)
-	  immu64 = get64(ea);
-	if (*(int *)&immu64)
+      if (*(int *)&ea >= 0)
+	immu64 = get64(ea);
+      if (*(int *)&immu64)
+	if (*(int *)(crsl+FAC1))
 	  if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC1, &tempd1)) {
 	    *(double *)(crsl+FAC1) = ieeepr8(tempd1/tempd2);
 	    XCLEARC;   /* XXX: test overflow */
 	  } else
 	    mathexception('f', FC_DFP_OFLOW, ea);
 	else
-	  mathexception('f', FC_DFP_ZDIV, ea);
-      } else
-	*(long long *)(crsl+FAC1) = 0;
+	  *(long long *)(crsl+FAC1) = 0;
+      else
+	mathexception('f', FC_DFP_ZDIV, ea);
       goto fetch;
 
     case 0202:
