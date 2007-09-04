@@ -433,7 +433,8 @@ static  jmp_buf jmpbuf;               /* for longjumps to the fetch loop */
    speed up system boots and diagnostics during emulator testing.
  */
 
-#define MEMSIZE 512/2*1024*1024  /* 512 MB */
+#define MAXMB   512
+#define MEMSIZE MAXMB/2*1024*1024
 
 static unsigned short mem[MEMSIZE];     /* system's physical memory */
 static int memlimit;                    /* user's desired memory limit (-mem) */
@@ -795,7 +796,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
     pa = ea;
   }
   stopwatch_pop(&sw_mapva);
-#ifndef FAST
+#ifndef FAST2
   if (pa < memlimit)
 #endif
     return pa;
@@ -1411,7 +1412,10 @@ static void fatal(char *msg) {
   stopwatch_report(&sw_pcl);
   stopwatch_report(&sw_idle);
 
-  printf("Fatal error: instruction #%d at %o/%o %s: %o %o\nowner=%o %s, keys=%o, modals=%o\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), get16(gvp->prevpc), get16(gvp->prevpc+1), crs[OWNERL], searchloadmap(*(unsigned int *)(crs+OWNER),' '), crs[KEYS], crs[MODALS]);
+  printf("Fatal error");
+  if (msg)
+    printf(": %s", msg);
+  printf("\ninstruction #%d at %o/%o %s: %o %o\nowner=%o %s, keys=%o, modals=%o\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), get16(gvp->prevpc), get16(gvp->prevpc+1), crs[OWNERL], searchloadmap(*(unsigned int *)(crs+OWNER),' '), crs[KEYS], crs[MODALS]);
   
   /* dump concealed stack entries */
 
@@ -1434,8 +1438,6 @@ static void fatal(char *msg) {
   printf("STLB calls: %d  misses: %d  hitrate: %5.2f%%\n", gvp->mapvacalls, gvp->mapvamisses, (double)(gvp->mapvacalls-gvp->mapvamisses)/gvp->mapvacalls*100.0);
 #endif
 
-  if (msg)
-    printf("%s\n", msg);
   /* should do a register dump, RL dump, PCB dump, etc. here... */
 
   /* call all devices with a request to terminate */
@@ -3804,14 +3806,14 @@ main (int argc, char **argv) {
 	  fatal("-cpuid arg range is 0 to 44\n");
       } else
 	fatal("-cpuid needs an argument\n");
-#ifndef FAST
+#ifndef FAST2
     } else if (strcmp(argv[i],"-mem") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
-	if (1 <= templ && templ < 1024)
-	  memlimit = templ*1024*1024/2;
+	if (1 <= templ && templ <= MAXMB)
+	  memlimit = templ*1024/2*1024;
 	else
-	  fatal("-mem arg range is 1 to 1024 (megabytes)\n");
+	  fatal("-mem arg range is 1 to 512 (megabytes)\n");
       } else
 	fatal("-mem needs an argument\n");
 #endif
@@ -5641,7 +5643,7 @@ d_bdy:  /* 0140724 */
 d_bdx:  /* 0140734 */
   TRACE(T_FLOW, " BDX\n");
   crs[X]--;
-#if 0
+#if 1
   m = iget16(RP);
   if (crs[X] > 100 && m == RPL-1) {
     struct timeval tv0,tv1;
@@ -8670,12 +8672,12 @@ nonimode:
       CLEARCC;
       if (crs[A] == m) {
 	INCRP;
-	SETEQ;
+	// SETEQ;
       } else if (*(short *)(crs+A) < *(short *)&m) {
 	RPL += 2;
-	SETLT;
+	//SETLT;
       }
-      XSETL(0);
+      //XSETL(0);
 #else
       crs[KEYS] &= ~020300;   /* clear L, and CC */
       utempa = crs[A];
