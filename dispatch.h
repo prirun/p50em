@@ -1,5 +1,111 @@
 /* include file to initialize the CPU dispatch tables */
 
+/* MEMVR takes as a Prime opcode number and sets up the disp_mr
+   dispatch table.  The Prime opcode number for 4-bit opcode (in
+   instruction bits 3-6) 1101 is 015, and Prime writes it as 01500 in
+   older manuals. If the X bit is used as an opcode extension (only
+   for opcode 01500 - non-indexable instructions), the opcode becomes
+   03500.  If bits 7-11 are 11000, the instruction is long form and
+   has extended opcode bits in bits 13-14.  The Prime equivalent would
+   be 03500 - 03503.  
+
+   To summarize, the opcode index is a 7-bit value, 0-127:
+   - bit 10 = bit 2 of instruction (X)
+   - bits 11-14 = bits 3-6 of instruction
+   - bits 15-16 = bits 13-14 of extended opcodes
+
+   Instructions like JMP (opcode 01) that might be indexed will have
+   2 entries in the dispatch table, 0 0001 00 and 1 0001 00, both
+   pointing to the JMP emulation code.
+*/
+
+/* change V-mode MR instruction to opcode index */
+
+#define VMRINSTIX(inst) ((((inst) >> 8) & 0x7C) | ((((inst) & 0x03E0) == 0x0300) ? (((inst) >> 2) & 3) : 0))
+
+/* change R-mode MR instruction to opcode index (mask is 1 bit longer
+   for R-mode long instructions */
+
+#define RMRINSTIX(inst) ((((inst) >> 8) & 0x7C) | ((((inst) & 0x03F0) == 0x0300) ? (((inst) >> 2) & 3) : 0))
+
+/* change S-mode MR instruction to opcode index (no long instructions) */
+
+#define SMRINSTIX(inst) (((inst) >> 8) & 0x7C)
+
+/* change "Prime manual" opcodes (35 03 for example) to dispatch index */
+
+#define MRPRIMEIX(primeop) (((primeop) >> 4) | ((primeop) & 3))
+
+#define MRGEN(opcode, name, target) \
+  disp_mr[MRPRIMEIX(opcode)] = &&target; \
+  printf("MR opcode %05o (%s), ix=%0d\n", opcode, name, MRPRIMEIX(opcode)); \
+  if ((opcode & 01700) != 01500) { \
+    disp_mr[MRPRIMEIX(opcode | 02000)] = &&target; \
+    printf("MR opcode %05o (%s), ix=%0d\n", opcode | 02000, name, MRPRIMEIX(opcode | 02000)); \
+  }
+
+for (i=0; i < 128; i++)
+  disp_mr[i] = &&d_badmr;
+
+MRGEN(00100, "JMP", d_jmp);
+MRGEN(00101, "EAL", d_ealeaa);
+MRGEN(00102, "XEC", d_xec);
+MRGEN(00103, "ENTR", d_entr);
+MRGEN(00200, "LDA", d_ldadld);
+MRGEN(00201, "FLD", d_fld);
+MRGEN(00202, "DFLD", d_dfld);
+MRGEN(00203, "LDL", d_ldljeq);
+MRGEN(00300, "ANA", d_ana);
+MRGEN(00301, "STLR", d_stlr);
+MRGEN(00302, "ORA", d_ora);
+MRGEN(00303, "ANL", d_anljne);
+MRGEN(00400, "STA", d_stadst);
+MRGEN(00401, "FST", d_fst);
+MRGEN(00402, "DFST", d_dfst);
+MRGEN(00403, "STL", d_stljle);
+MRGEN(00500, "ERA", d_era);
+MRGEN(00501, "LDLR", d_ldlr);
+MRGEN(00502, "QFxx", d_qfxxuii);
+MRGEN(00503, "ERL", d_erljgt);
+MRGEN(00600, "ADD", d_adddad);
+MRGEN(00601, "FAD", d_fad);
+MRGEN(00602, "DFAD", d_dfad);
+MRGEN(00603, "ADL", d_adljlt);
+MRGEN(00700, "SUB", d_subdsb);
+MRGEN(00701, "FSB", d_fsb);
+MRGEN(00702, "DFSB", d_dfsb);
+MRGEN(00703, "SBL", d_sbljge);
+MRGEN(01000, "JST", d_jst);
+MRGEN(01002, "PCL", d_pclcrep);
+MRGEN(01100, "CAS", d_cas);
+MRGEN(01101, "FCS", d_fcs);
+MRGEN(01102, "DFCS", d_dfcs);
+MRGEN(01103, "CLS", d_cls);
+MRGEN(01200, "IRS", d_irs);
+MRGEN(01202, "EAXB", d_eaxb);
+MRGEN(01300, "IMA", d_ima);
+MRGEN(01302, "EALB", d_ealb);
+MRGEN(01400, "JSY", d_jsy);
+MRGEN(01401, "EIO", d_eio);
+MRGEN(01402, "JSXB", d_jsxb);
+MRGEN(01500, "STX", d_stx);
+MRGEN(01501, "FLX", d_flx);
+MRGEN(01502, "DFLX", d_dflxjdx);
+MRGEN(01503, "QFLX", d_qflxjix);
+MRGEN(01600, "MPY", d_mpy);
+MRGEN(01601, "FMP", d_fmp);
+MRGEN(01602, "DFMP", d_dfmp);
+MRGEN(01603, "MPL", d_mpl);
+MRGEN(01700, "DIV", d_div);
+MRGEN(01701, "FDV", d_fdv);
+MRGEN(01702, "DFDV", d_dfdv);
+MRGEN(01703, "DVL", d_dvl);
+MRGEN(03500, "LDX", d_ldx);
+MRGEN(03501, "LDY", d_ldy);
+MRGEN(03502, "STY", d_sty);
+MRGEN(03503, "JSX", d_jsx);
+
+
 #define GENIX(inst) ((inst>>4) & 06000) | (inst & 01777)
 
 #define DIGEN(opcode, name, target) \

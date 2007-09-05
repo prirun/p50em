@@ -1,7 +1,7 @@
 /* this version is derived from the flowchart in the preliminary P400
    release notes */
 
-static inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned short *opcode) {
+static inline ea_t ea64v (unsigned short inst, ea_t earp) {
 
   ea_t ea;                                       /* full seg/word va */
   unsigned short ea_s;                           /* eff address segno */
@@ -9,12 +9,16 @@ static inline ea_t ea64v (ea_t earp, unsigned short inst, short x, unsigned shor
   unsigned short ea_w;                           /* eff address wordno */
   unsigned short br;
   unsigned short i;
+  unsigned short x;
   unsigned short y;
   unsigned short xok;
   unsigned short a;
   unsigned short ixy;
   unsigned short m;
   unsigned short rph,rpl;
+
+
+  x = ((inst & 036000) != 032000) ? (inst & 040000) : 0;
 
   /* rph/rpl (and earp) are usually = RPH/RPL in the register file,
      except for the case of an XEC instruction; in that case, these
@@ -108,9 +112,8 @@ labB:
   TRACE(T_EAV, " 2-word format, a=%o\n", a);
   y = (inst & 020);
   ixy = ((i != 0)<<2) | ((x != 0)<<1) | (y != 0);
-  xok = ((*opcode & 01700) != 01500);        /* true if indexing is okay */
+  xok = (inst & 036000) != 032000;        /* true if indexing is okay */
 
-  *opcode = *opcode | ((inst >> 2) & 3);         /* opcode extension */
   br = (inst & 3);
   TRACE(T_EAV, " new opcode=%5#0o, y=%d, br=%d, ixy=%d, xok=%d\n", *opcode, (y != 0), br, ixy, xok);
 
