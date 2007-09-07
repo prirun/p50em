@@ -394,9 +394,8 @@ typedef struct {
 
   unsigned long instcount;      /* global instruction count */
 
-  unsigned int prevowner;       /* OWNERH|OWNERL */
-  unsigned short *prevppa;      /* mem[] physical page address */
-  ea_t prevvpn;                 /* virtual page address */
+  unsigned short *instmemp;     /* mem[] physical page address */
+  ea_t instvpn;                 /* instruction virtual page address */
 
   unsigned short inhcount;      /* number of instructions to stay inhibited */
 
@@ -1071,29 +1070,47 @@ static long long get64r(ea_t ea, ea_t rpring) {
 }
 
 /* Instruction version of get16 (can be replaced by get16 too...)
-   This needs to be checked more... not sure it actually improves
-   performance all that much and is potentially incompatible, ie,
-   iget16t isn't implemented (V-mode executing from registers) */
+
+   To avoid mapva on every instruction word fetch, two pointers are kept
+   in the hot global variable structure:  instvpn and instmemp.  These
+   variables track the virtual page address we're currently executing
+   (instvpn) and the corresponding pointer in the Prime physical memory
+   array mem (instmemp).  Whenever a process exchange occurs or the STLB
+   is changed, these are invalidated and will be reloaded with the long
+   version of iget16: iget16t.
+
+   Bit 1 of the EA is checked below so that if we're executing code from
+   registers, iget16t will be called, and eventually, get16t, to handle
+   the address trap.  Since bit 1 is never stored in instvpn, EA < 0
+   will always end up in get16t to load the instruction from a register.
+
+   The effect of this mechanism is that virtual->physical address
+   translation and access protection checks are only done once per
+   page instead of on every 16-bit fetch from the instruction stream.
+*/
 
 #ifdef FAST
-#define iget16t(ea) iget16((ea))
 
-unsigned short iget16(ea_t ea) {
+unsigned short iget16t(ea_t ea) {
   unsigned short access;
-  ea_t thisvpn;
 
-  if (*(int *)&ea >= 0) {
-    thisvpn = ea & 0x0FFFFC00;          /* segment and page number */
-    if ((thisvpn == gvp->prevvpn) && (!(ea & 0x08000000) || (crsl[OWNER32] == gvp->prevowner)))
-      return gvp->prevppa[ea & 0x3FF];
-
-    gvp->prevvpn = thisvpn;
-    gvp->prevowner = crsl[OWNER32];
-    gvp->prevppa = mem + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
-    return gvp->prevppa[ea & 0x3FF];
+  if (*(int *)&ea > 0) {
+    gvp->instvpn = ea & 0x0FFFFC00;
+    gvp->instmemp = mem + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
+    return gvp->instmemp[ea & 0x3FF];
   }
   return get16t(ea);
 }
+
+static inline unsigned short iget16(ea_t ea) {
+  unsigned short access;
+
+  if ((ea & 0x8FFFFC00) == gvp->instvpn)
+    return gvp->instmemp[ea & 0x3FF];
+  else
+    return iget16t(ea);
+}
+
 #else
 #define iget16(ea) get16((ea))
 #define iget16t(ea) get16t((ea))
@@ -2683,14 +2700,17 @@ static ors(unsigned short pcbw) {
   rs = (modals & 0340) >> 5;
 #endif
   crsl = regs.sym.userregs[rs];
-  //NOTE: following is unnecessary because crs is an alias for crsl
-  //crs = (void *)crsl;
   crs[MODALS] = modals;
   TRACE(T_PX, "ors: rs = %d, reg set in modals = %d, modals = %o\n", rs, (crs[MODALS] & 0340)>>5, crs[MODALS]);
 #if 0
   if (rs > 1)
     gvp->savetraceflags = ~0;
 #endif
+
+  /* invalidate the instruction translation cache mechanism */
+
+  gvp->instvpn = 0x000000FF;
+  gvp->instmemp = NULL;
 }
 
 
@@ -3137,11 +3157,9 @@ static lpsw() {
   m = get16(INCVA(ea,3));
   if ((m & 0340) != (crs[MODALS] & 0340)) {
     TRACE(T_PX, "LPSW: WARNING: changed current register set: current modals=%o, new modals=%o\n", crs[MODALS], m);
-#if 1
     /* not sure about doing this... */
     printf("WARNING: LPSW changed current register set: current modals=%o, new modals=%o\n", crs[MODALS], m);
     crsl = regs.sym.userregs[(m & 0340) >> 5];
-#endif
   }
 
   crs[MODALS] = m;
@@ -3731,9 +3749,8 @@ main (int argc, char **argv) {
   gvp->livereglim = 040;
   gvp->mapvacalls = 0;
   gvp->mapvamisses = 0;
-  gvp->prevowner = 0xFFFFFFFF;
-  gvp->prevppa = NULL;
-  gvp->prevvpn = 0xFFFFFC00;
+  gvp->instmemp = NULL;
+  gvp->instvpn = 0x000000FF;   /* bogus - nothing will match this */
 
   /* ignore SIGPIPE signals (sockets) or they'll kill the emulator */
 
@@ -4296,21 +4313,7 @@ fetch:
     ea = 0x80000000 | (ea & 0xFFFF);
 #endif
 
-  /* the Prime allows executing instructions from register locations in
-     R-mode (BASIC TRACE ON does this), so iget16t is needed here
-
-     The next couple of lines are manually inlined from iget16, and check
-     that the virtual page being executed is the same as before and RP isn't
-     less than zero (not executing from registers).  The 2nd part makes sure
-     that either the segment number is shared (not private) or, if it is
-     private, that the currently executing owner is the same as the last
-     owner when the page addess was translated.
-  */
-
-  if ((RP & 0x8FFFFC00) == gvp->prevvpn && (!(RP & 0x08000000) || (crsl[OWNER32] == gvp->prevowner)))
-    inst = gvp->prevppa[RP & 0x3FF];
-  else
-    inst = iget16t(RP);
+  inst = iget16(RP);
   INCRP;
   gvp->instcount++;
 
@@ -5263,6 +5266,11 @@ d_liot:  /* 000044 */
   TRACE(T_INST, " invalidated STLB index %d\n", utempa);
   mapva(ea, RP, RACC, &access);
   TRACE(T_INST, " loaded STLB for %o/%o\n", ea>>16, ea&0xffff);
+
+  /* invalidate the instruction translation cache mechanism */
+
+  gvp->instvpn = 0x000000FF;
+  gvp->instmemp = NULL;
   goto fetch;
 
 d_ptlb:  /* 000064 */
@@ -5295,6 +5303,11 @@ d_itlb:  /* 000615 */
     if (((utempl >> 16) & 07777) < 4)
       gvp->iotlb[(utempl >> 10) & 0xFF].valid = 0;
   }
+
+  /* invalidate the instruction translation cache mechanism */
+
+  gvp->instvpn = 0x000000FF;
+  gvp->instmemp = NULL;
   goto fetch;
 
 d_lpsw:  /* 000711 */
