@@ -395,7 +395,7 @@ typedef struct {
   unsigned long instcount;      /* global instruction count */
 
   unsigned int prevowner;       /* OWNERH|OWNERL */
-  pa_t prevppa;                 /* physical page address */
+  unsigned short *prevppa;      /* mem[] physical page address */
   ea_t prevvpn;                 /* virtual page address */
 
   unsigned short inhcount;      /* number of instructions to stay inhibited */
@@ -981,11 +981,15 @@ static unsigned int get32(ea_t ea) {
 
   if ((pa & 01777) <= 01776)
     return *(unsigned int *)(mem+pa);
+#ifdef FAST
+  return (mem[pa] << 16) | get16(INCVA(ea,1));
+#else
   else {
     m[0] = mem[pa];
     m[1] = get16(INCVA(ea,1));
     return *(unsigned int *)m;
   }
+#endif
 }
 
 static unsigned int get32r(ea_t ea, ea_t rpring) {
@@ -1002,11 +1006,15 @@ static unsigned int get32r(ea_t ea, ea_t rpring) {
 
   if ((pa & 01777) <= 01776)
     return *(unsigned int *)(mem+pa);
+#ifdef FAST
+  return (mem[pa] << 16) | get16r(INCVA(ea,1), rpring);
+#else
   else {
     m[0] = mem[pa];
     m[1] = get16r(INCVA(ea,1), rpring);
     return *(unsigned int *)m;
   }
+#endif
 }
 
 static long long get64r(ea_t ea, ea_t rpring) {
@@ -1077,12 +1085,12 @@ unsigned short iget16(ea_t ea) {
   if (*(int *)&ea >= 0) {
     thisvpn = ea & 0x0FFFFC00;          /* segment and page number */
     if ((thisvpn == gvp->prevvpn) && (!(ea & 0x08000000) || (crsl[OWNER32] == gvp->prevowner)))
-      return mem[gvp->prevppa + (ea & 0x3FF)];
+      return gvp->prevppa[ea & 0x3FF];
 
     gvp->prevvpn = thisvpn;
     gvp->prevowner = crsl[OWNER32];
-    gvp->prevppa = mapva(ea, RP, RACC, &access) & 0xFFFFFC00;
-    return mem[gvp->prevppa + (ea & 0x3FF)];
+    gvp->prevppa = mem + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
+    return gvp->prevppa[ea & 0x3FF];
   }
   return get16t(ea);
 }
@@ -3323,7 +3331,7 @@ static inline arfa(int n, int val) {
 
 /* 32-bit shifts */
 
-static unsigned int lrs(unsigned int val, short scount) {
+static inline unsigned int lrs(unsigned int val, short scount) {
 
   CLEARCL;
   if (scount <= 32) {
@@ -3336,7 +3344,7 @@ static unsigned int lrs(unsigned int val, short scount) {
     return 0;
 }
 
-static unsigned int lls(unsigned int val, short scount) {
+static inline unsigned int lls(unsigned int val, short scount) {
   int templ;
 
   CLEARCL;
@@ -3353,7 +3361,7 @@ static unsigned int lls(unsigned int val, short scount) {
   }
 }
 
-static unsigned int lll(unsigned int val, short scount) {
+static inline unsigned int lll(unsigned int val, short scount) {
 
   CLEARCL;
   if (scount <= 32) {
@@ -3363,7 +3371,7 @@ static unsigned int lll(unsigned int val, short scount) {
     return 0;
 }
 
-static unsigned int lrl(unsigned int val, short scount) {
+static inline unsigned int lrl(unsigned int val, short scount) {
 
   CLEARCL;
   if (scount <= 32) {
@@ -3375,7 +3383,7 @@ static unsigned int lrl(unsigned int val, short scount) {
 
 /* 16-bit shifts */
 
-static unsigned short arl (unsigned short val, short scount) {
+static inline unsigned short arl (unsigned short val, short scount) {
 
   CLEARCL;
   if (scount <= 16) {
@@ -3386,7 +3394,7 @@ static unsigned short arl (unsigned short val, short scount) {
   }
 }
 
-static unsigned short all (unsigned short val, short scount) {
+static inline unsigned short all (unsigned short val, short scount) {
 
   CLEARCL;
   if (scount <= 16) {
@@ -3397,7 +3405,7 @@ static unsigned short all (unsigned short val, short scount) {
   }
 }
 
-static unsigned short als (unsigned short val, short scount) {
+static inline unsigned short als (unsigned short val, short scount) {
 
   short tempa;
 
@@ -3415,7 +3423,7 @@ static unsigned short als (unsigned short val, short scount) {
   return 0;
 }
 
-static unsigned short ars (unsigned short val, short scount) {
+static inline unsigned short ars (unsigned short val, short scount) {
 
   CLEARCL;
   if (scount <= 16) {
@@ -3430,7 +3438,7 @@ static unsigned short ars (unsigned short val, short scount) {
 
 /* 32-bit rotates */
 
-static unsigned int lrr(unsigned int val, short scount) {
+static inline unsigned int lrr(unsigned int val, short scount) {
 
   CLEARCL;
   scount = ((scount-1)%32)+1;         /* make scount 1-32 */
@@ -3438,7 +3446,7 @@ static unsigned int lrr(unsigned int val, short scount) {
   return (val >> scount) | (val << (32-scount));
 }
 
-static unsigned int llr(unsigned int val, short scount) {
+static inline unsigned int llr(unsigned int val, short scount) {
 
   CLEARCL;
   scount = ((scount-1)%32)+1;         /* make scount 1-32 */
@@ -3448,7 +3456,7 @@ static unsigned int llr(unsigned int val, short scount) {
 
 /* 16-bit rotates */
 
-static unsigned int alr(unsigned short val, short scount) {
+static inline unsigned int alr(unsigned short val, short scount) {
 
   CLEARCL;
   scount = ((scount-1)%16)+1;         /* make scount 1-16 */
@@ -3456,7 +3464,7 @@ static unsigned int alr(unsigned short val, short scount) {
   return (val << scount) | (val >> (16-scount));
 }
 
-static unsigned int arr(unsigned short val, short scount) {
+static inline unsigned int arr(unsigned short val, short scount) {
 
   CLEARCL;
   scount = ((scount-1)%16)+1;         /* make scount 1-16 */
@@ -3466,7 +3474,7 @@ static unsigned int arr(unsigned short val, short scount) {
 
 /* math functions */
 
-static tcr(unsigned int *un) {
+static inline tcr(unsigned int *un) {
 
   unsigned int utempl;
 
@@ -3482,7 +3490,7 @@ static tcr(unsigned int *un) {
   }
 }
 
-static tch (unsigned short *un) {
+static inline tch (unsigned short *un) {
 
   unsigned short utemp;
 
@@ -3562,7 +3570,7 @@ static int add16(unsigned short *a1, unsigned short a2, unsigned short a3, ea_t 
   stopwatch_pop(&sw_add16);
 }
 
-static adlr(int dr) {
+static inline adlr(int dr) {
 
   if (crs[KEYS] & 020000)
     add32(crsl+dr, 1, 0, 0);
@@ -3686,7 +3694,6 @@ main (int argc, char **argv) {
   short scount;                          /* shift count */
   unsigned short trapvalue;
   ea_t trapaddr;
-  unsigned short stpm[8];
   unsigned short access;
   unsigned long immu32;
   unsigned long long immu64;
@@ -3725,7 +3732,7 @@ main (int argc, char **argv) {
   gvp->mapvacalls = 0;
   gvp->mapvamisses = 0;
   gvp->prevowner = 0xFFFFFFFF;
-  gvp->prevppa = 0xFFFFFC00;
+  gvp->prevppa = NULL;
   gvp->prevvpn = 0xFFFFFC00;
 
   /* ignore SIGPIPE signals (sockets) or they'll kill the emulator */
@@ -4301,7 +4308,7 @@ fetch:
   */
 
   if ((RP & 0x8FFFFC00) == gvp->prevvpn && (!(RP & 0x08000000) || (crsl[OWNER32] == gvp->prevowner)))
-    inst = mem[gvp->prevppa + (RP & 0x3FF)];
+    inst = gvp->prevppa[RP & 0x3FF];
   else
     inst = iget16t(RP);
   INCRP;
@@ -4424,9 +4431,6 @@ xec:
   /* instructions */
 
 d_iab:  /* 000201 */
-  {
-    unsigned short utempax;
-
   TRACE(T_FLOW, " IAB\n");
 #ifdef FAST
   crsl[GR2] = (crsl[GR2] << 16) | (crsl[GR2] >> 16);
@@ -4436,7 +4440,6 @@ d_iab:  /* 000201 */
   crs[A] = utempa;
 #endif
   goto fetch;
-  }
 
 d_cgt:  /* 001314 */
   TRACE(T_FLOW, " CGT\n");
@@ -4546,6 +4549,7 @@ d_lfli1:  /* 001313 */
   goto fetch;
 
 d_stfa0:  /* 001320 */
+  /* XXX change to inline proc */
   TRACE(T_FLOW, " STFA 0\n");
   ea = apea(NULL);
   utempl = crsl[FAR0] & 0x6FFFFFFF;
@@ -4595,6 +4599,8 @@ d_prtn:  /* 000611 */
   stopwatch_push(&sw_pcl);
   prtn();
 
+#ifndef NOTRACE
+
   /* if this PRTN is for a procedure being traced, disable
      tracing if one-shot is true */
 
@@ -4609,6 +4615,7 @@ d_prtn:  /* 000611 */
 	}
 	break;
       }
+#endif
   stopwatch_pop(&sw_pcl);
   goto fetch;
 
@@ -5297,6 +5304,11 @@ d_lpsw:  /* 000711 */
   goto fetch;
 
 d_stpm:  /* 000024 */
+  {
+    ea_t ea;
+    int i;
+    unsigned short stpm[8];
+
   TRACE(T_FLOW, " STPM\n", inst);
   RESTRICT();
   for (i=0; i<8; i++)
@@ -5306,6 +5318,7 @@ d_stpm:  /* 000024 */
   put64(*(long long *)(stpm+0), ea);
   put64(*(long long *)(stpm+4), INCVA(ea,4));
   goto fetch;
+  }
 
 d_dbgill:  /*  001700, 001701 */
   TRACE(T_FLOW, " DBGILL\n", inst);
@@ -5534,8 +5547,8 @@ d_nrm:  /* 000101 */
 
 d_rtn:  /* 000105 */
   TRACE(T_FLOW, " RTN\n");
-  m = get16(crs[S]+1);
-  if (m == 0)
+  utempa = get16(crs[S]+1);
+  if (utempa == 0)
     fatal("RTN stack underflow");
   crs[S] = get16(crs[S]);
   goto fetch;
@@ -5735,7 +5748,7 @@ d_bdy:  /* 0140724 */
 d_bdx:  /* 0140734 */
   TRACE(T_FLOW, " BDX\n");
   crs[X]--;
-#ifndef FAST2
+#ifndef NOIDLE
   m = iget16(RP);
   if (crs[X] > 100 && m == RPL-1) {
     struct timeval tv0,tv1;
@@ -5893,10 +5906,11 @@ d_caz:  /* 0140214 */
 
 d_irx:  /* 0140114 */
 
-  /* NOTE: using "if (crs[X]++ == 0)" doesn't work because of
+  /* NOTE: using "if (++crs[X] == 0)" doesn't work because of
      unsigned short type promotion! */
 
   TRACE(T_FLOW, " IRX\n");
+  /* XXX: change to if ((++crs[X] & 0xFFFF) == 0) */
   crs[X]++;
   if (crs[X] == 0)
     INCRP;
@@ -5969,7 +5983,7 @@ d_tya:  /* 0141124 */
 
 d_xca:  /* 0140104 */
   TRACE(T_FLOW, " XCA\n");
-#if 1
+#ifdef FAST
   crsl[GR2] = crsl[GR2] >> 16;
 #else
   crs[B] = crs[A];
@@ -5979,7 +5993,7 @@ d_xca:  /* 0140104 */
 
 d_xcb:  /* 0140204 */
   TRACE(T_FLOW, " XCB\n");
-#if 1
+#ifdef FAST
   crsl[GR2] = crsl[GR2] << 16;
 #else
   crs[A] = crs[B];
@@ -6305,8 +6319,12 @@ d_cre:  /* 0141404 */
 
 d_crle:  /* 0141410 */
   TRACE(T_FLOW, " CRLE\n");
+#ifdef FAST
+  *(long long *)(crs+L) = 0;
+#else
   *(int *)(crs+L) = 0;
   *(int *)(crs+E) = 0;
+#endif
   goto fetch;
 
 d_ile:  /* 0141414 */

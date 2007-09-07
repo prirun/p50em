@@ -20,9 +20,9 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
 
   x = ((inst & 036000) != 032000) ? (inst & 040000) : 0;
 
-  /* rph/rpl (and earp) are usually = RPH/RPL in the register file,
-     except for the case of an XEC instruction; in that case, these
-     will point to 1 after the instruction being executed */
+  /* earp is usually = RPH/RPL in the register file, except for the
+     case of an XEC instruction; in that case, earp points to 1
+     after the instruction being executed */
 
   rph = earp >> 16;
   rpl = earp & 0xFFFF;
@@ -110,8 +110,7 @@ labB:
   a = iget16(RP);
   INCRP;
   TRACE(T_EAV, " 2-word format, a=%o\n", a);
-  y = (inst & 020);
-  ixy = ((i != 0)<<2) | ((x != 0)<<1) | (y != 0);
+  ixy = (i >> 13) | (x >> 13) | ((inst & 020) >> 4);
   xok = (inst & 036000) != 032000;        /* true if indexing is okay */
 
   br = (inst & 3);

@@ -38,10 +38,10 @@
 
 #define MRGEN(opcode, name, target) \
   disp_mr[MRPRIMEIX(opcode)] = &&target; \
-  printf("MR opcode %05o (%s), ix=%0d\n", opcode, name, MRPRIMEIX(opcode)); \
+  /* printf("MR opcode %05o (%s), ix=%0d\n", opcode, name, MRPRIMEIX(opcode)); */ \
   if ((opcode & 01700) != 01500) { \
     disp_mr[MRPRIMEIX(opcode | 02000)] = &&target; \
-    printf("MR opcode %05o (%s), ix=%0d\n", opcode | 02000, name, MRPRIMEIX(opcode | 02000)); \
+    /* printf("MR opcode %05o (%s), ix=%0d\n", opcode | 02000, name, MRPRIMEIX(opcode | 02000)); */ \
   }
 
 for (i=0; i < 128; i++)
