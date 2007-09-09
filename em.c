@@ -338,19 +338,30 @@ static unsigned short cpuid = 5;            /* STPM CPU model, set with -cpuid *
 /* STLB cache structure is defined here; the actual stlb is in gv.
    There are several different styles on Prime models.  This is
    modeled after the 6350 STLB, but is only 1-way associative.
+   The hit rate has been measured to be over 99.8% with a single
+   user.
 
    Instead of using a valid/invalid bit, a segment number of 0xFFFF
-   means "invalid", since it won't match any real segment number */
+   means "invalid", since it won't match any real segment number.
+   This eliminates testing the valid bit in mapva.
+
+   As a speed-up, the unmodified bit is stored in access[2], where
+   Ring 2 access should be kept.  This makes the structure exactly 16
+   bytes, so indexing into the table can use a left shift 4
+   instruction rather than a multiply by 20.  It saves a multiply in
+   the fast path of a _very_ speed-critical routine (mapva).
+*/
 
 #define STLBENTS 512
+#define STLB_UNMODIFIED_BIT 2 /* stored in access[2] */
 
 typedef struct {
   unsigned short *pmep;       /* pointer to page table flag word */
   unsigned int ppn;           /* physical page number */
   unsigned short procid;      /* process id for segments >= '4000 */
-  short seg;                  /* segment number (0-0xFFF) */
+  short seg;                  /* segment number (0-0xFFF), 0xFFFF = invalid */
   char access[4];             /* ring n access rights */
-  char unmodified;            /* 1 if page hasn't been modified, 0 if it has */
+  //char unmodified;            /* 1 = page not modified, 0 = modified */
   //char shared;                /* 1 if page is shared and can't be cached */
   //char valid;                 /* 1 if STLB entry is valid, zero otherwise */
 #ifndef NOTRACE
@@ -368,9 +379,14 @@ typedef struct {
 } iotlbe_t;
 
 /* "gv" is a static structure used to hold "hot" global variables.  These
-   are pointed to by a dedicated register, so that the usual PPC global
+   are pointed to by a dedicated register, so that the usual PowerPC global
    variable instructions aren't needed: these variables can be directly
    referenced by instructions */
+
+typedef struct {
+  unsigned short *memp;       /* mem[] physical page address */
+  ea_t vpn;                   /* corresponding virtual page address */
+} brp_t;
 
 typedef struct {
 
@@ -396,6 +412,7 @@ typedef struct {
 
   unsigned short *instmemp;     /* mem[] physical page address */
   ea_t instvpn;                 /* instruction virtual page address */
+  brp_t brp[5];                     /* one each for PB, SB, LB, XB */
 
   unsigned short inhcount;      /* number of instructions to stay inhibited */
 
@@ -425,12 +442,13 @@ typedef struct {
 static gv_t gv;
 #if 1
 register gv_t *gvp asm ("r28");
+register brp_t *eap asm ("r27");                   /* effective address brp pointer */
 #else
 gv_t *gvp;
+brp_t *eap;
 #endif
 
 static  jmp_buf jmpbuf;               /* for longjumps to the fetch loop */
-
 
 /* The standard Prime physical memory limit on early machines is 8MB.
    Later machines have higher memory capacities, up to 1024MB, using 
@@ -734,7 +752,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
        process id doesn't match, then the STLB has to be loaded
        first (invalid entries have a segment of 0xFFFF and won't match) */
 
-    if (stlbp->seg != seg || (seg >= 04000 && stlbp->procid != crs[OWNERL])) {
+    if (stlbp->seg != seg || ((seg & 04000) && stlbp->procid != crs[OWNERL])) {
 #ifndef NOTRACE
       gvp->mapvamisses++;
 #endif
@@ -771,9 +789,9 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       if (!(pte & 0x8000))
 	fault(PAGEFAULT, 0, ea);
       mem[pmaddr] |= 040000;     /* set referenced bit */
-      stlbp->unmodified = 1;
       stlbp->access[0] = 7;
       stlbp->access[1] = (sdw >> 12) & 7;
+      stlbp->access[STLB_UNMODIFIED_BIT] = 1;
       stlbp->access[3] = (sdw >> 6) & 7;
       stlbp->procid = crs[OWNERL];
       stlbp->seg = seg;
@@ -799,8 +817,8 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
     *access = stlbp->access[ring];
     if (((intacc & *access) != intacc) || (intacc == PACC && ((*access & 3) == 0)))
       fault(ACCESSFAULT, 0, ea);
-    if (stlbp->unmodified && intacc == WACC) {
-      stlbp->unmodified = 0;
+    if (stlbp->access[STLB_UNMODIFIED_BIT] && intacc == WACC) {
+      stlbp->access[STLB_UNMODIFIED_BIT] = 0;
       *(stlbp->pmep) &= ~020000;    /* reset unmodified bit in memory */
     }
     pa = (stlbp->ppn << 10) | (ea & 0x3FF);
@@ -856,7 +874,7 @@ static pa_t fastmap (ea_t ea, ea_t rp, short intacc) {
 	return ((stlbp->ppn << 10) | (ea & 0x3FF));
       }
     }
-    return mapva(ea, intacc, rp, &access);
+    return mapva(ea, rp, intacc, &access);
   }
   return ea;
 }
@@ -918,13 +936,42 @@ const static unsigned int mapio(ea_t ea) {
 */
 
 
+static inline unsigned short get16(ea_t ea) {
+  unsigned short access;
+
+#if DBG
+  if (ea & 0x80000000)
+    warn("address trap in get16");
+#endif
+
+#if 0
+  /* idle loop runs faster if this is enabled, but executable is 27K
+     bigger and programs (ADD) run slower.  Maybe inline expansions of
+     get16 & fastmap are too big for cache (?) */
+  return mem[fastmap(ea, RP, RACC)];
+#endif
+
+#ifdef FAST
+  if ((ea & 0x0FFFFC00) == eap->vpn) 
+    return eap->memp[ea & 0x3FF];
+  else {
+    eap->vpn = ea & 0x0FFFFC00;
+    eap->memp = mem + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
+    return eap->memp[ea & 0x3FF];
+  }
+#else
+  return mem[mapva(ea, RP, RACC, &access)];
+#endif
+}
+
+
 static unsigned short get16t(ea_t ea) {
   unsigned short access;
 
   /* sign bit is set for live register access */
 
   if (*(int *)&ea >= 0)
-    return mem[mapva(ea, RP, RACC, &access)];
+    return get16(ea);
   ea = ea & 0xFFFF;
   if (ea < 7)
     return crs[memtocrs[ea]];
@@ -937,22 +984,6 @@ static unsigned short get16t(ea_t ea) {
     return regs.sym.regdmx[((ea & 036) << 1) | (ea & 1)];
   printf(" Live register address %o too big!\n", ea);
   fatal(NULL);
-}
-
-static inline unsigned short get16(ea_t ea) {
-  unsigned short access;
-
-#if DBG
-  if (ea & 0x80000000)
-    warn("address trap in get16");
-#endif
-
-#ifdef FASTxxx
-  /* Primos rev 19 won't boot with this enabled... */
-  return mem[fastmap(ea, RP, RACC)];
-#else
-  return mem[mapva(ea, RP, RACC, &access)];
-#endif
 }
 
 static unsigned short get16r(ea_t ea, ea_t rpring) {
@@ -977,18 +1008,9 @@ static unsigned int get32(ea_t ea) {
 #endif
 
   pa = mapva(ea, RP, RACC, &access);
-
-  if ((pa & 01777) <= 01776)
+  if ((ea & 01777) <= 01776)
     return *(unsigned int *)(mem+pa);
-#ifdef FAST
   return (mem[pa] << 16) | get16(INCVA(ea,1));
-#else
-  else {
-    m[0] = mem[pa];
-    m[1] = get16(INCVA(ea,1));
-    return *(unsigned int *)m;
-  }
-#endif
 }
 
 static unsigned int get32r(ea_t ea, ea_t rpring) {
@@ -1779,7 +1801,14 @@ static ea_t ea32r64r (ea_t earp, unsigned short inst) {
 
 special:
   class = inst & 3;                              /* class bits = 15 & 16 */
-  TRACE(T_EAR, " special, new opcode=%5#0o, class=%d\n", *opcode, class);
+
+#ifndef NOTRACE
+  int opcode;
+
+  opcode = ((inst & 036000) != 032000) ? ((inst & 036000) >> 4) : ((inst & 076000) >> 4);
+  opcode |= ((inst >> 2) & 3);         /* opcode extension */
+  TRACE(T_EAR, " special, new opcode=%5#0o, class=%d\n", opcode, class);
+#endif
 
   if (class < 2) {                               /* class 0/1 */
     ea = get16t(RP);                             /* get A from next word */
@@ -2707,10 +2736,14 @@ static ors(unsigned short pcbw) {
     gvp->savetraceflags = ~0;
 #endif
 
-  /* invalidate the instruction translation cache mechanism */
+  /* invalidate the mapva translation supercache */
 
   gvp->instvpn = 0x000000FF;
-  gvp->instmemp = NULL;
+  gvp->brp[0].vpn = 0x000000FF;
+  gvp->brp[1].vpn = 0x000000FF;
+  gvp->brp[2].vpn = 0x000000FF;
+  gvp->brp[3].vpn = 0x000000FF;
+  gvp->brp[4].vpn = 0x000000FF;
 }
 
 
@@ -3751,6 +3784,12 @@ main (int argc, char **argv) {
   gvp->mapvamisses = 0;
   gvp->instmemp = NULL;
   gvp->instvpn = 0x000000FF;   /* bogus - nothing will match this */
+  gvp->brp[0].vpn = 0x000000FF;
+  gvp->brp[1].vpn = 0x000000FF;
+  gvp->brp[2].vpn = 0x000000FF;
+  gvp->brp[3].vpn = 0x000000FF;
+  gvp->brp[4].vpn = 0x000000FF;
+  eap = &gvp->brp[0];
 
   /* ignore SIGPIPE signals (sockets) or they'll kill the emulator */
 
@@ -4396,7 +4435,7 @@ xec:
        x=1, opcode='15 03 -> jsx (RV) (aka '35 03)
   */
 
-  TRACE(T_INST, " opcode=%5#0o, i=%o, x=%o\n", opcode, inst & 0100000, ((inst & 036000) != 032000) ? (inst & 040000) : 0);
+  TRACE(T_INST, " opcode=%5#0o, i=%o, x=%o\n", ((inst & 036000) != 032000) ? ((inst & 036000) >> 4) : ((inst & 076000) >> 4), inst & 0100000, ((inst & 036000) != 032000) ? (inst & 040000) : 0);
 
   if ((crs[KEYS] & 016000) == 014000) {   /* 64V mode */
     ea = ea64v(inst, earp);
@@ -5270,7 +5309,11 @@ d_liot:  /* 000044 */
   /* invalidate the instruction translation cache mechanism */
 
   gvp->instvpn = 0x000000FF;
-  gvp->instmemp = NULL;
+  gvp->brp[0].vpn = 0x000000FF;
+  gvp->brp[1].vpn = 0x000000FF;
+  gvp->brp[2].vpn = 0x000000FF;
+  gvp->brp[3].vpn = 0x000000FF;
+  gvp->brp[4].vpn = 0x000000FF;
   goto fetch;
 
 d_ptlb:  /* 000064 */
@@ -5307,7 +5350,11 @@ d_itlb:  /* 000615 */
   /* invalidate the instruction translation cache mechanism */
 
   gvp->instvpn = 0x000000FF;
-  gvp->instmemp = NULL;
+  gvp->brp[0].vpn = 0x000000FF;
+  gvp->brp[1].vpn = 0x000000FF;
+  gvp->brp[2].vpn = 0x000000FF;
+  gvp->brp[3].vpn = 0x000000FF;
+  gvp->brp[4].vpn = 0x000000FF;
   goto fetch;
 
 d_lpsw:  /* 000711 */

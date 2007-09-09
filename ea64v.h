@@ -41,6 +41,7 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
     }
     if (inst & 0400) {
       TRACE(T_EAV, " Short LB relative, LB=%o/%o\n", crs[LBH], crs[LBL]);
+      eap = &gvp->brp[2];
 #if 1
       ea_s = crs[LBH] | (ea_s & RINGMASK16);
       ea_w += crs[LBL];
@@ -51,6 +52,7 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
 #endif;
     }
     if (ea_w >= gvp->livereglim) {
+      eap = &gvp->brp[1];
       ea_s = crs[SBH] | (ea_s & RINGMASK16);
       ea_w += crs[SBL];
       TRACE(T_EAV, " Short SB relative, SB=%o/%o\n", crs[SBH], crs[SBL]);
@@ -64,12 +66,14 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
 
   if (inst & 001000)                             /* sector bit 7 set? */
     if ((inst & 0740) != 0400) {                 /* PC relative? */
+      eap = &gvp->brp[0];
       ea_w = rpl + (((short) (inst << 7)) >> 7);   /* yes, sign extend D */
       TRACE(T_EAV, " PC relative, P=%o, new ea_w=%o\n", rpl, ea_w);
     }
     else 
       goto labB;                                 /* special cases */
   else if (i) {
+    eap = &gvp->brp[4];
     ea_w = (inst & 0777);                        /* sector 0 */
     TRACE(T_EAV, " Sector 0, new ea_w=%o\n", ea_w);
     if (ea_w < 0100 && x) {                      /* preindex by X */
@@ -97,8 +101,10 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
     TRACE(T_EAV, " Postindex, new ea_w=%o\n", ea_w);
   }
 
-  if (ea_w >= gvp->livereglim)
+  if (ea_w >= gvp->livereglim) {
+    eap = &gvp->brp[0];
     return MAKEVA(ea_s, ea_w);
+  }
 
   TRACE(T_EAV, " Live register '%o\n", ea_w);
   return 0x80000000 | ea_w;
@@ -114,7 +120,15 @@ labB:
   xok = (inst & 036000) != 032000;        /* true if indexing is okay */
 
   br = (inst & 3);
-  TRACE(T_EAV, " new opcode=%5#0o, y=%d, br=%d, ixy=%d, xok=%d\n", *opcode, (y != 0), br, ixy, xok);
+  eap = &gvp->brp[br];
+
+#ifndef NOTRACE
+  int opcode;
+
+  opcode = ((inst & 036000) != 032000) ? ((inst & 036000) >> 4) : ((inst & 076000) >> 4);
+  opcode |= ((inst >> 2) & 3);         /* opcode extension */
+  TRACE(T_EAV, " new opcode=%5#0o, y=%d, br=%d, ixy=%d, xok=%d\n", opcode, (y != 0), br, ixy, xok);
+#endif
 
   ea_s = crs[PBH+br*2] | (ea_s & RINGMASK16);
   ea_w = crs[PBL+br*2] + a;

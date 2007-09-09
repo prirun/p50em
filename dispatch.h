@@ -1,15 +1,15 @@
 /* include file to initialize the CPU dispatch tables */
 
-/* MEMVR takes as a Prime opcode number and sets up the disp_mr
+/* macro MRGEN takes as a Prime opcode number and sets up the disp_mr
    dispatch table.  The Prime opcode number for 4-bit opcode (in
    instruction bits 3-6) 1101 is 015, and Prime writes it as 01500 in
    older manuals. If the X bit is used as an opcode extension (only
    for opcode 01500 - non-indexable instructions), the opcode becomes
-   03500.  If bits 7-11 are 11000, the instruction is long form and
-   has extended opcode bits in bits 13-14.  The Prime equivalent would
-   be 03500 - 03503.  
+   03500.  If bits 7-11 are 11000 (for V-mode; bits 7-12 = 110000 in
+   R-mode), the instruction is long form and has 2 extended opcode
+   bits in bits 13-14.  The Prime equivalent would be 03500 - 03503.
 
-   To summarize, the opcode index is a 7-bit value, 0-127:
+   To summarize, the mem ref opcode index is a 7-bit value, 0-127:
    - bit 10 = bit 2 of instruction (X)
    - bits 11-14 = bits 3-6 of instruction
    - bits 15-16 = bits 13-14 of extended opcodes
@@ -43,6 +43,8 @@
     disp_mr[MRPRIMEIX(opcode | 02000)] = &&target; \
     /* printf("MR opcode %05o (%s), ix=%0d\n", opcode | 02000, name, MRPRIMEIX(opcode | 02000)); */ \
   }
+
+/* initialize table to "bad memory reference instruction" */
 
 for (i=0; i < 128; i++)
   disp_mr[i] = &&d_badmr;
