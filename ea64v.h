@@ -41,7 +41,7 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
     }
     if (inst & 0400) {
       TRACE(T_EAV, " Short LB relative, LB=%o/%o\n", crs[LBH], crs[LBL]);
-      eap = &gvp->brp[2];
+      eap = &gvp->brp[LBBR];
 #if 1
       ea_s = crs[LBH] | (ea_s & RINGMASK16);
       ea_w += crs[LBL];
@@ -52,7 +52,7 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
 #endif;
     }
     if (ea_w >= gvp->livereglim) {
-      eap = &gvp->brp[1];
+      eap = &gvp->brp[SBBR];
       ea_s = crs[SBH] | (ea_s & RINGMASK16);
       ea_w += crs[SBL];
       TRACE(T_EAV, " Short SB relative, SB=%o/%o\n", crs[SBH], crs[SBL]);
@@ -66,14 +66,14 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
 
   if (inst & 001000)                             /* sector bit 7 set? */
     if ((inst & 0740) != 0400) {                 /* PC relative? */
-      eap = &gvp->brp[0];
       ea_w = rpl + (((short) (inst << 7)) >> 7);   /* yes, sign extend D */
       TRACE(T_EAV, " PC relative, P=%o, new ea_w=%o\n", rpl, ea_w);
+      eap = &gvp->brp[RPBR];
     }
     else 
       goto labB;                                 /* special cases */
   else if (i) {
-    eap = &gvp->brp[4];
+    eap = &gvp->brp[S0BR];
     ea_w = (inst & 0777);                        /* sector 0 */
     TRACE(T_EAV, " Sector 0, new ea_w=%o\n", ea_w);
     if (ea_w < 0100 && x) {                      /* preindex by X */
@@ -88,7 +88,7 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
   if (i) {
     if (ea_w < gvp->livereglim) {
       TRACE(T_EAV, " Indirect through live register '%o\n", ea_w);
-      ea_w = get16t(0x80000000 | ea_w);
+      ea_w = get16trap(ea_w);
     } else {
       TRACE(T_EAV, " Indirect, ea_s=%o, ea_w=%o\n", ea_s, ea_w);
       ea_w = get16(MAKEVA(ea_s, ea_w));
@@ -102,7 +102,10 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
   }
 
   if (ea_w >= gvp->livereglim) {
-    eap = &gvp->brp[0];
+    if ((ea_w ^ RPL) & 0xFC00)
+      eap = &gvp->brp[PBBR];
+    else
+      eap = &gvp->brp[RPBR];
     return MAKEVA(ea_s, ea_w);
   }
 
@@ -139,6 +142,9 @@ labB:
     else if (ixy == 2 || ixy == 6)
       ea_w += crs[X];
 
+  if (br == 0 && ((((ea_s & 0x8FFF) << 16) | (ea_w & 0xFC00)) == gvp->brp[RPBR].vpn))
+    eap = &gvp->brp[RPBR];
+
   if (ixy >= 3) {
     ea = MAKEVA(ea_s, ea_w);
     TRACE(T_EAV, " Long indirect, ea=%o/%o, ea_s=%o, ea_w=%o\n", ea>>16, ea&0xFFFF, ea_s, ea_w);
@@ -152,11 +158,21 @@ labB:
       warn("em: extension bit set in ea64v");
 #endif
     TRACE(T_EAV, " After indirect, ea_s=%o, ea_w=%o\n", ea_s, ea_w);
+
+    /* when passing stack variables, callee references will be
+       SB%+20,*, which may still be in the same page.  Don't switch to
+       UNBR if the new ea is still in the page */
+
+    if ((((ea_s & 0x8FFF) << 16) | (ea_w & 0xFC00)) != eap->vpn)
+      eap = &gvp->brp[UNBR];
   }
   if (xok)
-    if (ixy == 5)
+    if (ixy == 5) {
+      TRACE(T_EAV, " Postindex, old ea_w=%o, Y='%o/%d\n", ea_w, crs[Y], *(short *)(crs+Y));
       ea_w += crs[Y];
-    else if (ixy == 7)
+    } else if (ixy == 7) {
+      TRACE(T_EAV, " Postindex, old ea_w=%o, X='%o/%d\n", ea_w, crs[X], *(short *)(crs+X));
       ea_w += crs[X];
+    }
   return MAKEVA(ea_s, ea_w);
 }

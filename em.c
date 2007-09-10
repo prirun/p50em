@@ -378,15 +378,56 @@ typedef struct {
   char valid;                 /* 1 if IOTLB entry is valid, zero otherwise */
 } iotlbe_t;
 
-/* "gv" is a static structure used to hold "hot" global variables.  These
-   are pointed to by a dedicated register, so that the usual PowerPC global
-   variable instructions aren't needed: these variables can be directly
-   referenced by instructions */
+/* the emulator uses a special, very small address translation cache
+   to hold the virtual page address and corresponding mem[] pointer
+   for a few special pages:
+
+   - the current instruction page (RPBR)
+   - sector zero (S0BR) of the current procedure
+   - the 4 base registers (PBBR, SBBR, LBBR, XBBR)
+   - "unknown", used for indirect references (UNBR)
+
+   When an effective address is calculated, eap is set to point to
+   one of these cache entries.  If the reference is a write reference,
+   mapva always is called to do access checking.  But for reads, the
+   mapva call might be bypassed if the EA is within the page pointed
+   to by the eap entry.  If the mapva call is not bypassed for read,
+   then the eap entry is updated.
+
+   This special cache is invalidated whenever the STLB is changed,
+   whenever a ring change occurs, and whenever a process exchange
+   occurs; no access checking is done when the cache is used: the
+   cache entry is either valid, meaning that the program has at least
+   read access to the page, or the cache entry is invalid (special
+   value of 0x000000FF, which is not a virtual page address - the
+   right 10 bits must be zero for the start of a page), in which case
+   mapva is called.
+
+   The special cache could also be used for write references if each
+   entry were extended to have a "write okay" flag.  This would be
+   set when mapva is called and returns an access of 3 (WACC) instead
+   of 2 (RACC), and putxx routines could check for write access before
+   using the cache entry.
+*/
+
+#define PBBR 0
+#define SBBR 1
+#define LBBR 2
+#define XBBR 3
+#define RPBR 4
+#define S0BR 5
+#define UNBR 6
+#define BRP_SIZE 7
 
 typedef struct {
   unsigned short *memp;       /* mem[] physical page address */
   ea_t vpn;                   /* corresponding virtual page address */
 } brp_t;
+
+/* "gv" is a static structure used to hold "hot" global variables.  These
+   are pointed to by a dedicated register, so that the usual PowerPC global
+   variable instructions aren't needed: these variables can be directly
+   referenced by instructions */
 
 typedef struct {
 
@@ -410,9 +451,7 @@ typedef struct {
 
   unsigned long instcount;      /* global instruction count */
 
-  unsigned short *instmemp;     /* mem[] physical page address */
-  ea_t instvpn;                 /* instruction virtual page address */
-  brp_t brp[5];                     /* one each for PB, SB, LB, XB */
+  brp_t brp[BRP_SIZE];          /* one each for PB, SB, LB, XB, RP, S0, UN */
 
   unsigned short inhcount;      /* number of instructions to stay inhibited */
 
@@ -436,13 +475,14 @@ typedef struct {
 
   int mapvacalls;               /* # of mapva calls */
   int mapvamisses;              /* STLB misses */
-
+  int supercalls;               /* supercache hits */
+  int supermisses;
 } gv_t;
 
 static gv_t gv;
 #if 1
 register gv_t *gvp asm ("r28");
-register brp_t *eap asm ("r27");                   /* effective address brp pointer */
+register brp_t *eap asm ("r27");   /* effective address brp pointer */
 #else
 gv_t *gvp;
 brp_t *eap;
@@ -553,7 +593,36 @@ static struct {
 } mapsym[MAXSYMBOLS];
 
 
-/* fine-grained timer stuff (thanks Jeff!) */
+/* invalidates all entries in the mapva supercache */
+
+void invalidate_brp() {
+  int i;
+
+  for (i=0; i < BRP_SIZE; i++)
+    gvp->brp[i].vpn = 0x000000FF;
+}
+
+#ifndef NOTRACE
+char *brp_name() {
+  if (eap == &gvp->brp[PBBR])
+    return "PBBR";
+  if (eap == &gvp->brp[SBBR])
+    return "SBBR";
+  if (eap == &gvp->brp[LBBR])
+    return "LBBR";
+  if (eap == &gvp->brp[XBBR])
+    return "XBBR";
+  if (eap == &gvp->brp[RPBR])
+    return "RPBR";
+  if (eap == &gvp->brp[S0BR])
+    return "S0BR";
+  if (eap == &gvp->brp[UNBR])
+    return "UNBR";
+  return "??BR";
+}
+#endif
+
+/* nanosecond timer stuff (thanks Jeff!) */
 
 #include "stopwatch.h"
 
@@ -691,9 +760,9 @@ char *searchloadmap(int addr, char type) {
 
 
 /* intended memory access types:
-   1 = PCL (PACC)
+   0 = PCL (PACC)
    2 = read (RACC)
-   3 = write (WACC)
+   3 = write (WACC) = read+write
    4 = execute (XACC)
 */
 #define PACC 0
@@ -822,7 +891,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       *(stlbp->pmep) &= ~020000;    /* reset unmodified bit in memory */
     }
     pa = (stlbp->ppn << 10) | (ea & 0x3FF);
-    TRACE(T_MAP,"        for ea %o/%o, stlbix=%d, pa=%o	loaded at #%d\n", ea>>16, ea&0xffff, stlbix, pa, stlbp->load_ic);
+    TRACE(T_MAP,"        for ea %o/%o, iacc=%d, stlbix=%d, pa=%o	loaded at #%d\n", ea>>16, ea&0xffff, intacc, stlbix, pa, stlbp->load_ic);
   } else {
     pa = ea;
   }
@@ -923,7 +992,10 @@ const static unsigned int mapio(ea_t ea) {
 #define put64(value, ea) (put64r((value),(ea),RP))
 #define put64r0(value, ea) (put64r((value),(ea),0))
 
-/* get16t handles 16-bit fetches that might cause address traps.
+/* 
+   get16 handles 16-bit fetches that CANNOT cause address traps.
+
+   get16t handles 16-bit fetches that MIGHT cause address traps.
    These traps can occur:
    - fetching S/R mode instructions
    - fetching V-mode instructions when RPL < 010 or 040 (seg enabled/not)
@@ -933,6 +1005,8 @@ const static unsigned int mapio(ea_t ea) {
    These traps CANNOT occur:
    - in I-mode
    - in V-mode long instruction address calculation or execution
+
+   get16trap handles 16-bit fetches that are KNOWN to be address traps
 */
 
 
@@ -952,11 +1026,18 @@ static inline unsigned short get16(ea_t ea) {
 #endif
 
 #ifdef FAST
-  if ((ea & 0x0FFFFC00) == eap->vpn) 
+#ifndef NOTRACE
+  gvp->supercalls++;
+#endif
+  if ((ea & 0x0FFFFC00) == eap->vpn) {
+    TRACE(T_MAP, "    get16: supercached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
     return eap->memp[ea & 0x3FF];
-  else {
-    eap->vpn = ea & 0x0FFFFC00;
+  } else {
+#ifndef NOTRACE
+    gvp->supermisses++;
+#endif
     eap->memp = mem + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
+    eap->vpn = ea & 0x0FFFFC00;
     return eap->memp[ea & 0x3FF];
   }
 #else
@@ -964,14 +1045,8 @@ static inline unsigned short get16(ea_t ea) {
 #endif
 }
 
+static unsigned short get16trap(ea_t ea) {
 
-static unsigned short get16t(ea_t ea) {
-  unsigned short access;
-
-  /* sign bit is set for live register access */
-
-  if (*(int *)&ea >= 0)
-    return get16(ea);
   ea = ea & 0xFFFF;
   if (ea < 7)
     return crs[memtocrs[ea]];
@@ -982,8 +1057,18 @@ static unsigned short get16t(ea_t ea) {
     return crs[memtocrs[ea]];
   if (ea < 040)                 /* DMX */
     return regs.sym.regdmx[((ea & 036) << 1) | (ea & 1)];
-  printf(" Live register address %o too big!\n", ea);
+  printf("get16trap: live register address %o too big!\n", ea);
   fatal(NULL);
+}
+
+static inline unsigned short get16t(ea_t ea) {
+  unsigned short access;
+
+  /* sign bit is set for live register access */
+
+  if (*(int *)&ea >= 0)
+    return get16(ea);
+  return get16trap(ea);
 }
 
 static unsigned short get16r(ea_t ea, ea_t rpring) {
@@ -1007,16 +1092,35 @@ static unsigned int get32(ea_t ea) {
     warn("address trap in get32");
 #endif
 
+#ifdef FAST
+#ifndef NOTRACE
+  gvp->supercalls++;
+#endif
+  if ((ea & 01777) <= 01776)
+    if ((ea & 0x0FFFFC00) == eap->vpn) {
+      TRACE(T_MAP, "    get32: supercached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
+      return *(unsigned int *)&eap->memp[ea & 0x3FF];
+    } else {
+#ifndef NOTRACE
+      gvp->supermisses++;
+#endif
+      eap->memp = mem + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
+      eap->vpn = ea & 0x0FFFFC00;
+      return *(unsigned int *)&eap->memp[ea & 0x3FF];
+    }
+  /* XXX: could see if 1st word is supercached -- painful! */
+  return (get16(ea) << 16) | get16(INCVA(ea,1));
+#else
   pa = mapva(ea, RP, RACC, &access);
   if ((ea & 01777) <= 01776)
     return *(unsigned int *)(mem+pa);
   return (mem[pa] << 16) | get16(INCVA(ea,1));
+#endif
 }
 
 static unsigned int get32r(ea_t ea, ea_t rpring) {
   pa_t pa;
   unsigned short access;
-  unsigned short m[2];
 
 #if DBG
   if (ea & 0x80000000)                  /* check for live register access */
@@ -1027,15 +1131,7 @@ static unsigned int get32r(ea_t ea, ea_t rpring) {
 
   if ((pa & 01777) <= 01776)
     return *(unsigned int *)(mem+pa);
-#ifdef FAST
   return (mem[pa] << 16) | get16r(INCVA(ea,1), rpring);
-#else
-  else {
-    m[0] = mem[pa];
-    m[1] = get16r(INCVA(ea,1), rpring);
-    return *(unsigned int *)m;
-  }
-#endif
 }
 
 static long long get64r(ea_t ea, ea_t rpring) {
@@ -1094,16 +1190,16 @@ static long long get64r(ea_t ea, ea_t rpring) {
 /* Instruction version of get16 (can be replaced by get16 too...)
 
    To avoid mapva on every instruction word fetch, two pointers are kept
-   in the hot global variable structure:  instvpn and instmemp.  These
+   in the hot global variable structure:  brp[RPBR].vpn and .memp.  These
    variables track the virtual page address we're currently executing
-   (instvpn) and the corresponding pointer in the Prime physical memory
-   array mem (instmemp).  Whenever a process exchange occurs or the STLB
+   (.vpn) and the corresponding pointer in the Prime physical memory
+   array mem (.memp).  Whenever a process exchange occurs or the STLB
    is changed, these are invalidated and will be reloaded with the long
    version of iget16: iget16t.
 
    Bit 1 of the EA is checked below so that if we're executing code from
    registers, iget16t will be called, and eventually, get16t, to handle
-   the address trap.  Since bit 1 is never stored in instvpn, EA < 0
+   the address trap.  Since bit 1 is never stored in brp.vpn, EA < 0
    will always end up in get16t to load the instruction from a register.
 
    The effect of this mechanism is that virtual->physical address
@@ -1117,18 +1213,18 @@ unsigned short iget16t(ea_t ea) {
   unsigned short access;
 
   if (*(int *)&ea > 0) {
-    gvp->instvpn = ea & 0x0FFFFC00;
-    gvp->instmemp = mem + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
-    return gvp->instmemp[ea & 0x3FF];
+    gvp->brp[RPBR].vpn = ea & 0x0FFFFC00;
+    gvp->brp[RPBR].memp = mem + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
+    return gvp->brp[RPBR].memp[ea & 0x3FF];
   }
-  return get16t(ea);
+  return get16trap(ea);
 }
 
 static inline unsigned short iget16(ea_t ea) {
   unsigned short access;
 
-  if ((ea & 0x8FFFFC00) == gvp->instvpn)
-    return gvp->instmemp[ea & 0x3FF];
+  if ((ea & 0x8FFFFC00) == gvp->brp[RPBR].vpn)
+    return gvp->brp[RPBR].memp[ea & 0x3FF];
   else
     return iget16t(ea);
 }
@@ -1138,34 +1234,7 @@ static inline unsigned short iget16(ea_t ea) {
 #define iget16t(ea) get16t((ea))
 #endif
 
-/* put16t handles potentially address trapping stores */
-
-static put16t(unsigned short value, ea_t ea) {
-  unsigned short access;
-
-  if (*(int *)&ea >= 0)
-    mem[mapva(ea, RP, WACC, &access)] = value;
-  else {
-    ea = ea & 0xFFFF;
-    if (ea < 7)
-      crs[memtocrs[ea]] = value;
-    else if (ea == 7) {
-      RPL = value;
-    } else {
-      RESTRICTR(RP);
-      if (ea <= 017)                      /* CRS */
-	crs[memtocrs[ea]] = value;
-      else if (ea <= 037)                 /* DMX */
-	regs.sym.regdmx[((ea & 036) << 1) | (ea & 1)] = value;
-      else {
-	printf(" Live register store address %o too big!\n", ea);
-	fatal(NULL);
-      }
-    }
-  }
-}
-
-static put16(unsigned short value, ea_t ea) {
+static inline put16(unsigned short value, ea_t ea) {
   unsigned short access;
 
 #if DBG
@@ -1173,7 +1242,18 @@ static put16(unsigned short value, ea_t ea) {
     warn("address trap in put16");
 #endif
 
+#ifdef FAST
+
+  /* there is no access stored in the supercache, so writes
+     always have to go through mapva, but the cache is updated
+     so that the next read might avoid mapva */
+
+  eap->memp = mem + (mapva(ea, RP, WACC, &access) & 0xFFFFFC00);
+  eap->vpn = ea & 0x0FFFFC00;
+  eap->memp[ea & 0x3FF] = value;
+#else
   mem[mapva(ea, RP, WACC, &access)] = value;
+#endif
 }
 
 static put16r(unsigned short value, ea_t ea, ea_t rpring) {
@@ -1186,6 +1266,44 @@ static put16r(unsigned short value, ea_t ea, ea_t rpring) {
 
   mem[mapva(ea, rpring, WACC, &access)] = value;
 }
+
+/* put16t handles stores that ARE address traps */
+
+static put16trap(unsigned short value, ea_t ea) {
+
+#ifdef DBG
+  if (*(int *)&ea >= 0)
+    warn("real EA in put16trap");
+#endif
+
+  ea = ea & 0xFFFF;
+  if (ea < 7)
+    crs[memtocrs[ea]] = value;
+  else if (ea == 7) {
+    RPL = value;
+  } else {
+    RESTRICTR(RP);
+    if (ea <= 017)                      /* CRS */
+      crs[memtocrs[ea]] = value;
+    else if (ea <= 037)                 /* DMX */
+      regs.sym.regdmx[((ea & 036) << 1) | (ea & 1)] = value;
+    else {
+      printf(" Live register store address %o too big!\n", ea);
+      fatal(NULL);
+    }
+  }
+}
+
+/* put16t handles stores that MIGHT address trap */
+
+static inline put16t(unsigned short value, ea_t ea) {
+
+  if (*(int *)&ea >= 0)
+    put16(value, ea);
+  else
+    put16trap(value, ea);
+}
+
 
 static put32(unsigned int value, ea_t ea) {
   pa_t pa;
@@ -1494,6 +1612,7 @@ static void fatal(char *msg) {
 
 #ifndef NOTRACE
   printf("STLB calls: %d  misses: %d  hitrate: %5.2f%%\n", gvp->mapvacalls, gvp->mapvamisses, (double)(gvp->mapvacalls-gvp->mapvamisses)/gvp->mapvacalls*100.0);
+  printf("Supercache calls: %d  misses: %d  hitrate: %5.2f%%\n", gvp->supercalls, gvp->supermisses, (double)(gvp->supercalls-gvp->supermisses)/gvp->supercalls*100.0);
 #endif
 
   /* should do a register dump, RL dump, PCB dump, etc. here... */
@@ -1745,7 +1864,7 @@ static ea_t ea32s (unsigned short inst) {
    bit, is that 32R indirect words have an indirect bit for multi-level
    indirects */
 
-static ea_t ea32r64r (ea_t earp, unsigned short inst) {
+static inline ea_t ea32r64r (ea_t earp, unsigned short inst) {
 
   unsigned short ea, m, rph, rpl, amask, class, i, x;
   ea_t va;
@@ -2132,6 +2251,7 @@ static void prtn() {
   *(unsigned int *)(crs+SB) = newsb;
   *(unsigned int *)(crs+LB) = newlb;
   newkeys(keys & 0177770);
+  invalidate_brp();
   TRACE(T_INST, " Finished PRTN, RP=%o/%o\n", RPH, RPL);
 }
 
@@ -2367,6 +2487,7 @@ static pcl (ea_t ecbea) {
      memcpy is okay; if it does, do fetches */
 
   if (access == 1) {
+    invalidate_brp();
     if ((ecbea & 0xF) != 0)
       fault(ACCESSFAULT, 0, ecbea);
     memcpy(ecb,mem+pa,sizeof(ecb));
@@ -2738,12 +2859,7 @@ static ors(unsigned short pcbw) {
 
   /* invalidate the mapva translation supercache */
 
-  gvp->instvpn = 0x000000FF;
-  gvp->brp[0].vpn = 0x000000FF;
-  gvp->brp[1].vpn = 0x000000FF;
-  gvp->brp[2].vpn = 0x000000FF;
-  gvp->brp[3].vpn = 0x000000FF;
-  gvp->brp[4].vpn = 0x000000FF;
+  invalidate_brp();
 }
 
 
@@ -3782,13 +3898,9 @@ main (int argc, char **argv) {
   gvp->livereglim = 040;
   gvp->mapvacalls = 0;
   gvp->mapvamisses = 0;
-  gvp->instmemp = NULL;
-  gvp->instvpn = 0x000000FF;   /* bogus - nothing will match this */
-  gvp->brp[0].vpn = 0x000000FF;
-  gvp->brp[1].vpn = 0x000000FF;
-  gvp->brp[2].vpn = 0x000000FF;
-  gvp->brp[3].vpn = 0x000000FF;
-  gvp->brp[4].vpn = 0x000000FF;
+  gvp->supercalls = 0;
+  gvp->supermisses = 0;
+  invalidate_brp();
   eap = &gvp->brp[0];
 
   /* ignore SIGPIPE signals (sockets) or they'll kill the emulator */
@@ -5308,12 +5420,7 @@ d_liot:  /* 000044 */
 
   /* invalidate the instruction translation cache mechanism */
 
-  gvp->instvpn = 0x000000FF;
-  gvp->brp[0].vpn = 0x000000FF;
-  gvp->brp[1].vpn = 0x000000FF;
-  gvp->brp[2].vpn = 0x000000FF;
-  gvp->brp[3].vpn = 0x000000FF;
-  gvp->brp[4].vpn = 0x000000FF;
+  invalidate_brp();
   goto fetch;
 
 d_ptlb:  /* 000064 */
@@ -5349,12 +5456,7 @@ d_itlb:  /* 000615 */
 
   /* invalidate the instruction translation cache mechanism */
 
-  gvp->instvpn = 0x000000FF;
-  gvp->brp[0].vpn = 0x000000FF;
-  gvp->brp[1].vpn = 0x000000FF;
-  gvp->brp[2].vpn = 0x000000FF;
-  gvp->brp[3].vpn = 0x000000FF;
-  gvp->brp[4].vpn = 0x000000FF;
+  invalidate_brp();
   goto fetch;
 
 d_lpsw:  /* 000711 */
