@@ -431,6 +431,9 @@ typedef struct {
 
 typedef struct {
 
+  void *disp_gen[4096];                /* generic dispatch table */
+  void *disp_mr[128];                  /* V/R memory ref dispatch table */
+
 /* traceflags is the variable used to test tracing of each instruction
    traceuser is the user number to trace, 0 meaning any user
    traceseg is the procedure segment number to trace, 0 meaning any
@@ -2787,25 +2790,19 @@ static ors(unsigned short pcbw) {
   short ownedx, freex, savedx;
   unsigned short modals;
 
-#define NUREGS 8
 
   currs = (crs[MODALS] & 0340) >> 5;
   TRACE(T_PX, "ors: currs = %d, modals = %o\n", currs, crs[MODALS]);
-#if 0
 
+#if 1
   /* this is the code for handling more than 2 register sets.  It is
      "smarter" than the Prime u-code, so probably doesn't pass DIAG
      tests.  I haven't tested whether the extra overhead of keeping a
      LRU queue for register sets is worth it vs. the simpler Prime
-     way.  One problem is that different models had different #'s of
-     registers, and the emulator needs a table of these values.
-     Either that, or it probably could initialize all register sets
-     using the first (user) register set as a template when process
-     exchange is enabled.  (Primos only initializes the number of
-     user register sets that a particular model actually has.) */
+     way. */
 
   ownedx = freex = savedx = -1;
-  for (rx = NUREGS-1; rx >= 0; rx--) {   /* search LRU first */
+  for (rx = regsets[cpuid]-1; rx >= 0; rx--) {   /* search LRU first */
     rs = regq[rx];
     TRACE(T_PX, "ors: check rs %d: owner=%o/%o, saved=%d\n", rs, regs.sym.userregs[rs][21]>>16, regs.sym.userregs[rs][21] & 0xFFFF, regs.sym.userregs[rs][20] & 1);
     ownerl = regs.sym.userregs[rs][21] & 0xFFFF;          /* OWNERH/OWNERL */
@@ -2819,7 +2816,7 @@ static ors(unsigned short pcbw) {
       ownedx = rx;
     } else if (ownerl == 0)
       freex = rx;
-    else if (savedx < 0 && regs.sym.userregs[rs][20] & 1) /* KEYS/MODALS */
+    else if (savedx < 0 && (regs.sym.userregs[rs][20] & 1)) /* KEYS/MODALS */
       savedx = rx;
   }
   if (ownedx >= 0) {
@@ -2832,11 +2829,11 @@ static ors(unsigned short pcbw) {
     rx = savedx;
     TRACE(T_PX, "ors: using saved reg set %d\n", regq[rx]);
   } else {
-    rx = NUREGS-1;                           /* least recently used */
+    rx = regsets[cpuid]-1;                  /* least recently used */
     TRACE(T_PX, "ors: no reg set found; using %d\n", regq[rx]);
   }
   rs = regq[rx];
-  if (rs > NUREGS)
+  if (rs >= regsets[cpuid])
     fatal("ors: rs chosen is too big");
   modals = (crs[MODALS] & ~0340) | (rs << 5);
 
@@ -2873,7 +2870,7 @@ static ors(unsigned short pcbw) {
 
    If no process can be found to run, the dispatcher idles and waits
    for an external interrupt.
- */
+*/
 
 static dispatcher() {
   ea_t pcbp, rlp;
@@ -3825,8 +3822,6 @@ main (int argc, char **argv) {
      - bits 7-16 are the opcode
      the index into the table is bits 1-2, 7-16, for a 12-bit index */
 
-  void *disp_gen[4096];                /* generic dispatch table */
-  void *disp_mr[128];                  /* V/R memory ref dispatch table */
   int boot;                            /* true if reading a boot record */
   char *bootarg;                       /* argument to -boot, if any */
   char bootfile[16];                   /* boot file to load (optional) */
@@ -4518,7 +4513,7 @@ xec:
 
   if ((inst & 036000) == 0) {
     TRACE(T_INST, " generic class %d\n", inst>>14);
-    goto *disp_gen[GENIX(inst)];
+    goto *gvp->disp_gen[GENIX(inst)];
   }
 
   /* get x bit and adjust opcode so that PMA manual opcode
@@ -4552,7 +4547,7 @@ xec:
   if ((crs[KEYS] & 016000) == 014000) {   /* 64V mode */
     ea = ea64v(inst, earp);
     TRACE(T_INST, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
-    goto *disp_mr[VMRINSTIX(inst)];
+    goto *(gvp->disp_mr[VMRINSTIX(inst)]);
 
   } else if ((crs[KEYS] & 0016000) == 010000) {
       goto imode;
@@ -4564,17 +4559,17 @@ xec:
   } else if (crs[KEYS] & 004000) {        /* 32R/64R */
     ea = ea32r64r(earp, inst);
     TRACE(T_INST, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
-    goto *disp_mr[RMRINSTIX(inst)];
+    goto *(gvp->disp_mr[RMRINSTIX(inst)]);
 
   } else if (crs[KEYS] & 002000) {
     ea = ea32s(inst);
     TRACE(T_INST, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
-    goto *disp_mr[SMRINSTIX(inst)];
+    goto *(gvp->disp_mr[SMRINSTIX(inst)]);
 
   } else if ((crs[KEYS] & 016000) == 0) {
     ea = ea16s(inst);
     TRACE(T_INST, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
-    goto *disp_mr[SMRINSTIX(inst)];
+    goto *(gvp->disp_mr[SMRINSTIX(inst)]);
 
   } else {
     printf("Bad CPU mode in EA calculation, keys = %o\n", crs[KEYS]);

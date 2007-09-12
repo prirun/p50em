@@ -37,17 +37,17 @@
 #define MRPRIMEIX(primeop) (((primeop) >> 4) | ((primeop) & 3))
 
 #define MRGEN(opcode, name, target) \
-  disp_mr[MRPRIMEIX(opcode)] = &&target; \
+  gvp->disp_mr[MRPRIMEIX(opcode)] = &&target; \
   /* printf("MR opcode %05o (%s), ix=%0d\n", opcode, name, MRPRIMEIX(opcode)); */ \
   if ((opcode & 01700) != 01500) { \
-    disp_mr[MRPRIMEIX(opcode | 02000)] = &&target; \
+    gvp->disp_mr[MRPRIMEIX(opcode | 02000)] = &&target; \
     /* printf("MR opcode %05o (%s), ix=%0d\n", opcode | 02000, name, MRPRIMEIX(opcode | 02000)); */ \
   }
 
 /* initialize table to "bad memory reference instruction" */
 
 for (i=0; i < 128; i++)
-  disp_mr[i] = &&d_badmr;
+  gvp->disp_mr[i] = &&d_badmr;
 
 MRGEN(00100, "JMP", d_jmp);
 MRGEN(00101, "EAL", d_ealeaa);
@@ -111,13 +111,13 @@ MRGEN(03503, "JSX", d_jsx);
 #define GENIX(inst) ((inst>>4) & 06000) | (inst & 01777)
 
 #define DIGEN(opcode, name, target) \
-  disp_gen[GENIX(opcode)] = &&target; \
+  gvp->disp_gen[GENIX(opcode)] = &&target; \
   //printf("Opcode %06o (%s), ix=%0o\n", opcode, name, GENIX(opcode))
 
 /* initialize entire table to jump to bad generic label */
 
 for (i=0; i < 010000; i++) {
-  disp_gen[i] = &&d_badgen;
+  gvp->disp_gen[i] = &&d_badgen;
 }
 
 /* initialize class 0 generics (first 2 bits are zero) */
@@ -230,14 +230,14 @@ DIGEN(001324, "MDIW", d_mdxx);
 /* initialize class 1 generics (shift group) */
 
 for (i = 02000; i < 04000; i++) {
-  disp_gen[i] = &&d_gen1;
+  gvp->disp_gen[i] = &&d_gen1;
 }
 
 /* initialize class 2 generics (skip group) */
 
 #if 0
 for (i = 04000; i < 06000; i++) {
-  disp_gen[i] = &&d_gen2;
+  gvp->disp_gen[i] = &&d_gen2;
 }
 #endif
 

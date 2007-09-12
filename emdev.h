@@ -651,6 +651,7 @@ int mtread (int fd, unsigned short *iobuf, int nw, int cmd, int *mtstat) {
   if (cmd & 0x80) {                 /* forward motion */
     if (*mtstat & 0x20)             /* already at EOT, can't read */
       return 0;
+retry:
     n = read(fd, buf, 4);
     TRACE(T_TIO, " mtread read foward, %d bytes for reclen\n", n);
     if (n == 0) {                   /* now we're at EOT */
@@ -670,7 +671,7 @@ readerr:
     if (n < 4) {
       fprintf(stderr," only read %d bytes for reclen\n", n);
 fmterr:
-      warn("Tape file isn't in .TAP format");
+      fprintf(stderr," TAP format error at position %d\n", lseek(fd, 0, SEEK_CUR));
       *mtstat |= 0x200;              /* raw error */
       return 0;
     }
@@ -680,21 +681,20 @@ fmterr:
       *mtstat |= 0x100;
       return 0;
     }
-    if (reclen == 0xFFFF) {        /* hit EOT mark */
+    if (reclen == 0xFFFFFFFF) {    /* hit EOT mark */
 
       /* NOTE: simh .tap doc says to backup here, probably to wipe out
-       EOT if more data is written.  IMO, EOT should never be written
-       to simulated tape files. */
+       the EOT if more data is written.  IMO, EOT should never be
+       written to simulated tape files - it only causes problems.
 
-      if ((n=lseek(fd, -4, SEEK_CUR)) == -1) {
-	perror("em: unable to backspace over EOT");
-	goto readerr;
-      }
-      *mtstat |= 0x20;
-      return 0;
+       The Prime emulator ignores .tap EOT marks, since that makes it
+       possible to concatenate .tap files */
+
+      goto retry;
     }
-    if (reclen & 0x8000) {         /* record marked in error */
-      /* NOTE: .tap may have non-zero record length here... */
+    if (reclen & 0x80000000) {     /* record marked in error */
+      /* XXX: can .tap have non-zero record length here? */
+      fprintf(stderr,"tape read error at position %ulld\n", lseek(fd, 0, SEEK_CUR));
       *mtstat |= 0xB600;           /* set all error bits */;
       return 0;
     }
@@ -741,7 +741,10 @@ fmterr:
     if (n == -1) goto readerr;
     if (n != 4) goto fmterr;
     reclen2 = buf[0] | (buf[1]<<8) | (buf[2]<<16) | (buf[3]<<24);
-    if (reclen2 != reclen) goto fmterr;
+    if (reclen2 != reclen) {
+      fprintf(stderr," record length mismatch; leading %d, trailing %d\n", reclen, reclen2);
+      goto fmterr;
+    }
     /* XXX: maybe should pad odd-length record with a zero... */
     return (bytestoread+1)/2;
 
@@ -756,11 +759,16 @@ fmterr:
 
     /* backup 4 bytes, read reclen */
 
-    if (lseek(fd, -4, SEEK_CUR) == -1)
+    if (lseek(fd, -4, SEEK_CUR) == -1) {
+      perror("backspacing trailing reclen");
       goto fmterr;
+    }
     n = read(fd, buf, 4);
     if (n == -1) goto readerr;
-    if (n != 4) goto fmterr;
+    if (n != 4) {
+      fprintf(stderr,"only read %d bytes for trailing reclen backspacing\n", n);
+      goto fmterr;
+    }
     reclen = buf[0] | (buf[1]<<8) | (buf[2]<<16) | (buf[3]<<24);
 
     /* backup reclen+8 bytes unless this is a file mark, error,
@@ -770,23 +778,36 @@ fmterr:
       *mtstat |= 0x100;        /* set filemark status */
       goto repo;
     }
-    if (reclen & 0x8000)       /* error record (don't report) */
-      goto repo;
-    if (reclen == 0xFFFF) {
+    
+    /* ignore attempts to backspace over error records.  This will
+       cause Magsav to read the next record instead, and it may
+       recover.  Re-reading the error record 10 times won't help! */
+
+    if (reclen & 0x80000000)   /* error record (don't report) */
+      return 0;
+    if (reclen == 0xFFFFFFFF) {
       warn("em: devmt: read EOT backwards??");
       reclen = 0;
       goto repo;
     }
-    if (lseek(fd, -(reclen+8), SEEK_CUR) == -1)
+    if (lseek(fd, -(reclen+8), SEEK_CUR) == -1) {
+      perror("lseek failed backspacing");
       goto fmterr;
+    }
 
     /* read leading reclen again to make sure we're positioned correctly */
       
     n = read(fd, buf, 4);
     if (n == -1) goto readerr;
-    if (n != 4) goto fmterr;
+    if (n != 4) {
+      fprintf(stderr, "only read %d bytes for leading reclen backspacing\n", n);
+      goto fmterr;
+    }
     reclen2 = buf[0] | (buf[1]<<8) | (buf[2]<<16) | (buf[3]<<24);
-    if (reclen2 != reclen) goto fmterr;
+    if (reclen2 != reclen) {
+      fprintf(stderr," record length mismatch backspacing; leading %d, trailing %d\n", reclen, reclen2);
+      goto fmterr;
+    }
 
     /* finally, backup over the reclen to be positioned for read */
 
@@ -958,16 +979,14 @@ int devmt (int class, int func, int device) {
 	fatal("em: no unit selected on tape OTA '01");
       usel = u;
 
-      /* XXX: if the tape device file changes (inode changes?), close
-	 and re-open the file (new tape reel).  Does offline need to
-	 be reported at least once in this case?  Or should it somehow
-	 be related to rewinds? (only do the check at BOT?) */
+      /* if the tape is at BOT, close and re-open it on every operation
+	 so that if the tape device file is changed, we'll see the new
+	 file.  Hacky, but it works. :) */
 
-#if 0
-      if (unit[u].mtstat & 8 && /* tape device file changed */) {
-	/* close tape fd if open & set to -1 */
+      if (unit[u].fd >= 0 && (unit[u].mtstat & 8)) {
+	close(unit[u].fd);
+	unit[u].fd = -1;
       }
-#endif
 
       /* if the tape file has never been opened, do it now. */
 
@@ -1495,7 +1514,9 @@ int devcp (int class, int func, int device) {
 	  gvp->instpermsec = (gvp->instcount-previnstcount) /
 	    ((tv.tv_sec-prev_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-prev_tv.tv_usec)/1000);
 	  //printf("instcount = %d, previnstcount = %d, diff=%d, instpermsec=%d\n", gvp->instcount, previnstcount, gvp->instcount-previnstcount, gvp->instpermsec);
+#ifdef NOIDLE
 	  printf("\ninstpermsec=%d\n", gvp->instpermsec);
+#endif
 	  previnstcount = gvp->instcount;
 	  prev_tv = tv;
 	}

@@ -1,3 +1,7 @@
+/* this number includes the 2 system register sets plus n "user"
+   register sets.  Some Prime models had more than 2 system register
+   sets, but the emulator only has 2 */
+
 #define REGSETS 10
 
 /* these are 16-bit offsets into crs (current register set) */
@@ -84,6 +88,55 @@
 #define FAC1 10
 #define BR 12
 #define OWNER32 (OWNERH/2)
+
+/* this is the number of user register sets for this cpuid */
+
+static short regsets[] = { \
+			   2,  /* 00  P400 */
+			   2,  /* 01  P400 (> REV A U-CODE) */
+			   2,  /* 02  RESERVED */
+			   2,  /* 03  P350 */
+			   2,  /* 04  P450/P550 */
+			   2,  /* 05  P750 */
+			   2,  /* 06  P650 */
+			   2,  /* 07  P150/P250 */
+			   2,  /* 08  P850 */
+			   2,  /* 09  MOLE/550 */
+			   2,  /* 10  MOLE/650 */
+			   2,  /* 11  P2250 */
+			   2,  /* 12  P750Y */
+			   2,  /* 13  P550Y */
+			   2,  /* 14  P850Y */
+			   4,  /* 15  P9950 */
+			   8,  /* 16  P9650 */
+			   8,  /* 17  P2550 */
+			   4,  /* 18  P9955 */
+			   4,  /* 19  P9750 */
+			   2,  /* 20  TBD */
+			   8,  /* 21  P2350 */
+			   8,  /* 22  P2655 */
+			   8,  /* 23  P9655 */
+			   4,  /* 24  P9955-TIGGER */
+			   8,  /* 25  P2450 */
+			   4,  /* 26  P4050 */
+			   4,  /* 27  P4150 */
+			   4,  /* 28  P6350 */
+			   4,  /* 29  P6550 */
+			   4,  /* 30  P9955-II */
+			   8,  /* 31  P2755 */
+			   8,  /* 32  P2455 */
+			   4,  /* 33  P5310 */
+			   4,  /* 34  P9755 */
+			   4,  /* 35  P2850 */
+			   4,  /* 36  P2950 */
+			   4,  /* 37  P5330 */
+			   4,  /* 38  P4450 */
+			   4,  /* 39  P5370 */
+			   4,  /* 40  P6650 */
+			   4,  /* 41  P6450 */
+			   4,  /* 42  P6150 */
+			   4,  /* 43  P5320 */
+			   4}; /* 44  P5340 */
 
 static union {
     int rs[REGSETS][32];
