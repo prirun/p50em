@@ -379,7 +379,7 @@ typedef struct {
 } iotlbe_t;
 
 /* the emulator uses a special, very small address translation cache
-   to hold the virtual page address and corresponding mem[] pointer
+   to hold the virtual page address and corresponding MEM[] pointer
    for a few special pages:
 
    - the current instruction page (RPBR)
@@ -419,10 +419,22 @@ typedef struct {
 #define UNBR 6
 #define BRP_SIZE 7
 
+/* NOTE: vpn is a segment number/word offset Prime virtual address
+   corresponding to the physical page of memory in memp.  The high-
+   order fault bit of vpn is never set.  The ring and extension bits
+   are used to store the 3-bit access field from the STLB for the 
+   current ring (remember that all brp entries are invalidated by
+   PCL and PRTN when the ring might change).
+
+   Storing the access bits in the vpn allows use of of the brp
+   supercache for write accesses as well as read accesses. */
+
 typedef struct {
-  unsigned short *memp;       /* mem[] physical page address */
+  unsigned short *memp;       /* MEM[] physical page address */
   ea_t vpn;                   /* corresponding virtual page address */
 } brp_t;
+
+void *disp_gen[4096];         /* generic dispatch table */
 
 /* "gv" is a static structure used to hold "hot" global variables.  These
    are pointed to by a dedicated register, so that the usual PowerPC global
@@ -431,24 +443,7 @@ typedef struct {
 
 typedef struct {
 
-  void *disp_gen[4096];                /* generic dispatch table */
-  void *disp_mr[128];                  /* V/R memory ref dispatch table */
-
-/* traceflags is the variable used to test tracing of each instruction
-   traceuser is the user number to trace, 0 meaning any user
-   traceseg is the procedure segment number to trace, 0 meaning any
-   savetraceflags hold the real traceflags, while "traceflags" switches
-   on and off for each instruction
-
-   TRACEUSER is a macro that is true if the current user is being traced
-*/
-
-  FILE *tracefile;              /* trace.log file */
-  int traceflags;               /* each bit is a trace flag */
-  int savetraceflags;
-  int traceuser;                /* OWNERL to trace */
-  int traceseg;                 /* RPH segment # to trace */
-  int numtraceprocs;            /* # of procedures we're tracing */
+  unsigned short *physmem;      /* pointer to Prime physical memory */
 
   int intvec;                   /* currently raised interrupt (if >= zero) */
 
@@ -480,9 +475,29 @@ typedef struct {
   int mapvamisses;              /* STLB misses */
   int supercalls;               /* supercache hits */
   int supermisses;
+
+  void *disp_mr[128];           /* V/R memory ref dispatch table */
+
+/* traceflags is the variable used to test tracing of each instruction
+   traceuser is the user number to trace, 0 meaning any user
+   traceseg is the procedure segment number to trace, 0 meaning any
+   savetraceflags hold the real traceflags, while "traceflags" switches
+   on and off for each instruction
+
+   TRACEUSER is a macro that is true if the current user is being traced
+*/
+
+  FILE *tracefile;              /* trace.log file */
+  int traceflags;               /* each bit is a trace flag */
+  int savetraceflags;
+  int traceuser;                /* OWNERL to trace */
+  int traceseg;                 /* RPH segment # to trace */
+  int numtraceprocs;            /* # of procedures we're tracing */
+
 } gv_t;
 
 static gv_t gv;
+
 #if 1
 register gv_t *gvp asm ("r28");
 register brp_t *eap asm ("r27");   /* effective address brp pointer */
@@ -508,8 +523,9 @@ static  jmp_buf jmpbuf;               /* for longjumps to the fetch loop */
 
 #define MAXMB   512
 #define MEMSIZE MAXMB/2*1024*1024
+#define MEM physmem
 
-static unsigned short mem[MEMSIZE];     /* system's physical memory */
+static unsigned short physmem[MEMSIZE]; /* system's physical memory */
 static int memlimit;                    /* user's desired memory limit (-mem) */
 
 #define MAKEVA(seg,word) ((((int)(seg))<<16) | (word))
@@ -766,12 +782,10 @@ char *searchloadmap(int addr, char type) {
    0 = PCL (PACC)
    2 = read (RACC)
    3 = write (WACC) = read+write
-   4 = execute (XACC)
 */
 #define PACC 0
 #define RACC 2
 #define WACC 3
-#define XACC 4
 
 
 /* NOTE: this is the 6350 STLB hash function, giving a 9-bit index 0-511.
@@ -835,14 +849,14 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       if (relseg >= nsegs)
 	fault(SEGFAULT, 1, ea);   /* fcode = segment too big */
       staddr = (dtar & 0x003F0000) | ((dtar & 0x7FFF)<<1);
-      sdw = *(unsigned int *)(mem+staddr+relseg*2);
+      sdw = *(unsigned int *)(MEM+staddr+relseg*2);
       TRACE(T_MAP,"        staddr=%o, sdw=%o\n", staddr, sdw);
       if (sdw & 0x8000)
 	fault(SEGFAULT, 2, ea);   /* fcode = sdw fault bit set */
       ptaddr = (((sdw & 0x3F)<<10) | (sdw>>22)) << 6;
       if (gvp->pmap32bits) {
 	pmaddr = ptaddr + 2*PAGENO(ea);
-	pte = mem[pmaddr];
+	pte = MEM[pmaddr];
 
 	/* this is probably correct (don't have any references) for
 	   the 53xx and later machines that support more than 128MB of
@@ -851,16 +865,16 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
 	   example).  Need to have a mask for each CPU type to make it
 	   technically correct. */
 
-	ppn = ((mem[pmaddr] & gvp->pmap32mask) << 16) | mem[pmaddr+1];
+	ppn = ((MEM[pmaddr] & gvp->pmap32mask) << 16) | MEM[pmaddr+1];
       } else {
 	pmaddr = ptaddr + PAGENO(ea);
-	pte = mem[pmaddr];
+	pte = MEM[pmaddr];
 	ppn = pte & 0xFFF;
       }
       TRACE(T_MAP,"        ptaddr=%o, pmaddr=%o, pte=%o\n", ptaddr, pmaddr, pte);
       if (!(pte & 0x8000))
 	fault(PAGEFAULT, 0, ea);
-      mem[pmaddr] |= 040000;     /* set referenced bit */
+      MEM[pmaddr] |= 040000;     /* set referenced bit */
       stlbp->access[0] = 7;
       stlbp->access[1] = (sdw >> 12) & 7;
       stlbp->access[STLB_UNMODIFIED_BIT] = 1;
@@ -868,7 +882,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       stlbp->procid = crs[OWNERL];
       stlbp->seg = seg;
       stlbp->ppn = ppn;
-      stlbp->pmep = mem+pmaddr;
+      stlbp->pmep = MEM+pmaddr;
 #ifndef NOTRACE
       stlbp->load_ic = gvp->instcount;
 #endif
@@ -976,9 +990,9 @@ const static unsigned int mapio(ea_t ea) {
 /* these are I/O versions of get/put that use the IOTLB rather than
    the STLB */
 
-#define get16io(ea) mem[mapio((ea))]
-#define get32io(ea) *(unsigned int *)(mem+mapio((ea)))
-#define put16io(word,ea) mem[mapio((ea))] = word
+#define get16io(ea) MEM[mapio((ea))]
+#define get32io(ea) *(unsigned int *)(MEM+mapio((ea)))
+#define put16io(word,ea) MEM[mapio((ea))] = word
 
 /* these are shorthand macros for get/put that use the current program
    counter - the typical usage - or Ring 0, the other typical case.
@@ -1010,6 +1024,12 @@ const static unsigned int mapio(ea_t ea) {
    - in V-mode long instruction address calculation or execution
 
    get16trap handles 16-bit fetches that are KNOWN to be address traps
+
+   get16r handles 16-bit fetches that used a passed-in virtual address;
+   (only the ring part is used from this address).
+
+   VERY IMPORTANT: get16r _cannot_ use the supercache!  You don't want to 
+   cache Ring 0 accesses to data, then let Ring 3 use the cache!
 */
 
 
@@ -1025,26 +1045,26 @@ static inline unsigned short get16(ea_t ea) {
   /* idle loop runs faster if this is enabled, but executable is 27K
      bigger and programs (ADD) run slower.  Maybe inline expansions of
      get16 & fastmap are too big for cache (?) */
-  return mem[fastmap(ea, RP, RACC)];
+  return MEM[fastmap(ea, RP, RACC)];
 #endif
 
 #ifdef FAST
 #ifndef NOTRACE
   gvp->supercalls++;
 #endif
-  if ((ea & 0x0FFFFC00) == eap->vpn) {
+  if ((ea & 0x0FFFFC00) == (eap->vpn & 0x0FFFFFFF)) {
     TRACE(T_MAP, "    get16: supercached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
     return eap->memp[ea & 0x3FF];
   } else {
 #ifndef NOTRACE
     gvp->supermisses++;
 #endif
-    eap->memp = mem + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
-    eap->vpn = ea & 0x0FFFFC00;
+    eap->memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
+    eap->vpn = (ea & 0x0FFFFC00) | (access << 28);
     return eap->memp[ea & 0x3FF];
   }
 #else
-  return mem[mapva(ea, RP, RACC, &access)];
+  return MEM[mapva(ea, RP, RACC, &access)];
 #endif
 }
 
@@ -1082,13 +1102,36 @@ static unsigned short get16r(ea_t ea, ea_t rpring) {
     warn("address trap in get16r");
 #endif
 
-  return mem[mapva(ea, rpring, RACC, &access)];
+  return MEM[mapva(ea, rpring, RACC, &access)];
 }
 
-static unsigned int get32(ea_t ea) {
+/* get32m always uses the map and isn't inlined */
+
+static unsigned int get32m(ea_t ea) {
   pa_t pa;
   unsigned short access;
   unsigned short m[2];
+
+#if DBG
+  if (ea & 0x80000000)                 /* check for live register access */
+    warn("address trap in get32m");
+#endif
+
+#ifndef NOTRACE
+  gvp->supermisses++;
+#endif
+  if ((ea & 01777) <= 01776) {
+    eap->memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
+    eap->vpn = (ea & 0x0FFFFC00) | (access << 28);
+    return *(unsigned int *)&eap->memp[ea & 0x3FF];
+  }
+  return (get16(ea) << 16) | get16(INCVA(ea,1));
+}
+
+/* get32 tries to use the supercache and is inlined */
+
+static inline unsigned int get32(ea_t ea) {
+  pa_t pa;
 
 #if DBG
   if (ea & 0x80000000)                 /* check for live register access */
@@ -1100,24 +1143,16 @@ static unsigned int get32(ea_t ea) {
   gvp->supercalls++;
 #endif
   if ((ea & 01777) <= 01776)
-    if ((ea & 0x0FFFFC00) == eap->vpn) {
+    if ((ea & 0x0FFFFC00) == (eap->vpn & 0x0FFFFFFF)) {
       TRACE(T_MAP, "    get32: supercached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
       return *(unsigned int *)&eap->memp[ea & 0x3FF];
-    } else {
-#ifndef NOTRACE
-      gvp->supermisses++;
-#endif
-      eap->memp = mem + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
-      eap->vpn = ea & 0x0FFFFC00;
-      return *(unsigned int *)&eap->memp[ea & 0x3FF];
     }
-  /* XXX: could see if 1st word is supercached -- painful! */
-  return (get16(ea) << 16) | get16(INCVA(ea,1));
+  return get32m(ea);
 #else
   pa = mapva(ea, RP, RACC, &access);
   if ((ea & 01777) <= 01776)
-    return *(unsigned int *)(mem+pa);
-  return (mem[pa] << 16) | get16(INCVA(ea,1));
+    return *(unsigned int *)(MEM+pa);
+  return (MEM[pa] << 16) | get16(INCVA(ea,1));
 #endif
 }
 
@@ -1133,8 +1168,8 @@ static unsigned int get32r(ea_t ea, ea_t rpring) {
   pa = mapva(ea, rpring, RACC, &access);
 
   if ((pa & 01777) <= 01776)
-    return *(unsigned int *)(mem+pa);
-  return (mem[pa] << 16) | get16r(INCVA(ea,1), rpring);
+    return *(unsigned int *)(MEM+pa);
+  return (MEM[pa] << 16) | get16r(INCVA(ea,1), rpring);
 }
 
 static long long get64r(ea_t ea, ea_t rpring) {
@@ -1152,36 +1187,36 @@ static long long get64r(ea_t ea, ea_t rpring) {
   pa = mapva(ea, rpring, RACC, &access);
 #if FAST
   if ((ea & 01777) <= 01774) {          /* no page wrap */
-    *(int *)(m+0) = *(int *)(mem+pa);
-    *(int *)(m+2) = *(int *)(mem+pa+2);
+    *(int *)(m+0) = *(int *)(MEM+pa);
+    *(int *)(m+2) = *(int *)(MEM+pa+2);
   } else                                /* wraps page (maybe seg too) */
     switch (ea & 3) {
     case 1:
-      m[0] = mem[pa];
-      *(int *)(m+1) = *(int *)(mem+pa+1);
+      m[0] = MEM[pa];
+      *(int *)(m+1) = *(int *)(MEM+pa+1);
       pa = mapva(INCVA(ea,3), rpring, RACC, &access);
-      m[3] = mem[pa];
+      m[3] = MEM[pa];
       break;
     case 2:
-      *(int *)(m+0) = *(int *)(mem+pa);
+      *(int *)(m+0) = *(int *)(MEM+pa);
       pa = mapva(INCVA(ea,2), rpring, RACC, &access);
-      *(int *)(m+2) = *(int *)(mem+pa);
+      *(int *)(m+2) = *(int *)(MEM+pa);
       break;
     case 3:
-      m[0] = mem[pa];
+      m[0] = MEM[pa];
       pa = mapva(INCVA(ea,1), rpring, RACC, &access);
-      *(int *)(m+1) = *(int *)(mem+pa);
-      m[3] = mem[pa+2];
+      *(int *)(m+1) = *(int *)(MEM+pa);
+      m[3] = MEM[pa+2];
       break;
     default:
       fatal("Page cross error in get64r");
     }
 #else
   if ((pa & 01777) <= 01774) {          /* no page wrap */
-    *(int *)(m+0) = *(int *)(mem+pa);
-    *(int *)(m+2) = *(int *)(mem+pa+2);
+    *(int *)(m+0) = *(int *)(MEM+pa);
+    *(int *)(m+2) = *(int *)(MEM+pa+2);
   } else {
-    m[0] = mem[pa];
+    m[0] = MEM[pa];
     m[1] = get16r(INCVA(ea,1), rpring);
     m[2] = get16r(INCVA(ea,2), rpring);
     m[3] = get16r(INCVA(ea,3), rpring);
@@ -1216,8 +1251,8 @@ unsigned short iget16t(ea_t ea) {
   unsigned short access;
 
   if (*(int *)&ea > 0) {
-    gvp->brp[RPBR].vpn = ea & 0x0FFFFC00;
-    gvp->brp[RPBR].memp = mem + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
+    gvp->brp[RPBR].memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
+    gvp->brp[RPBR].vpn = (ea & 0x0FFFFC00) | (access << 28);
     return gvp->brp[RPBR].memp[ea & 0x3FF];
   }
   return get16trap(ea);
@@ -1226,7 +1261,7 @@ unsigned short iget16t(ea_t ea) {
 static inline unsigned short iget16(ea_t ea) {
   unsigned short access;
 
-  if ((ea & 0x8FFFFC00) == gvp->brp[RPBR].vpn)
+  if ((ea & 0x8FFFFC00) == (gvp->brp[RPBR].vpn & 0x0FFFFFFF))
     return gvp->brp[RPBR].memp[ea & 0x3FF];
   else
     return iget16t(ea);
@@ -1247,15 +1282,26 @@ static inline put16(unsigned short value, ea_t ea) {
 
 #ifdef FAST
 
-  /* there is no access stored in the supercache, so writes
-     always have to go through mapva, but the cache is updated
-     so that the next read might avoid mapva */
+#ifndef NOTRACE
+  gvp->supercalls++;
+#endif
 
-  eap->memp = mem + (mapva(ea, RP, WACC, &access) & 0xFFFFFC00);
-  eap->vpn = ea & 0x0FFFFC00;
-  eap->memp[ea & 0x3FF] = value;
+  /* access bits are stored in bits 2-4 of the supercache vpn.
+     write access is indicated by bit 4 (MSB = bit 1) */
+
+  if ((ea & 0x0FFFFC00) == (eap->vpn & 0x0FFFFFFF) && (eap->vpn & 0x10000000)) {
+    TRACE(T_MAP, "    put16: supercached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
+    eap->memp[ea & 0x3FF] = value;
+  } else {
+#ifndef NOTRACE
+    gvp->supermisses++;
+#endif
+    eap->memp = MEM + (mapva(ea, RP, WACC, &access) & 0xFFFFFC00);
+    eap->vpn = (ea & 0x0FFFFC00) | (access << 28);
+    eap->memp[ea & 0x3FF] = value;
+  }
 #else
-  mem[mapva(ea, RP, WACC, &access)] = value;
+  MEM[mapva(ea, RP, WACC, &access)] = value;
 #endif
 }
 
@@ -1267,7 +1313,7 @@ static put16r(unsigned short value, ea_t ea, ea_t rpring) {
     warn("address trap in put16r");
 #endif
 
-  mem[mapva(ea, rpring, WACC, &access)] = value;
+  MEM[mapva(ea, rpring, WACC, &access)] = value;
 }
 
 /* put16t handles stores that ARE address traps */
@@ -1318,14 +1364,36 @@ static put32(unsigned int value, ea_t ea) {
     warn("address trap in put32");
 #endif
 
+#ifdef FAST
+#ifndef NOTRACE
+  gvp->supercalls++;
+#endif
+  if ((ea & 01777) <= 01776) {
+    if ((ea & 0x0FFFFC00) == (eap->vpn & 0x0FFFFFFF) && (eap->vpn & 0x10000000)) {
+      TRACE(T_MAP, "    put32: supercached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
+      *(unsigned int *)&eap->memp[ea & 0x3FF] = value;
+    } else {
+#ifndef NOTRACE
+      gvp->supermisses++;
+#endif
+      eap->memp = MEM + (mapva(ea, RP, WACC, &access) & 0xFFFFFC00);
+      eap->vpn = (ea & 0x0FFFFC00) | (access << 28);
+      *(unsigned int *)&eap->memp[ea & 0x3FF] = value;
+    }
+  } else {
+    put16(value >> 16, ea);
+    put16(value & 0xFFFF, INCVA(ea,1));
+  }
+#else
   pa = mapva(ea, RP, WACC, &access);
   if ((pa & 01777) <= 01776)
-    *(unsigned int *)(mem+pa) = value;
+    *(unsigned int *)(MEM+pa) = value;
   else {
     m = (void *)&value;
-    mem[pa] = m[0];
+    MEM[pa] = m[0];
     put16(m[1], INCVA(ea,1));
   }
+#endif
 }
 
 static put32r(unsigned int value, ea_t ea, ea_t rpring) {
@@ -1340,10 +1408,10 @@ static put32r(unsigned int value, ea_t ea, ea_t rpring) {
 
   pa = mapva(ea, rpring, WACC, &access);
   if ((pa & 01777) <= 01776)
-    *(unsigned int *)(mem+pa) = value;
+    *(unsigned int *)(MEM+pa) = value;
   else {
     m = (void *)&value;
-    mem[pa] = m[0];
+    MEM[pa] = m[0];
     put16r(m[1], INCVA(ea,1), rpring);
   }
 }
@@ -1362,10 +1430,10 @@ static put64r(long long value, ea_t ea, ea_t rpring) {
 
   pa = mapva(ea, rpring, WACC, &access);
   if ((pa & 01777) <= 01774)
-    *(long long *)(mem+pa) = value;
+    *(long long *)(MEM+pa) = value;
   else {
     m = (void *)&value;
-    mem[pa] = m[0];
+    MEM[pa] = m[0];
     put16r(m[1], INCVA(ea,1), rpring);
     put16r(m[2], INCVA(ea,2), rpring);
     put16r(m[3], INCVA(ea,3), rpring);
@@ -1444,7 +1512,7 @@ static int rtq(ea_t qcbea, unsigned short *qent, ea_t rp) {
   else {
     RESTRICTR(rp);
     /* XXX: this should probably go through mapio */
-    *qent = mem[qentea];
+    *qent = MEM[qentea];
   }
   qtop = (qtop & ~qmask) | ((qtop+1) & qmask);
   put16r(qtop & 0xFFFF, qcbea, rp);
@@ -1471,7 +1539,7 @@ static int abq(ea_t qcbea, unsigned short qent, ea_t rp) {
   else {
     RESTRICTR(rp);
     /* XXX: this should probably go through mapio */
-    mem[qentea] = qent;
+    MEM[qentea] = qent;
   }
   put16r(qtemp, qcbea+1, rp);
   return 1;
@@ -2124,15 +2192,15 @@ static memdump(int start, int end) {
 
     TRACEA("\nSector 0:\n");
     for (ea=0; ea<01000; ea=ea+8)
-      if (mem[ea]|mem[ea+1]|mem[ea+2]|mem[ea+3]|mem[ea+4]|mem[ea+5]|mem[ea+6]|mem[ea+7])
-	TRACEA("%3o: %6o %6o %6o %6o %6o %6o %6o %6o\n", ea, mem[ea], mem[ea+1], mem[ea+2], mem[ea+3], mem[ea+4], mem[ea+5], mem[ea+6], mem[ea+7]);
+      if (MEM[ea]|MEM[ea+1]|MEM[ea+2]|MEM[ea+3]|MEM[ea+4]|MEM[ea+5]|MEM[ea+6]|MEM[ea+7])
+	TRACEA("%3o: %6o %6o %6o %6o %6o %6o %6o %6o\n", ea, MEM[ea], MEM[ea+1], MEM[ea+2], MEM[ea+3], MEM[ea+4], MEM[ea+5], MEM[ea+6], MEM[ea+7]);
 
     /* dump main memory for debugging */
 
     TRACEA("\nMain memory:\n");
     for (ea=start; ea<=end; ea=ea+8)
-      if (mem[ea]|mem[ea+1]|mem[ea+2]|mem[ea+3]|mem[ea+4]|mem[ea+5]|mem[ea+6]|mem[ea+7])
-	TRACEA("%o: %6o %6o %6o %6o %6o %6o %6o %6o\n", ea, mem[ea], mem[ea+1], mem[ea+2], mem[ea+3], mem[ea+4], mem[ea+5], mem[ea+6], mem[ea+7]);
+      if (MEM[ea]|MEM[ea+1]|MEM[ea+2]|MEM[ea+3]|MEM[ea+4]|MEM[ea+5]|MEM[ea+6]|MEM[ea+7])
+	TRACEA("%o: %6o %6o %6o %6o %6o %6o %6o %6o\n", ea, MEM[ea], MEM[ea+1], MEM[ea+2], MEM[ea+3], MEM[ea+4], MEM[ea+5], MEM[ea+6], MEM[ea+7]);
   }
 }
 
@@ -2150,7 +2218,7 @@ static dumpsegs() {
     TRACEA("DTAR %d: register=%o, size=%d, seg table addr=%o\n", i, dtar, nsegs, staddr);
     for (seg=0; seg<nsegs; seg++) {
       segno = (i<<10)+seg;
-      sdw = *(unsigned int *)(mem+staddr);
+      sdw = *(unsigned int *)(MEM+staddr);
       ptaddr = ((sdw & 0x3F)<<10) | (sdw>>22);
       TRACEA("Segment '%o: F=%d, R1:%o R3:%o PT = %o\n", segno, (sdw>>15)&1, (sdw>>12)&7, (sdw>>6)&7, ptaddr);
       xxx = (sdw>>16)&0x3F;
@@ -2158,7 +2226,7 @@ static dumpsegs() {
       if (ptaddr != 0)
 	for (page=0; page<64; page++) {
 	  pmaddr = (ptaddr<<6) + page;
-	  pte = mem[pmaddr];
+	  pte = MEM[pmaddr];
 	  TRACEA(" Seg %o page %d: pmaddr=%o, V=%d R=%d U=%d S=%d PPA=%o\n", segno, page, pmaddr, pte>>15, (pte>>14)&1, (pte>>13)&1, (pte>>12)&1, pte&0xFFF);
 	}
       staddr += 2;
@@ -2493,9 +2561,9 @@ static pcl (ea_t ecbea) {
     invalidate_brp();
     if ((ecbea & 0xF) != 0)
       fault(ACCESSFAULT, 0, ecbea);
-    memcpy(ecb,mem+pa,sizeof(ecb));
+    memcpy(ecb,MEM+pa,sizeof(ecb));
   } else if ((pa & 01777) <= 01750) {
-    memcpy(ecb,mem+pa,sizeof(ecb));
+    memcpy(ecb,MEM+pa,sizeof(ecb));
   } else {
     *(long long *)(ecb+0) = get64(ecbea+0);
     *(long long *)(ecb+4) = get64(ecbea+4);
@@ -3880,12 +3948,11 @@ main (int argc, char **argv) {
 
   /* initialize global variables */
 
+  if (sizeof(gv) > 16*1024)
+    printf("em: size of global vars = %d\n", sizeof(gv));
+
   gvp = &gv;
-  gvp->traceflags = 0;
-  gvp->savetraceflags = 0;
-  gvp->traceuser = 0;
-  gvp->traceseg = 0;
-  gvp->numtraceprocs = 0;
+  gvp->physmem = physmem;
   gvp->intvec = -1;
   gvp->instcount = 0;
   gvp->inhcount = 0;
@@ -3895,6 +3962,11 @@ main (int argc, char **argv) {
   gvp->mapvamisses = 0;
   gvp->supercalls = 0;
   gvp->supermisses = 0;
+  gvp->traceflags = 0;
+  gvp->savetraceflags = 0;
+  gvp->traceuser = 0;
+  gvp->traceseg = 0;
+  gvp->numtraceprocs = 0;
   invalidate_brp();
   eap = &gvp->brp[0];
 
@@ -3952,7 +4024,7 @@ main (int argc, char **argv) {
     gvp->stlb[i].seg = 0xFFFF;        /* marker for invalid STLB entry */
   for (i=0; i < IOTLBENTS; i++)
     gvp->iotlb[i].valid = 0;
-  bzero(mem, 64*1024*2);              /* zero first 64K words */
+  bzero(MEM, 64*1024*2);              /* zero first 64K words */
 
   verbose = 0;
   domemdump = 0;
@@ -4230,7 +4302,7 @@ For disk boots, the last 3 digits can be:\n\
   /* read memory image from SA to EA inclusive */
 
   nw = rvec[1]-rvec[0]+1;
-  if ((nw2=read(bootfd, mem+rvec[0], nw*2)) == -1) {
+  if ((nw2=read(bootfd, MEM+rvec[0], nw*2)) == -1) {
     perror("Error reading memory image");
     fatal(NULL);
   }
@@ -4513,7 +4585,7 @@ xec:
 
   if ((inst & 036000) == 0) {
     TRACE(T_INST, " generic class %d\n", inst>>14);
-    goto *gvp->disp_gen[GENIX(inst)];
+    goto *disp_gen[GENIX(inst)];
   }
 
   /* get x bit and adjust opcode so that PMA manual opcode
@@ -4887,7 +4959,7 @@ d_calf:  /* 000705 */
   */
 
 #define ZSTEP(zea, zlen, zcp, zclen, zacc) \
-  zcp = (unsigned char *) (mem+mapva(zea, RP, zacc, &zaccess)); \
+  zcp = (unsigned char *) (MEM+mapva(zea, RP, zacc, &zaccess)); \
   zclen = 2048 - (zea & 01777)*2; \
   if (zea & EXTMASK32) { \
     zcp++; \
@@ -8897,7 +8969,7 @@ d_irs:  /* 01200 */
   stopwatch_push(&sw_irs);
   TRACE(T_FLOW, " IRS\n");
   if (*(int *)&ea >= 0)
-    utempa = ++mem[mapva(ea, RP, WACC, &access)];
+    utempa = ++MEM[mapva(ea, RP, WACC, &access)];
   else {
     utempa = get16t(ea) + 1;
     put16t(utempa, ea);
@@ -8911,8 +8983,8 @@ d_ima:  /* 01300 */
   TRACE(T_FLOW, " IMA\n");
   if (*(int *)&ea >= 0) {
     pa = mapva(ea, RP, WACC, &access);
-    utempa = mem[pa];
-    mem[pa] = crs[A];
+    utempa = MEM[pa];
+    MEM[pa] = crs[A];
   } else {
     utempa = get16t(ea);
     put16t(crs[A],ea);

@@ -1513,7 +1513,7 @@ int devcp (int class, int func, int device) {
 	if (gvp->instcount-previnstcount > gvp->instpermsec*1000*5) {
 	  gvp->instpermsec = (gvp->instcount-previnstcount) /
 	    ((tv.tv_sec-prev_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-prev_tv.tv_usec)/1000);
-	  //printf("instcount = %d, previnstcount = %d, diff=%d, instpermsec=%d\n", gvp->instcount, previnstcount, gvp->instcount-previnstcount, gvp->instpermsec);
+	  //printf("gvp->instcount = %d, previnstcount = %d, diff=%d, instpermsec=%d\n", gvp->instcount, previnstcount, gvp->instcount-previnstcount, gvp->instpermsec);
 #ifdef NOIDLE
 	  printf("\ninstpermsec=%d\n", gvp->instpermsec);
 #endif
@@ -1909,9 +1909,9 @@ int devdisk (int class, int func, int device) {
 		if ((dmaaddr & 01777) || dmanw > 1024)
 		  iobufp = iobuf;
 		else
-		  iobufp = mem+mapio(dmaaddr);
+		  iobufp = MEM+mapio(dmaaddr);
 	      else
-		iobufp = mem+dmaaddr;
+		iobufp = MEM+dmaaddr;
 	      if (hashp != NULL) {
 		memcpy((char *)iobufp, hashp, dmanw*2);
 		hashp += dmanw*2;
@@ -1929,7 +1929,7 @@ int devdisk (int class, int func, int device) {
 		for (i=0; i<dmanw; i++)
 		  iobuf[i] = get16io(dmaaddr+i);
 	      } else
-		iobufp = mem+dmaaddr;
+		iobufp = MEM+dmaaddr;
 	      if (hashp != NULL) {
 		memcpy(hashp, (char *)iobufp, dmanw*2);
 		hashp += dmanw*2;

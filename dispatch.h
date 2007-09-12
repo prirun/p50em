@@ -111,13 +111,13 @@ MRGEN(03503, "JSX", d_jsx);
 #define GENIX(inst) ((inst>>4) & 06000) | (inst & 01777)
 
 #define DIGEN(opcode, name, target) \
-  gvp->disp_gen[GENIX(opcode)] = &&target; \
+  disp_gen[GENIX(opcode)] = &&target; \
   //printf("Opcode %06o (%s), ix=%0o\n", opcode, name, GENIX(opcode))
 
 /* initialize entire table to jump to bad generic label */
 
 for (i=0; i < 010000; i++) {
-  gvp->disp_gen[i] = &&d_badgen;
+  disp_gen[i] = &&d_badgen;
 }
 
 /* initialize class 0 generics (first 2 bits are zero) */
@@ -230,14 +230,14 @@ DIGEN(001324, "MDIW", d_mdxx);
 /* initialize class 1 generics (shift group) */
 
 for (i = 02000; i < 04000; i++) {
-  gvp->disp_gen[i] = &&d_gen1;
+  disp_gen[i] = &&d_gen1;
 }
 
 /* initialize class 2 generics (skip group) */
 
 #if 0
 for (i = 04000; i < 06000; i++) {
-  gvp->disp_gen[i] = &&d_gen2;
+  disp_gen[i] = &&d_gen2;
 }
 #endif
 
