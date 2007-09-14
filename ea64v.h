@@ -49,7 +49,7 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
 #else
       ea_w += crs[LBL];
       return (((*(int *)(crs+LBH) | (earp & RINGMASK32)) & 0xFFFF0000) | ea_w);
-#endif;
+#endif
     }
     if (ea_w >= gvp->livereglim) {
       eap = &gvp->brp[SBBR];

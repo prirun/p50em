@@ -416,8 +416,10 @@ typedef struct {
 #define XBBR 3
 #define RPBR 4
 #define S0BR 5
-#define UNBR 6
-#define BRP_SIZE 7
+#define F0BR 6
+#define F1BR 7
+#define UNBR 8
+#define BRP_SIZE 9
 
 /* NOTE: vpn is a segment number/word offset Prime virtual address
    corresponding to the physical page of memory in memp.  The high-
@@ -913,7 +915,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
     pa = ea;
   }
   stopwatch_pop(&sw_mapva);
-#ifndef FAST2
+#ifndef NOMEM
   if (pa < memlimit)
 #endif
     return pa;
@@ -1316,7 +1318,7 @@ static put16r(unsigned short value, ea_t ea, ea_t rpring) {
   MEM[mapva(ea, rpring, WACC, &access)] = value;
 }
 
-/* put16t handles stores that ARE address traps */
+/* put16trap handles stores that ARE address traps */
 
 static put16trap(unsigned short value, ea_t ea) {
 
@@ -1952,10 +1954,12 @@ static inline ea_t ea32r64r (ea_t earp, unsigned short inst) {
     if ((inst & 0760) != 0400) {                 /* PC relative? */
       ea = rpl + (((short) (inst << 7)) >> 7);   /* yes, sign extend D */
       TRACE(T_EAR, " PC relative, P=%o, new ea=%o\n", rpl, ea);
+      eap = &gvp->brp[RPBR];
     }
     else 
       goto special;                              /* special cases */
   else {
+    eap = &gvp->brp[S0BR];
     ea = (inst & 0777);                          /* sector 0 */
     TRACE(T_EAR, " Sector 0, new ea=%o\n", ea);
     if (ea < 0100 && x) {                        /* preindex by X */
@@ -1967,9 +1971,9 @@ static inline ea_t ea32r64r (ea_t earp, unsigned short inst) {
   }
   while (i) {
     if (ea < gvp->livereglim)
-      m = get16t(0x80000000|ea);
+      m = get16trap(ea);
     else
-      m = get16t(MAKEVA(rph,ea));
+      m = get16(MAKEVA(rph,ea));
     TRACE(T_EAR, " Indirect, old ea=%o, [ea]=%o\n", ea, m);
     if ((crs[KEYS] & 016000) == 06000)           /* 32R mode? */
       i = m & 0100000;                           /* yes, multiple indirects */
@@ -1977,8 +1981,10 @@ static inline ea_t ea32r64r (ea_t earp, unsigned short inst) {
       i = 0;                                     /* no, 64R mode, single indirect */
     ea = m & amask;                              /* go indirect */
     TRACE(T_EAR, " Indirect, new i=%d, new ea=%o\n", i!=0, ea);
+    eap = &gvp->brp[UNBR];
   }
   if (x) {
+    eap = &gvp->brp[XBBR];
     TRACE(T_EAR, " Postindex, old ea=%o, X='%o/%d\n", ea, crs[X], *(short *)(crs+X));
     ea += crs[X];
     TRACE(T_EAR, " Postindex, new ea=%o\n", ea);
@@ -2001,7 +2007,7 @@ special:
 #endif
 
   if (class < 2) {                               /* class 0/1 */
-    ea = get16t(RP);                             /* get A from next word */
+    ea = iget16(RP);                             /* get A from next word */
     INCRP;
     TRACE(T_EAR, " Class %d, new ea=%o\n", class, ea);
     if (class == 1)
@@ -2013,9 +2019,9 @@ special:
     }
     while (i) {
       if (ea < gvp->livereglim)
-	m = get16t(0x80000000|ea);
+	m = get16trap(ea);
       else
-	m = get16t(MAKEVA(rph,ea));
+	m = get16(MAKEVA(rph,ea));
       TRACE(T_EAR, " Indirect, old ea=%o, [ea]=%o\n", ea, m);
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
@@ -2023,20 +2029,23 @@ special:
 	i = 0;
       ea = m & amask;
       TRACE(T_EAR, " Indirect, new i=%d, new ea=%o\n", i!=0, ea);
+      eap = &gvp->brp[UNBR];
     }
 
   } else if (i && x) {                           /* class 2/3, ix=11 */
     TRACE(T_EAR, " class 2/3, ix=11\n");
-    ea = get16t(RP);                             /* get A from next word */
+    ea = iget16(RP);                             /* get A from next word */
     INCRP;
     TRACE(T_EAR, " ea=%o\n", ea);
-    if (class == 3)
+    if (class == 3) {
       ea += (short) crs[S];
+      eap = &gvp->brp[SBBR];
+    }
     while (i) {
       if (ea < gvp->livereglim)
-	m = get16t(0x80000000|ea);
+	m = get16trap(ea);
       else
-	m = get16t(MAKEVA(rph,ea));
+	m = get16(MAKEVA(rph,ea));
       TRACE(T_EAR, " Indirect, ea=%o, [ea]=%o\n", ea, m);
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
@@ -2048,8 +2057,10 @@ special:
     TRACE(T_EAR, " Postindex, old ea=%o, X='%o/%d\n", ea, crs[X], *(short *)(crs+X));
     ea += (short) crs[X];
     TRACE(T_EAR, " Postindex, new ea=%o\n", ea);
+    eap = &gvp->brp[XBBR];
 
   } else {                                       /* class 2/3, ix != 11 */
+    eap = &gvp->brp[SBBR];
     if (class == 2)
       ea = crs[S]++;
     else
@@ -2057,26 +2068,29 @@ special:
     TRACE(T_EAR, " Class 2/3, new ea=%o, new S=%o\n", ea, crs[S]);
     if (x) {
       if (ea < gvp->livereglim)
-	m = get16t(0x80000000|ea);
+	m = get16trap(ea);
       else
-	m = get16t(MAKEVA(rph,ea));
+	m = get16(MAKEVA(rph,ea));
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
       ea = m & amask;
     }
     while (i) {
       if (ea < gvp->livereglim)
-	m = get16t(0x80000000|ea);
+	m = get16trap(ea);
       else
-	m = get16t(MAKEVA(rph,ea));
+	m = get16(MAKEVA(rph,ea));
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
       else
 	i = 0;
       ea = m & amask;
+      eap = &gvp->brp[UNBR];
     }
-    if (x)
+    if (x) {
       ea += crs[X];
+      eap = &gvp->brp[XBBR];
+    }
   }
   ea &= amask;
   va = MAKEVA(rph, ea);
@@ -2099,6 +2113,7 @@ static ea_t apea(unsigned short *bitarg) {
   a = iget16(RP);
   RPL++;
 #else
+  eap = &gvp->brp[RPBR];
   utempl = get32(RP);
   INCRP; INCRP;
   ibr = utempl >> 16;
@@ -2117,6 +2132,7 @@ static ea_t apea(unsigned short *bitarg) {
   if (ibr & 004000) {
     if (ea & 0x80000000)
       fault(POINTERFAULT, ea>>16, 0);    /* XXX: faddr=0? */
+    eap = &gvp->brp[UNBR];
     ip = get32(ea);
     if (ip & EXTMASK32)
       bit = get16(INCVA(ea,2)) >> 12;
@@ -2341,6 +2357,7 @@ static ea_t pclea(unsigned short brsave[6], ea_t rp, unsigned short *bitarg, sho
 
   iwea = 0;
   *store = 0;
+  eap = &gvp->brp[RPBR];
   utempl = get32(rp);
   ibr = utempl >> 16;
   a = utempl & 0xFFFF;
@@ -2460,6 +2477,7 @@ static argt() {
     }
     if (argsleft > 0 && store) {
       TRACE(T_PCL, " Storing arg, %d left, Y=%o\n", argsleft, crs[Y]);
+      eap = &gvp->brp[SBBR];
 
       /* NOTE: some version of ucode only store 16 bits for omitted args.
 	 Set EHDB to prevent this error.
@@ -2558,7 +2576,6 @@ static pcl (ea_t ecbea) {
      memcpy is okay; if it does, do fetches */
 
   if (access == 1) {
-    invalidate_brp();
     if ((ecbea & 0xF) != 0)
       fault(ACCESSFAULT, 0, ecbea);
     memcpy(ecb,MEM+pa,sizeof(ecb));
@@ -2664,8 +2681,18 @@ static pcl (ea_t ecbea) {
      make sure to use the current RP, which points to the ARGT
      instruction.  Otherwise, the return from the page fault
      is to the PCL instruction, which has already completed at
-     this point */
+     this point
 
+     RP changes here, which may change the ring.  The brp cache needs
+     to be invalidated if the ring changes. (Although, it seems
+     odd to invalidate the brp here, because we could use it
+     for argument transfers...  Maybe this isn't quite the right
+     place for RP and live base registers to change.  See PCL DIAG
+     cases 35 & 36 that fail.
+ */
+
+  if ((newrp ^ RP) & RINGMASK32)
+    invalidate_brp();
   RP = newrp;
   gvp->prevpc = RP;
   TRACE(T_PCL, " new RP=%o/%o\n", RPH, RPL);
@@ -3471,11 +3498,14 @@ static inline unsigned short ldc(int n, unsigned short result) {
   unsigned int far, flr;
   ea_t ea;
 
-  far = FAR0;
-  flr = FLR0;
   if (n) {
     far = FAR1;
     flr = FLR1;
+    eap = &gvp->brp[F1BR];
+  } else {
+    far = FAR0;
+    flr = FLR0;
+    eap = &gvp->brp[F0BR];
   }
 
   utempl = GETFLR(n);
@@ -3512,11 +3542,14 @@ static inline stc(int n, unsigned short ch) {
   unsigned int far, flr;
   ea_t ea;
 
-  far = FAR0;
-  flr = FLR0;
   if (n) {
     far = FAR1;
     flr = FLR1;
+    eap = &gvp->brp[F1BR];
+  } else {
+    far = FAR0;
+    flr = FLR0;
+    eap = &gvp->brp[F0BR];
   }
 
   utempl = GETFLR(n);
@@ -4065,7 +4098,7 @@ main (int argc, char **argv) {
 	  fatal("-cpuid arg range is 0 to 44\n");
       } else
 	fatal("-cpuid needs an argument\n");
-#ifndef FAST2
+#ifndef NOMEM
     } else if (strcmp(argv[i],"-mem") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
@@ -4454,16 +4487,47 @@ fetch:
     gvp->traceflags = ~0;
 #endif
 
-  /* poll any devices that requested a poll */
+  /* bump instruction count & periodically do time-related activities.
+     TIMERMASK affects the granularity of these events, and in general
+     should get bigger as the emulator gets faster.  There's also the
+     potential of crs[TIMERL] overflowing because the emulator is
+     running too fast.  Prime used more bits in later machines.  The
+     timermask should probably be dynamic, or we should use real
+     timers to avoid instruction timing issues. */
 
-  if ((gvp->instcount & 0777) == 0) {
+#define TIMERMASK 0777   /* must be power of 2 - 1 */
+
+  gvp->instcount++;
+  if ((gvp->instcount & TIMERMASK) == 0) {
     stopwatch_push(&sw_io);
     for (i=0; i<64; i++)
-      if (devpoll[i] && ((devpoll[i] -= 0777) <= 0)) {
+      if (devpoll[i] && ((devpoll[i] -= (TIMERMASK+1)) <= 0)) {
 	devpoll[i] = 0;
 	devmap[i](4, 0, i);
       }
     stopwatch_pop(&sw_io);
+
+    /* bump the 1ms process timer; docs say to only bump this if px is
+       enabled, but since it is nearly all the time in practice, it
+       could be bumped all the time w/o checking the modals.  But this
+       makes CPU.REGISTER case 4 fail. :( */
+
+    if (crs[MODALS] & 010) {
+      crs[TIMERL] += TIMERMASK+1;
+      if (crs[TIMERL] > gvp->instpermsec) {
+	crs[TIMERL] -= gvp->instpermsec;
+
+	/* if 1ms resolution process timer overflows, set pcb abort flag */
+
+	crs[TIMER]++;
+	if (crs[TIMER] == 0) {
+	  TRACE(T_PX,  "#%d: pcb %o timer overflow\n", gvp->instcount, crs[OWNERL]);
+	  ea = *(ea_t *)(crs+OWNER);
+	  m = get16r0(ea+4) | 1;       /* set process abort flag */
+	  put16r0(m, ea+4);
+	}
+      }
+    }
   }
 
   /* is an interrupt pending, with interrupts enabled? */
@@ -4533,7 +4597,6 @@ fetch:
 
   inst = iget16(RP);
   INCRP;
-  gvp->instcount++;
 
   /* while a process is running, RP is the real program counter, PBH
      is the active procedure segment, and PBL is zero.  When a
@@ -4548,21 +4611,6 @@ fetch:
 #endif
   earp = RP;
 
-  if (crs[MODALS] & 010) {     /* px enabled, bump 1ms process timer */
-    if (crs[TIMERL]++ > gvp->instpermsec) {
-      crs[TIMERL] = 0;
-
-      /* if 1ms resolution process timer overflows, set pcb abort flag */
-
-      crs[TIMER]++;
-      if (crs[TIMER] == 0) {
-	TRACE(T_PX,  "#%d: pcb %o timer overflow\n", gvp->instcount, crs[OWNERL]);
-	ea = *(ea_t *)(crs+OWNER);
-	m = get16r0(ea+4) | 1;       /* set process abort flag */
-	put16r0(m, ea+4);
-      }
-    }
-  }
 
 xec:
   /* NOTE: don't trace JMP * instructions (used to test PX) */
@@ -4621,7 +4669,7 @@ xec:
     TRACE(T_INST, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
     goto *(gvp->disp_mr[VMRINSTIX(inst)]);
 
-  } else if ((crs[KEYS] & 0016000) == 010000) {
+  } else if ((crs[KEYS] & 0016000) == 010000) {  /* E32I */
       goto imode;
     
   } else if ((inst & 036000) == 030000) { /* check for pio in S/R modes, */
@@ -4649,7 +4697,7 @@ xec:
   }
 
 
-  /* instructions */
+  /* generic instructions */
 
 d_iab:  /* 000201 */
   TRACE(T_FLOW, " IAB\n");
@@ -5434,7 +5482,7 @@ d_sttm:  /* 000510 */
   TRACE(T_FLOW, " STTM\n", inst);
   ea = *(ea_t *)(crs+OWNER);
   utempl = get32r0(ea+PCBPET);      /* get PCB elapsed timer */
-  utempl += crs[TIMERH];            /* add live timer */
+  utempl += *(short *)(crs+TIMERH); /* add live timer (signed) */
   ea = *(ea_t *)(crs+XB);
   put32(utempl, ea);                /* store process time */
   put16(crs[TIMERL], INCVA(ea,2));  /* and live timer residue */
@@ -5639,7 +5687,8 @@ d_e32i:  /* 001010 */
   /* NOTE: this fault needs to occur on older models even in
      Ring 0, so the RESTRICT() macro can't be used here.
 
-     XXX: for a P500 (cpuid=0), this shouldn't fault! */
+     XXX: for a P500, cpuid=0 is shared with a P400, but E32I
+     doesn't fault! */
 
   if (cpuid < 4)
     fault(RESTRICTFAULT, 0, 0);
@@ -8926,6 +8975,7 @@ d_jst:  /* 01000 */
     m = (get16t(ea) & ~gvp->amask) | RPL;
   put16t(m, ea);
   RP = INCVA(ea,1);
+  gvp->brp[RPBR] = *eap;
   if ((RP & RINGMASK32) == 0)
     gvp->inhcount = 1;
   goto fetch;
@@ -8968,12 +9018,8 @@ d_cas:  /* 01100 */
 d_irs:  /* 01200 */
   stopwatch_push(&sw_irs);
   TRACE(T_FLOW, " IRS\n");
-  if (*(int *)&ea >= 0)
-    utempa = ++MEM[mapva(ea, RP, WACC, &access)];
-  else {
-    utempa = get16t(ea) + 1;
-    put16t(utempa, ea);
-  }
+  utempa = get16t(ea) + 1;
+  put16t(utempa, ea);
   if (utempa == 0)
     INCRP;
   stopwatch_pop(&sw_irs);
@@ -8981,14 +9027,8 @@ d_irs:  /* 01200 */
 
 d_ima:  /* 01300 */
   TRACE(T_FLOW, " IMA\n");
-  if (*(int *)&ea >= 0) {
-    pa = mapva(ea, RP, WACC, &access);
-    utempa = MEM[pa];
-    MEM[pa] = crs[A];
-  } else {
-    utempa = get16t(ea);
-    put16t(crs[A],ea);
-  }
+  utempa = get16t(ea);
+  put16t(crs[A],ea);
   crs[A] = utempa;
   goto fetch;
 
