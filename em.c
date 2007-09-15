@@ -199,13 +199,11 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 #define XCLEARC CLEARC
 #define XSETC   SETC
 
-/* EXPCL sets both the C and L bits for shift instructions
-
-   NOTE: unlike EXPC, this doesn't clear anything - bits must be cleared
-   before executing these macros! */
+/* EXPCL sets both the C and L bits for shift instructions */
 
 #define EXPCL(onoff) \
-  if ((onoff)) crs[KEYS] |= 0120000
+  if ((onoff)) crs[KEYS] |= 0120000; \
+  else crs[KEYS] &= ~0120000
 
 #define SETCL crs[KEYS] |= 0120000
 #define CLEARCL crs[KEYS] &= ~0120000
@@ -549,11 +547,8 @@ static unsigned short physmem[MEMSIZE]; /* system's physical memory */
    increment the whole thing.
 
    DIAG cpu.pcl test 42 does check for segment wraparound, so -DFAST
-   will cause this test to fail.
-
-   Update: when cpuid=40 (6650), cpu.pcl test 42 *expects* 32-bit
-   increment on RP (segment gets incremented too)!
- */
+   will cause this test to fail (but, see hack in pcl which fixes it).
+*/
 
 #ifdef FAST
 #define RPADD(n) (RP+n)
@@ -617,7 +612,7 @@ static struct {
 
 /* invalidates all entries in the mapva supercache */
 
-void invalidate_brp() {
+void inline invalidate_brp() {
   int i;
 
   for (i=0; i < BRP_SIZE; i++)
@@ -2335,23 +2330,24 @@ static ea_t stex(unsigned int extsize) {
 }
 
 /* for PRTN, load values into temps first so that if any faults occur,
-   PRTN can be restarted
+   PRTN can be restarted.  After all the temps are loaded, the stack
+   free pointer can be updated since no further faults can occur.
 
-   XXX: the order of this look wrong - stack free pointer shouldn't
-   be updated if a fault occurs fetching base registers
- */
+   If changing rings, make sure to invalidate the brp supercache. */
 
-static void prtn() {
+static inline void prtn() {
   unsigned short stackrootseg;
   ea_t newrp,newsb,newlb;
   unsigned short keys;
 
   stackrootseg = get16(*(unsigned int *)(crs+SB)+1);
-  put32(*(unsigned int *)(crs+SB), MAKEVA(stackrootseg,0));
   newrp = get32(*(unsigned int *)(crs+SB)+2);
   newsb = get32(*(unsigned int *)(crs+SB)+4);
   newlb = get32(*(unsigned int *)(crs+SB)+6);
   keys = get16(*(unsigned int *)(crs+SB)+8);
+  put32(*(unsigned int *)(crs+SB), MAKEVA(stackrootseg,0));
+  if ((newrp ^ RP) & RINGMASK32)
+    invalidate_brp();
   RP = newrp | (RP & RINGMASK32);
   *(unsigned int *)(crs+SB) = newsb;
   *(unsigned int *)(crs+LB) = newlb;
@@ -2534,11 +2530,16 @@ static argt() {
        advance Y to the next arg displacement in the stack.  Y
        has to be advanced last because the PB store may fault.
        If it does, the ARGT starts over, and this argument will
-       have to be transferred again. */
+       have to be transferred again.
+
+       The full 32-bit rp is incremented, which is technically
+       wrong but faster, but because PCL DIAG 42 specifically
+       checks for segment wraparound, only update the 16-bit
+       word offset in the stack frame header. */
 
     if (advancepb) {
       rp += 2;
-      put32(rp, stackfp+2);
+      put16(rp & 0xffff, stackfp+3);
       crs[XL] = lastarg;
     }
     if (advancey) {
@@ -2581,6 +2582,16 @@ static pcl (ea_t ecbea) {
     gvp->savetraceflags = ~TB_MAP;
   }
 #endif
+
+  /* this hack makes DIAG cpu.pcl happy: RP is only supposed to
+     have the 16-bit word offset increment, but we do 32-bits
+     for speed.  If RPL == 0 during PCL, it means it used to be
+     segno/177776 and was incremented to segno+1/0.  So fiddle
+     RP here to pass diags.  In practice, RP wraparound is
+     just stupid and slow. */
+
+  if (RPL == 0)      /* did RP wrap? */
+    RP -= (1<<16);   /* yes, subtract 1 from seg # */
 
   /* get segment access; mapva ensures either read or gate */
 
@@ -3617,7 +3628,6 @@ static inline arfa(int n, int val) {
 
 static inline unsigned int lrs(unsigned int val, short scount) {
 
-  CLEARCL;
   if (scount <= 32) {
     EXPCL(val & (((unsigned int)0x80000000) >> (32-scount)));
     return (*(int *)&val) >> scount;
@@ -3625,13 +3635,13 @@ static inline unsigned int lrs(unsigned int val, short scount) {
     SETCL;
     return 0xFFFFFFFF;
   } else
+    CLEARCL;
     return 0;
 }
 
 static inline unsigned int lls(unsigned int val, short scount) {
   int templ;
 
-  CLEARCL;
   if (scount < 32) {
     templ = 0x80000000;
     templ = templ >> scount;         /* create mask */
@@ -3647,21 +3657,21 @@ static inline unsigned int lls(unsigned int val, short scount) {
 
 static inline unsigned int lll(unsigned int val, short scount) {
 
-  CLEARCL;
   if (scount <= 32) {
     EXPCL(val & (((unsigned int)0x80000000) >> (scount-1)));
     return val << scount;
   } else
+    CLEARCL;
     return 0;
 }
 
 static inline unsigned int lrl(unsigned int val, short scount) {
 
-  CLEARCL;
   if (scount <= 32) {
     EXPCL(val & (((unsigned int)0x80000000) >> (32-scount)));
     return val >> scount;
   } else
+    CLEARCL;
     return 0;
 }
 
@@ -3669,22 +3679,22 @@ static inline unsigned int lrl(unsigned int val, short scount) {
 
 static inline unsigned short arl (unsigned short val, short scount) {
 
-  CLEARCL;
   if (scount <= 16) {
     EXPCL(val & (((unsigned short)0x8000) >> (16-scount)));
     return val >> scount;
   } else {
+    CLEARCL;
     return 0;
   }
 }
 
 static inline unsigned short all (unsigned short val, short scount) {
 
-  CLEARCL;
   if (scount <= 16) {
     EXPCL(val & (((unsigned short)0x8000) >> (scount-1)));
     return val << scount;
   } else {
+    CLEARCL;
     return 0;
   }
 }
@@ -3693,7 +3703,6 @@ static inline unsigned short als (unsigned short val, short scount) {
 
   short tempa;
 
-  CLEARCL;
   if (scount <= 15) {
     tempa = 0100000;
     tempa = tempa >> scount;         /* create mask */
@@ -3702,14 +3711,12 @@ static inline unsigned short als (unsigned short val, short scount) {
     EXPCL(!(tempa == -1 || tempa == 0));
     return val << scount;
   }
-  if (val != 0)
-    SETCL;
+  EXPCL(val != 0);
   return 0;
 }
 
 static inline unsigned short ars (unsigned short val, short scount) {
 
-  CLEARCL;
   if (scount <= 16) {
     EXPCL(val & (((unsigned short)0x8000) >> (16-scount)));
     return (*(short *)&val) >> scount;
@@ -3717,6 +3724,7 @@ static inline unsigned short ars (unsigned short val, short scount) {
     SETCL;
     return 0xFFFF;
   } else
+    CLEARCL;
     return 0;
 }
 
@@ -3724,7 +3732,6 @@ static inline unsigned short ars (unsigned short val, short scount) {
 
 static inline unsigned int lrr(unsigned int val, short scount) {
 
-  CLEARCL;
   scount = ((scount-1)%32)+1;         /* make scount 1-32 */
   EXPCL(val & (((unsigned int)0x80000000) >> (32-scount)));
   return (val >> scount) | (val << (32-scount));
@@ -3732,7 +3739,6 @@ static inline unsigned int lrr(unsigned int val, short scount) {
 
 static inline unsigned int llr(unsigned int val, short scount) {
 
-  CLEARCL;
   scount = ((scount-1)%32)+1;         /* make scount 1-32 */
   EXPCL(val & (((unsigned int)0x80000000) >> (scount-1)));
   return (val << scount) | (val >> (32-scount));
@@ -3742,7 +3748,6 @@ static inline unsigned int llr(unsigned int val, short scount) {
 
 static inline unsigned int alr(unsigned short val, short scount) {
 
-  CLEARCL;
   scount = ((scount-1)%16)+1;         /* make scount 1-16 */
   EXPCL(val & (((unsigned short)0x8000) >> (scount-1)));
   return (val << scount) | (val >> (16-scount));
@@ -3750,7 +3755,6 @@ static inline unsigned int alr(unsigned short val, short scount) {
 
 static inline unsigned int arr(unsigned short val, short scount) {
 
-  CLEARCL;
   scount = ((scount-1)%16)+1;         /* make scount 1-16 */
   EXPCL(val & (((unsigned short)0x8000) >> (16-scount)));
   return (val >> scount) | (val << (16-scount));
@@ -3824,35 +3828,30 @@ static int add32(unsigned int *a1, unsigned int a2, unsigned int a3, ea_t ea) {
 
 static int add16(unsigned short *a1, unsigned short a2, unsigned short a3, ea_t ea) {
 
-  unsigned short uorig, uresult;
-  unsigned int utemp;
-  short link, eq, lt;
+  unsigned short uorig;
+  unsigned int uresult;
+  int keybits, oflow;
 
   stopwatch_push(&sw_add16);
-  crs[KEYS] &= ~0120300;
-  link = eq = lt = 0;
   uorig = *a1;                             /* save original for sign check */
-  utemp = uorig;                           /* expand to higher precision */
-  utemp += a2;                             /* double-precision add */
-  utemp += a3;                             /* again, for subtract */
-  uresult = utemp;                         /* truncate result to result size */
+  uresult = uorig;                         /* expand to higher precision */
+  uresult += a2;                           /* double-precision add */
+  uresult += a3;                           /* again, for subtract */
+  keybits = (uresult & 0x10000) >> 3;      /* set L-bit if carry occurred */  
+  uresult &= 0xFFFF;                       /* truncate result */
   *a1 = uresult;                           /* store result */
-  if (utemp & 0x10000)                     /* set L-bit if carry occurred */
-    link = 020000;  
   if (uresult == 0)                        /* set EQ? */
-    eq = 0100; 
-  if (((~uorig ^ a2) & (uorig ^ uresult) & 0x8000) == 0) { /* no overflow */
-    if (*(int *)&uresult < 0)
-      lt = 0200;
-    crs[KEYS] = crs[KEYS] | link | eq | lt;
-  } else {
-    if (*(int *)&uresult >= 0)
-      lt = 0200;
-    crs[KEYS] = crs[KEYS] | link | eq | lt;
+    keybits |= 0100; 
+  oflow = (((~uorig ^ a2) & (uorig ^ uresult) & 0x8000) != 0); /* overflow! */
+  if (oflow)
+    uresult = ~uresult;
+  keybits |= (uresult & 0x8000) >> 8;      /* set LT if result negative */
+  crs[KEYS] = crs[KEYS] & ~0120300 | keybits;
+  if (oflow)
     mathexception('i', FC_INT_OFLOW, ea);
-  }
   stopwatch_pop(&sw_add16);
 }
+
 
 static inline adlr(int dr) {
 
@@ -3862,6 +3861,33 @@ static inline adlr(int dr) {
     crs[KEYS] &= ~0120300;                 /* clear C, L, LT, EQ */
     SETCC_32(crsl[dr]);
   }
+}
+
+
+static inline cgt(unsigned short n) {
+  unsigned short utempa;
+
+  utempa = iget16(RP);              /* get number of words */
+  if (1 <= n && n < utempa)
+    RPL = iget16(RPADD(n));
+  else
+    RP = RPADD(utempa);
+}
+
+
+static inline pimh(int dr) {
+  int templ, templ2;
+
+  templ = crsl[dr];
+  /* NOTE: PIMH could be implemented as a left shift, but Prime DIAG
+     tests require a swap - hence the "or" below */
+  crsl[dr] = (crsl[dr] << 16) | (crsl[dr] >> 16);
+  /* check that bits 1-16 were equal to bit 17 before PIMH */
+  templ2 = (templ << 16) >> 16;
+  if (templ2 == templ)
+    CLEARC;
+  else
+    mathexception('i', FC_INT_OFLOW, 0);
 }
 
 /* NOTE: PMA manuals say the range for absolute RF addressing is
@@ -4731,11 +4757,7 @@ d_iab:  /* 000201 */
 
 d_cgt:  /* 001314 */
   TRACE(T_FLOW, " CGT\n");
-  utempa = iget16(RP);              /* get number of words */
-  if (1 <= crs[A] && crs[A] < utempa)
-    RPL = iget16(RPADD(crs[A]));
-  else
-    RP = RPADD(utempa);
+  cgt(crs[A]);
   goto fetch;
 
 d_pida:  /* 000115 */
@@ -4753,13 +4775,7 @@ d_pidl:  /* 000305 */
 
 d_pima: /* 000015 */
   TRACE(T_FLOW, " PIMA\n");
-  templ = *(int *)(crsl+GR2);
-  crsl[GR2] = (crsl[GR2] << 16) | (crsl[GR2] >> 16);
-  templ2 = (templ << 16) >> 16;
-  if (templ != templ2)
-    mathexception('i', FC_INT_OFLOW, 0);
-  else
-    CLEARC;
+  pimh(GR2);
   goto fetch;
 
 d_piml:  /* 000301 */
@@ -6753,7 +6769,6 @@ d_gen1:
     if (crs[KEYS] & 010000) {          /* V/I mode */
       crsl[GR2] = lrs(crsl[GR2], scount);
     } else {
-      CLEARCL;
       utempa = crs[B] & 0x8000;        /* save B bit 1 */
       if (scount <= 31) {
 	templ = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
@@ -6765,6 +6780,7 @@ d_gen1:
 	*(int *)(crs+A) = 0xFFFF7FFF | utempa;
 	SETCL;
       } else {
+	CLEARCL;
 	*(int *)(crs+A) = utempa;
       }
     }
@@ -6822,7 +6838,6 @@ d_gen1:
     if (crs[KEYS] & 010000)                /* V/I mode */
       crsl[GR2] = lls(crsl[GR2], scount);
     else {
-      CLEARCL;
       utempa = crs[B] & 0x8000;            /* save B bit 1 */
       if (scount < 31) {
 	utempl = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
@@ -7242,11 +7257,7 @@ imode:
 
     case 0026:
       TRACE(T_FLOW, " CGT\n");
-      utempa = iget16(RP);              /* get number of words */
-      if (1 <= crs[dr*2] && crs[dr*2] < utempa)
-	RPL = iget16(INCVA(RP,crs[dr*2]));
-      else
-	RPL += utempa;
+      cgt(crs[dr*2]);
       break;
 
     case 0040:
@@ -7691,16 +7702,7 @@ imode:
 
     case 0051:
       TRACE(T_FLOW, " PIMH\n");
-      templ = crsl[dr];
-      /* NOTE: PIMH could be implemented as a left shift, but Prime DIAG
-	 tests require a swap - hence the "or" below */
-      crsl[dr] = (crsl[dr] << 16) | (crsl[dr] >> 16);
-      /* check that bits 1-16 were equal to bit 17 before PIMH */
-      templ2 = (templ << 16) >> 16;
-      if (templ2 != templ)
-	mathexception('i', FC_INT_OFLOW, 0);
-      else
-	CLEARC;
+      pimh(dr);
       break;
 
     case 0133:
@@ -8522,7 +8524,7 @@ imode:
     case 1:
 imodepcl:
       stopwatch_push(&sw_pcl);
-      TRACE(T_FLOW|T_PCL, "#%d %o/%o: PCL %o/%o %s\n", gvp->instcount, RPH, RPL-2, ea>>16, ea&0xFFFF, searchloadmap(ea, 'e'));
+      TRACE(T_FLOW|T_PCL, "#%d %o/%:0o: PCL %o/%o %s\n", gvp->instcount, RPH, RPL-2, ea>>16, ea&0xFFFF, searchloadmap(ea, 'e'));
       if (gvp->numtraceprocs > 0 && TRACEUSER)
 	for (i=0; i<gvp->numtraceprocs; i++)
 	  if (traceprocs[i].ecb == (ea & 0xFFFFFFF) && traceprocs[i].sb == -1) {
