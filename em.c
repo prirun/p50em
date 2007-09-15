@@ -1105,6 +1105,14 @@ static unsigned short get16r(ea_t ea, ea_t rpring) {
     warn("address trap in get16r");
 #endif
 
+  /* if passed-in ring == RP ring, use get16 and maybe avoid mapva;
+     PCL uses "r" versions of get/put because it may be crossing
+     rings.  However, if PCL isn't crossing rings (user calls his own
+     subroutine for example), then the if below will try to use the
+     brp supercache. */
+
+  if (((rpring ^ RP) & RINGMASK32) == 0)
+    return get16(ea);
   return MEM[mapva(ea, rpring, RACC, &access)];
 }
 
@@ -1168,8 +1176,12 @@ static unsigned int get32r(ea_t ea, ea_t rpring) {
     warn("address trap in get32r");
 #endif
 
-  pa = mapva(ea, rpring, RACC, &access);
+  /* if passed-in ring == RP ring, use get32 and maybe avoid mapva */
 
+  if (((rpring ^ RP) & RINGMASK32) == 0)
+    return get32(ea);
+
+  pa = mapva(ea, rpring, RACC, &access);
   if ((pa & 01777) <= 01776)
     return *(unsigned int *)(MEM+pa);
   return (MEM[pa] << 16) | get16r(INCVA(ea,1), rpring);
@@ -1316,6 +1328,11 @@ static put16r(unsigned short value, ea_t ea, ea_t rpring) {
     warn("address trap in put16r");
 #endif
 
+  /* if passed-in ring == RP ring, use put16 and maybe avoid mapva */
+
+  if (((rpring ^ RP) & RINGMASK32) == 0)
+    return put16(value, ea);
+
   MEM[mapva(ea, rpring, WACC, &access)] = value;
 }
 
@@ -1408,6 +1425,11 @@ static put32r(unsigned int value, ea_t ea, ea_t rpring) {
   if (ea & 0x80000000)                 /* check for live register access */
     warn("address trap in put32");
 #endif
+
+  /* if passed-in ring == RP ring, use put32 and maybe avoid mapva */
+
+  if (((rpring ^ RP) & RINGMASK32) == 0)
+    return put32(value, ea);
 
   pa = mapva(ea, rpring, WACC, &access);
   if ((pa & 01777) <= 01776)
@@ -1655,7 +1677,6 @@ static void fatal(char *msg) {
   stopwatch_report(&sw_io);
   stopwatch_report(&sw_add16);
   stopwatch_report(&sw_cas);
-  stopwatch_report(&sw_irs);
   stopwatch_report(&sw_zmv);
   stopwatch_report(&sw_zfil);
   stopwatch_report(&sw_zmvd);
@@ -1791,7 +1812,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
     last = get16r0(pcbp+PCBCSLAST);
     TRACE(T_FAULT, "fault: PX enabled, pcbp=%o/%o, cs first=%o, next=%o, last=%o\n", pcbp>>16, pcbp&0xFFFF, first, next, last);
     if (next > last) {
-#if 1
+#ifdef DBG
       /* this is better for debugging */
       TRACE(T_FAULT, "fault: Concealed stack wraparound to first");
       fatal("fault: Concealed stack wraparound to first");
@@ -1816,6 +1837,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
     gvp->inhcount = 1;         /* supposed to do this only for Ring 0, but shouldn't hurt */
 
 #if 0
+    /* this was useful, but also can cause page faults - careful! */
     if (T_FAULT && fvec == POINTERFAULT) {
       ea = get32(faddr);
       if ((ea & 0xF0000000) == 0x80000000) {
@@ -1838,12 +1860,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
     if (m != 0) {
       TRACE(T_FLOW, " fault JST* '%o [%o]\n", fvec, m);
       put16(faultrp & 0xFFFF, m);
-      /* NOTE: should this set RP to m (segment 0), or just set RPL? */
-#if 0
-      RPL = m;
-#else
-      RP = m;
-#endif
+      RP = m;                /* NOTE: changes RP(segno) to segment 0 */
       INCRP;
     } else {
       printf("#%d: fault '%o, fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", gvp->instcount, fvec, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
@@ -1971,10 +1988,10 @@ static inline ea_t ea32r64r (ea_t earp, unsigned short inst) {
     }
   }
   while (i) {
-    if (ea < gvp->livereglim)
-      m = get16trap(ea);
-    else
+    if (ea >= gvp->livereglim)
       m = get16(MAKEVA(rph,ea));
+    else
+      m = get16trap(ea);
     TRACE(T_EAR, " Indirect, old ea=%o, [ea]=%o\n", ea, m);
     if ((crs[KEYS] & 016000) == 06000)           /* 32R mode? */
       i = m & 0100000;                           /* yes, multiple indirects */
@@ -2019,10 +2036,10 @@ special:
       TRACE(T_EAR, " Preindex, new ea=%o\n", ea);
     }
     while (i) {
-      if (ea < gvp->livereglim)
-	m = get16trap(ea);
-      else
+      if (ea >= gvp->livereglim)
 	m = get16(MAKEVA(rph,ea));
+      else
+	m = get16trap(ea);
       TRACE(T_EAR, " Indirect, old ea=%o, [ea]=%o\n", ea, m);
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
@@ -2043,10 +2060,10 @@ special:
       eap = &gvp->brp[SBBR];
     }
     while (i) {
-      if (ea < gvp->livereglim)
-	m = get16trap(ea);
-      else
+      if (ea >= gvp->livereglim)
 	m = get16(MAKEVA(rph,ea));
+      else
+	m = get16trap(ea);
       TRACE(T_EAR, " Indirect, ea=%o, [ea]=%o\n", ea, m);
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
@@ -2068,19 +2085,19 @@ special:
       ea = --crs[S];
     TRACE(T_EAR, " Class 2/3, new ea=%o, new S=%o\n", ea, crs[S]);
     if (x) {
-      if (ea < gvp->livereglim)
-	m = get16trap(ea);
-      else
+      if (ea >= gvp->livereglim)
 	m = get16(MAKEVA(rph,ea));
+      else
+	m = get16trap(ea);
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
       ea = m & amask;
     }
     while (i) {
-      if (ea < gvp->livereglim)
-	m = get16trap(ea);
-      else
+      if (ea >= gvp->livereglim)
 	m = get16(MAKEVA(rph,ea));
+      else
+	m = get16trap(ea);
       if ((crs[KEYS] & 016000) == 06000)
 	i = m & 0100000;
       else
@@ -2095,9 +2112,9 @@ special:
   }
   ea &= amask;
   va = MAKEVA(rph, ea);
-  if (ea < gvp->livereglim)                     /* flag live register ea */
-    return va | 0x80000000;
-  return va;
+  if (ea >= gvp->livereglim)
+    return va;
+  return va | 0x80000000;                     /* flag live register ea */
 }
 
 #include "ea64v.h"
@@ -9018,13 +9035,11 @@ d_cas:  /* 01100 */
   goto fetch;
 
 d_irs:  /* 01200 */
-  stopwatch_push(&sw_irs);
   TRACE(T_FLOW, " IRS\n");
   utempa = get16t(ea) + 1;
   put16t(utempa, ea);
   if (utempa == 0)
     INCRP;
-  stopwatch_pop(&sw_irs);
   goto fetch;
 
 d_ima:  /* 01300 */

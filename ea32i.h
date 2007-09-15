@@ -36,7 +36,7 @@ static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32,
       switch (sr) {
       case 0:                                 /* imm type 3 */
 	d = iget16(RP);
-	RPL++;
+	INCRP;
 	*immu64 = (((long long)(d & 0xFF00)) << 48) | (d & 0xFF);
 	return IMM_EA;
       case 1:                                 /* FAC0 source */
@@ -59,7 +59,7 @@ static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32,
 
     case 3:                                   /* GR relative */
       d = iget16(RP);
-      RPL++;
+      INCRP;
       ea = (crsl[sr] & 0xFFFF0000) | ((crsl[sr] + d) & 0xFFFF);
       TRACE(T_EAI, " GRR, d=%x, crsl[sr]=%o/%o, ea=%o/%o\n", d, crsl[sr]>>16, crsl[sr]&0xFFFF, ea>>16, ea&0xFFFF);
       if (ea & 0x80000000)
@@ -73,7 +73,7 @@ static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32,
 
   case 1:  /* TM=1: Direct and Indexed */
     d = iget16(RP);
-    RPL++;
+    INCRP;
     if (sr == 0)
       ea = (crsl[BR+br] & 0xFFFF0000) | ((crsl[BR+br] + d) & 0xFFFF);
     else
@@ -82,7 +82,7 @@ static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32,
 
   case 2:  /* TM=2: Indirect and Indirect Preindexed */
     d = iget16(RP);
-    RPL++;
+    INCRP;
     if (sr == 0)
       ea = (crsl[BR+br] & 0xFFFF0000) | ((crsl[BR+br] + d) & 0xFFFF);
     else
@@ -95,7 +95,7 @@ static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32,
   case 3:  /* TM=3: Indirect and Indirect Postindexed */
     TRACE(T_EAI, " TM=3: Indirect [Postindexed]");
     d = iget16(RP);
-    RPL++;
+    INCRP;
     ea = (crsl[BR+br] & 0xFFFF0000) | ((crsl[BR+br] + d) & 0xFFFF);
     TRACE(T_EAI, " BR[%d]=%o/%o, d=%o, ip ea=%o/%o\n", br, crsl[BR+br]>>16, crsl[BR+br]&0xFFFF, d, ea>>16, ea&0xFFFF);
     ip = get32(ea | ring);

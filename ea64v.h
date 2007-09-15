@@ -86,12 +86,12 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
     fatal("goto labA?");
 
   if (i) {
-    if (ea_w < gvp->livereglim) {
-      TRACE(T_EAV, " Indirect through live register '%o\n", ea_w);
-      ea_w = get16trap(ea_w);
-    } else {
+    if (ea_w >= gvp->livereglim) {
       TRACE(T_EAV, " Indirect, ea_s=%o, ea_w=%o\n", ea_s, ea_w);
       ea_w = get16(MAKEVA(ea_s, ea_w));
+    } else {
+      TRACE(T_EAV, " Indirect through live register '%o\n", ea_w);
+      ea_w = get16trap(ea_w);
     }
     TRACE(T_EAV, " After indirect, new ea_w=%o\n", ea_w);
   }
@@ -142,6 +142,8 @@ labB:
     else if (ixy == 2 || ixy == 6)
       ea_w += crs[X];
 
+  /* if this is a PB% address, use RPBR instead if it's in range */
+
   if (br == 0 && ((((ea_s & 0x8FFF) << 16) | (ea_w & 0xFC00)) == gvp->brp[RPBR].vpn))
     eap = &gvp->brp[RPBR];
 
@@ -153,15 +155,11 @@ labB:
       fault(POINTERFAULT, m, ea);
     ea_s = m | (ea_s & RINGMASK16);
     ea_w = get16(INCVA(ea,1));
-#if 0
-    if (ea_s & EXTMASK16)
-      warn("em: extension bit set in ea64v");
-#endif
     TRACE(T_EAV, " After indirect, ea_s=%o, ea_w=%o\n", ea_s, ea_w);
 
     /* when passing stack variables, callee references will be
        SB%+20,*, which may still be in the same page.  Don't switch to
-       UNBR if the new ea is still in the page */
+       UNBR if the new ea is still in the current page */
 
     if ((((ea_s & 0x8FFF) << 16) | (ea_w & 0xFC00)) != eap->vpn)
       eap = &gvp->brp[UNBR];
