@@ -447,6 +447,8 @@ typedef struct {
 
   unsigned short *physmem;      /* pointer to Prime physical memory */
 
+  int memlimit;                 /* user's desired memory limit (-mem) */
+
   int intvec;                   /* currently raised interrupt (if >= zero) */
 
   unsigned long instcount;      /* global instruction count */
@@ -528,7 +530,6 @@ static  jmp_buf jmpbuf;               /* for longjumps to the fetch loop */
 #define MEM physmem
 
 static unsigned short physmem[MEMSIZE]; /* system's physical memory */
-static int memlimit;                    /* user's desired memory limit (-mem) */
 
 #define MAKEVA(seg,word) ((((int)(seg))<<16) | (word))
 
@@ -916,11 +917,11 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
   }
   stopwatch_pop(&sw_mapva);
 #ifndef NOMEM
-  if (pa < memlimit)
+  if (pa < gvp->memlimit)
 #endif
     return pa;
 #if DBG
-  printf(" map: Memory address '%o (%o/%o) is out of range 0-'%o (%o/%o) at #%d!\n", pa, pa>>16, pa & 0xffff, memlimit-1, (memlimit-1)>>16, (memlimit-1) & 0xffff, gvp->instcount);
+  printf(" map: Memory address '%o (%o/%o) is out of range 0-'%o (%o/%o) at #%d!\n", pa, pa>>16, pa & 0xffff, gvp->memlimit-1, (gvp->memlimit-1)>>16, (gvp->memlimit-1) & 0xffff, gvp->instcount);
 #endif
 
   /* take a missing memory check
@@ -2350,7 +2351,7 @@ static void prtn() {
    instruction will reload this array from the new stack frame
    header. */
 
-static ea_t pclea(unsigned short brsave[6], ea_t rp, unsigned short *bitarg, short *store, short *lastarg) {
+static inline ea_t pclea(unsigned short brsave[6], ea_t rp, unsigned short *bitarg, short *store, short *lastarg) {
   unsigned short ibr, br, ea_s, ea_w, bit, a;
   unsigned int utempl;
   ea_t ea, iwea;
@@ -2575,12 +2576,10 @@ static pcl (ea_t ecbea) {
      ecb, check to see if it crosses a page boundary.  If not, a 
      memcpy is okay; if it does, do fetches */
 
-  if (access == 1) {
-    if ((ecbea & 0xF) != 0)
-      fault(ACCESSFAULT, 0, ecbea);
-    memcpy(ecb,MEM+pa,sizeof(ecb));
-  } else if ((pa & 01777) <= 01750) {
-    memcpy(ecb,MEM+pa,sizeof(ecb));
+  if (access == 1 && (ecbea & 0xF) != 0)
+    fault(ACCESSFAULT, 0, ecbea);
+  if ((pa & 01777) <= 02000 - sizeof(ecb)/sizeof(ecb[0])) {
+    memcpy(ecb, MEM+pa, sizeof(ecb));
   } else {
     *(long long *)(ecb+0) = get64(ecbea+0);
     *(long long *)(ecb+4) = get64(ecbea+4);
@@ -2599,6 +2598,7 @@ static pcl (ea_t ecbea) {
 
   stackrootseg = ecb[3];
   if (stackrootseg == 0) {
+    eap = &gvp->brp[SBBR];
     stackrootseg = get16((*(unsigned int *)(crs+SB)) + 1);
     TRACE(T_PCL, " stack root in ecb was zero, stack root from caller is %o\n", stackrootseg);
   }
@@ -2684,11 +2684,11 @@ static pcl (ea_t ecbea) {
      this point
 
      RP changes here, which may change the ring.  The brp cache needs
-     to be invalidated if the ring changes. (Although, it seems
-     odd to invalidate the brp here, because we could use it
-     for argument transfers...  Maybe this isn't quite the right
-     place for RP and live base registers to change.  See PCL DIAG
-     cases 35 & 36 that fail.
+     to be invalidated if the ring changes. (Although, it seems odd to
+     invalidate the brp here, because we could use it for argument
+     transfers...  Maybe this isn't quite the right place for RP and
+     live base registers to change.  See failing PCL DIAG cases 35 &
+     36.)
  */
 
   if ((newrp ^ RP) & RINGMASK32)
@@ -2708,6 +2708,7 @@ static pcl (ea_t ecbea) {
      occurs while accessing the arguments here, it will return to ARGT
      in the main emulator loop and nothing will be logged. */
 
+#ifndef NOTRACE
     if (TRACEUSER && ((ecbea & 0xFFFFFFF) == tnou_ea || (ecbea & 0xFFFFFFF) == tnoua_ea)) {
       ea = *(unsigned int *)(crs+SB) + ecb[4];
       utempa = get16(get32(ea));       /* 1st arg: userid */
@@ -2736,6 +2737,7 @@ static pcl (ea_t ecbea) {
 	TRACE(T_TERM, " TNOUx user %d, len %d: %s\n", utempa, tnlen, tnstring);
       }
     }
+#endif
 
     INCRP;    /* advance real RP past ARGT after argument transfer */
   }
@@ -4067,9 +4069,9 @@ main (int argc, char **argv) {
   gvp->pmap32bits = 0;
   gvp->pmap32mask = 0;
   gvp->csoffset = 0;
+  gvp->memlimit = MEMSIZE;
   tport = 0;
   nport = 0;
-  memlimit = MEMSIZE;
 
   /* check args */
 
@@ -4103,7 +4105,7 @@ main (int argc, char **argv) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
 	if (1 <= templ && templ <= MAXMB)
-	  memlimit = templ*1024/2*1024;
+	  gvp->memlimit = templ*1024/2*1024;
 	else
 	  fatal("-mem arg range is 1 to 512 (megabytes)\n");
       } else
