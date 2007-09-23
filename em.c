@@ -126,6 +126,7 @@ typedef unsigned int pa_t;            /* physical address */
 
 static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) __attribute__ ((noreturn));
 static void fatal(char *msg) __attribute__ ((noreturn));
+static void warn(char *msg);
 static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int dswstat, unsigned int dswrma) __attribute__ ((noreturn));
 
 /* condition code macros */
@@ -225,8 +226,6 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 #define BCGE if (!(crs[KEYS] & 0200)) RPL = iget16(RP); else INCRP
 #define BCGT if (!(crs[KEYS] & 0300)) RPL = iget16(RP); else INCRP
 #define BLS  if  (crs[KEYS] & 020000) RPL = iget16(RP); else INCRP
-#define BXNE if (crs[X] != 0) RPL = iget16(RP); else INCRP
-#define BYNE if (crs[Y] != 0) RPL = iget16(RP); else INCRP
 #define BHNE(r) if (crs[(r)*2] != 0) RPL = iget16(RP); else INCRP
 #define BRNE(r) if (crsl[(r)]  != 0) RPL = iget16(RP); else INCRP
 
@@ -329,9 +328,13 @@ static struct {
 
 static unsigned short sswitch = 014114;     /* sense switches, set with -ss & -boot */
 
-/* NOTE: the default cpuid is a P750: 1 MIPS, 8MB of memory */
+/* NOTE: the default cpuid is a P750: 1 MIPS, 8MB of memory
 
-static unsigned short cpuid = 5;            /* STPM CPU model, set with -cpuid */
+   9/21/2007: changed the default to a P9950 so that the date gets
+   automagically set via special VCP commands.  The 9950 was a 2 MIP
+   CPU w/max of 16MB physical memory via the extended page map format */
+
+static unsigned short cpuid = 15;      /* STPM CPU model, set with -cpuid */
 
 /* STLB cache structure is defined here; the actual stlb is in gv.
    There are several different styles on Prime models.  This is
@@ -340,8 +343,9 @@ static unsigned short cpuid = 5;            /* STPM CPU model, set with -cpuid *
    user.
 
    Instead of using a valid/invalid bit, a segment number of 0xFFFF
-   means "invalid", since it won't match any real segment number.
-   This eliminates testing the valid bit in mapva.
+   (note that the fault, ring, and E bits are set) means "invalid",
+   since it won't match any 12-bit segment number.  This eliminates
+   testing the valid bit in mapva.
 
    As a speed-up, the unmodified bit is stored in access[2], where
    Ring 2 access should be kept.  This makes the structure exactly 16
@@ -355,7 +359,7 @@ static unsigned short cpuid = 5;            /* STPM CPU model, set with -cpuid *
 
 typedef struct {
   unsigned short *pmep;       /* pointer to page table flag word */
-  unsigned int ppn;           /* physical page number */
+  unsigned int ppa;           /* physical page address (PPN << 10) */
   unsigned short procid;      /* process id for segments >= '4000 */
   short seg;                  /* segment number (0-0xFFF), 0xFFFF = invalid */
   char access[4];             /* ring n access rights */
@@ -372,7 +376,7 @@ typedef struct {
 #define IOTLBENTS 64*4
 
 typedef struct {
-  unsigned int ppn;           /* physical page number */
+  unsigned int ppa;           /* physical page address (PPN << 10) */
   char valid;                 /* 1 if IOTLB entry is valid, zero otherwise */
 } iotlbe_t;
 
@@ -427,7 +431,7 @@ typedef struct {
    PCL and PRTN when the ring might change).
 
    Storing the access bits in the vpn allows use of of the brp
-   supercache for write accesses as well as read accesses. */
+   cache for write accesses as well as read accesses. */
 
 typedef struct {
   unsigned short *memp;       /* MEM[] physical page address */
@@ -551,10 +555,10 @@ static unsigned short physmem[MEMSIZE]; /* system's physical memory */
 */
 
 #ifdef FAST
-#define RPADD(n) (RP+n)
+#define RPADD(n) (RP+(n))
 #define INCRP RP++
 #else
-#define RPADD(n) MAKEVA(RPH,RPL+n)
+#define RPADD(n) MAKEVA(RPH,RPL+(n))
 #define INCRP RPL++
 #endif
 
@@ -811,7 +815,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
   short relseg,seg,nsegs,ring;
   unsigned short pte, stlbix, iotlbix;
   stlbe_t *stlbp;
-  unsigned int dtar,sdw,staddr,ptaddr,pmaddr,ppn;
+  unsigned int dtar,sdw,staddr,ptaddr,pmaddr,ppa;
   pa_t pa;
 
   stopwatch_push(&sw_mapva);
@@ -856,18 +860,19 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
 	pmaddr = ptaddr + 2*PAGENO(ea);
 	pte = MEM[pmaddr];
 
-	/* this is probably correct (don't have any references) for
-	   the 53xx and later machines that support more than 128MB of
-	   physical memory, but it can't be used for earlier machines
-	   like the 9950 or they can't run older software (rev 19 for
-	   example).  Need to have a mask for each CPU type to make it
-	   technically correct. */
+	/* this line enables 512MB on the 53xx and later machines that
+	   support more than 128MB of physical memory.  The pmap32mask
+	   is cpu-dependant: older machines like the 9950 looked at
+	   fewer bits, and the older software like Primos rev 19 had
+	   other stuff in the higher-order bits that the hardware
+	   ignored.  So on older machines, we need to ignore them
+	   too, so older software still works. */
 
-	ppn = ((MEM[pmaddr] & gvp->pmap32mask) << 16) | MEM[pmaddr+1];
+	ppa = (*(unsigned int *)(MEM+pmaddr) & gvp->pmap32mask) << 10;
       } else {
 	pmaddr = ptaddr + PAGENO(ea);
 	pte = MEM[pmaddr];
-	ppn = pte & 0xFFF;
+	ppa = (pte & 0xFFF) << 10;
       }
       TRACE(T_MAP,"        ptaddr=%o, pmaddr=%o, pte=%o\n", ptaddr, pmaddr, pte);
       if (!(pte & 0x8000))
@@ -879,7 +884,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       stlbp->access[3] = (sdw >> 6) & 7;
       stlbp->procid = crs[OWNERL];
       stlbp->seg = seg;
-      stlbp->ppn = ppn;
+      stlbp->ppa = ppa;
       stlbp->pmep = MEM+pmaddr;
 #ifndef NOTRACE
       stlbp->load_ic = gvp->instcount;
@@ -894,9 +899,14 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       if (seg < 4) {
 	iotlbix = (ea & 0x3FFFF) >> 10;
 	gvp->iotlb[iotlbix].valid = 1;
-	gvp->iotlb[iotlbix].ppn = ppn;
+	gvp->iotlb[iotlbix].ppa = ppa;
       }
     }
+#if 0
+    /* seems like ea ring should always be = rp ring, but not true */
+    if ((rp & RINGMASK32) != (ea & RINGMASK32))
+      warn("rp ring <> ea ring!");
+#endif
     ring = ((rp | ea) >> 29) & 3;  /* current ring | ea ring = access ring */
     *access = stlbp->access[ring];
     if (((intacc & *access) != intacc) || (intacc == PACC && ((*access & 3) == 0)))
@@ -905,7 +915,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       stlbp->access[STLB_UNMODIFIED_BIT] = 0;
       *(stlbp->pmep) &= ~020000;    /* reset unmodified bit in memory */
     }
-    pa = (stlbp->ppn << 10) | (ea & 0x3FF);
+    pa = stlbp->ppa | (ea & 0x3FF);
     TRACE(T_MAP,"        for ea %o/%o, iacc=%d, stlbix=%d, pa=%o	loaded at #%d\n", ea>>16, ea&0xffff, intacc, stlbix, pa, stlbp->load_ic);
   } else {
     pa = ea;
@@ -928,6 +938,9 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
 }
 
 #if 0
+/* NOTE: this is ifdef'd out because it slowed things down (it was a
+   precursor to the brp cache, which worked much better */
+
 /* Use fastmap only when intacc = RACC or WACC, ie, get/put, not PACC!): 
 
   (pa_t) pa = fastmap(ea, intacc, rp);
@@ -955,7 +968,7 @@ static pa_t fastmap (ea_t ea, ea_t rp, short intacc) {
 	  stlbp->unmodified = 0;
 	  *(stlbp->pmep) &= ~020000;    /* reset unmodified bit in memory */
 	}
-	return ((stlbp->ppn << 10) | (ea & 0x3FF));
+	return (stlbp->ppa | (ea & 0x3FF));
       }
     }
     return mapva(ea, rp, intacc, &access);
@@ -975,7 +988,7 @@ const static unsigned int mapio(ea_t ea) {
   if (crs[MODALS] & 020) {           /* mapped I/O mode? */
     iotlbix = (ea >> 10) & 0xFF;     /* TLB range is 0-255 */
     if (gvp->iotlb[iotlbix].valid)
-      return (gvp->iotlb[iotlbix].ppn << 10) | (ea & 0x3FF);
+      return gvp->iotlb[iotlbix].ppa | (ea & 0x3FF);
     else {
       printf("Mapped I/O request to %o/%o, but IOTLB is invalid!\n", ea>>16, ea&0xFFFF);
       fatal(NULL);
@@ -1010,14 +1023,15 @@ const static unsigned int mapio(ea_t ea) {
 /* 
    get16 handles 16-bit fetches that CANNOT cause address traps.
 
-   get16t handles 16-bit fetches that MIGHT cause address traps.
-   These traps can occur:
+   get16t handles 16-bit fetches that MIGHT cause address traps,
+   indicated by the sign bit set in EA. 
+   Address traps can occur:
    - fetching S/R mode instructions
    - fetching V-mode instructions when RPL < 010 or 040 (seg enabled/not)
    - in any S/R mode memory reference or address calculation
    - in V-mode address calculations (16-bit indirects)
    - in V-mode short instruction execution (LDA# 0 for example)
-   These traps CANNOT occur:
+   Address traps CANNOT occur:
    - in I-mode
    - in V-mode long instruction address calculation or execution
 
@@ -1027,7 +1041,9 @@ const static unsigned int mapio(ea_t ea) {
    (only the ring part is used from this address).
 
    VERY IMPORTANT: get16r _cannot_ use the supercache!  You don't want to 
-   cache Ring 0 accesses to data, then let Ring 3 use the cache!
+   cache Ring 0 accesses to data, then let Ring 3 use the cache!  It could
+   be changed to use a special R0 brp cache entry, but probably not much
+   gain performance-wise.  Might speed up process exchange...
 */
 
 
@@ -1051,7 +1067,7 @@ static inline unsigned short get16(ea_t ea) {
   gvp->supercalls++;
 #endif
   if ((ea & 0x0FFFFC00) == (eap->vpn & 0x0FFFFFFF)) {
-    TRACE(T_MAP, "    get16: supercached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
+    TRACE(T_MAP, "    get16: cached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
     return eap->memp[ea & 0x3FF];
   } else {
 #ifndef NOTRACE
@@ -1104,7 +1120,7 @@ static unsigned short get16r(ea_t ea, ea_t rpring) {
      PCL uses "r" versions of get/put because it may be crossing
      rings.  However, if PCL isn't crossing rings (user calls his own
      subroutine for example), then the if below will try to use the
-     brp supercache. */
+     brp cache. */
 
   if (((rpring ^ RP) & RINGMASK32) == 0)
     return get16(ea);
@@ -1134,7 +1150,7 @@ static unsigned int get32m(ea_t ea) {
   return (get16(ea) << 16) | get16(INCVA(ea,1));
 }
 
-/* get32 tries to use the supercache and is inlined */
+/* get32 tries to use the cache and is inlined */
 
 static inline unsigned int get32(ea_t ea) {
   pa_t pa;
@@ -1150,7 +1166,7 @@ static inline unsigned int get32(ea_t ea) {
 #endif
   if ((ea & 01777) <= 01776)
     if ((ea & 0x0FFFFC00) == (eap->vpn & 0x0FFFFFFF)) {
-      TRACE(T_MAP, "    get32: supercached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
+      TRACE(T_MAP, "    get32: cached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
       return *(unsigned int *)&eap->memp[ea & 0x3FF];
     }
   return get32m(ea);
@@ -1296,11 +1312,11 @@ static inline put16(unsigned short value, ea_t ea) {
   gvp->supercalls++;
 #endif
 
-  /* access bits are stored in bits 2-4 of the supercache vpn.
+  /* access bits are stored in bits 2-4 of the cache vpn.
      write access is indicated by bit 4 (MSB = bit 1) */
 
   if ((ea & 0x0FFFFC00) == (eap->vpn & 0x0FFFFFFF) && (eap->vpn & 0x10000000)) {
-    TRACE(T_MAP, "    put16: supercached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
+    TRACE(T_MAP, "    put16: cached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
     eap->memp[ea & 0x3FF] = value;
   } else {
 #ifndef NOTRACE
@@ -1385,7 +1401,7 @@ static put32(unsigned int value, ea_t ea) {
 #endif
   if ((ea & 01777) <= 01776) {
     if ((ea & 0x0FFFFC00) == (eap->vpn & 0x0FFFFFFF) && (eap->vpn & 0x10000000)) {
-      TRACE(T_MAP, "    put32: supercached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
+      TRACE(T_MAP, "    put32: cached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
       *(unsigned int *)&eap->memp[ea & 0x3FF] = value;
     } else {
 #ifndef NOTRACE
@@ -1492,11 +1508,6 @@ void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int dswsta
   fatal("macheck: returned after longjmp\n");
 }
 
-
-static warn(char *msg) {
-  printf("emulator warning:\n  instruction #%d at %o/%o: %o %o keys=%o, modals=%o\n  %s\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, get16(gvp->prevpc), get16(gvp->prevpc+1),crs[KEYS], crs[MODALS], msg);
-}
-    
 
 /* queue instructions 
 
@@ -1658,6 +1669,11 @@ static int (*devmap[64])(int, int, int) = {
 
 
 
+static void warn(char *msg) {
+  printf("emulator warning:\n  instruction #%d at %o/%o: %o %o keys=%o, modals=%o\n  %s\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, get16(gvp->prevpc), get16(gvp->prevpc+1),crs[KEYS], crs[MODALS], msg);
+}
+    
+
 static void fatal(char *msg) {
   ea_t pcbp, csea;
   unsigned short first,next,last,this;
@@ -1677,6 +1693,8 @@ static void fatal(char *msg) {
   stopwatch_report(&sw_zmvd);
   stopwatch_report(&sw_pcl);
   stopwatch_report(&sw_idle);
+
+  /* XXX: need to log this stuff... */
 
   printf("Fatal error");
   if (msg)
@@ -1747,9 +1765,9 @@ static newkeys (unsigned short new) {
     TRACE(T_MODE, "Entering 64V mode, keys=%o\n", new);
     gvp->amask = 0177777;
     break;
-  default:                    /* invalid */
-    printf("Invalid CPU mode: %o\n", new);
-    fatal(NULL);
+  default:                    /* invalid mode */
+    warn("Invalid CPU mode");
+    fault(ILLINSTFAULT, RPL, RP);
   }
   crs[KEYS] = new;
 }
@@ -2333,7 +2351,7 @@ static ea_t stex(unsigned int extsize) {
    PRTN can be restarted.  After all the temps are loaded, the stack
    free pointer can be updated since no further faults can occur.
 
-   If changing rings, make sure to invalidate the brp supercache. */
+   If changing rings, make sure to invalidate the brp cache. */
 
 static inline void prtn() {
   unsigned short stackrootseg;
@@ -2979,7 +2997,7 @@ static ors(unsigned short pcbw) {
     gvp->savetraceflags = ~0;
 #endif
 
-  /* invalidate the mapva translation supercache */
+  /* invalidate the mapva translation cache */
 
   invalidate_brp();
 }
@@ -3469,39 +3487,33 @@ static lpsw() {
       TRACE(T_PX, "LPSW: crs=%d, ownerl[2]=%o, keys[2]=%o, modals[2]=%o, ownerl[3]=%o, keys[3]=%o, modals[3]=%o\n", crs==regs.rs16[2]? 2:3, regs.rs16[2][OWNERL], regs.rs16[2][KEYS], regs.rs16[2][MODALS], regs.rs16[3][OWNERL], regs.rs16[3][KEYS], regs.rs16[3][MODALS]);
     }
   }
-#if 0
-  /* XXX: hack to disable serial number checking if a cpuid > 4 is used.
-     This code is very rev and/or build dependent; this is for 23.4.
-     Look for ERA/ANA sequence after SSSN, set the ANA operand to zero. */
-
-  ea = MAKEVA(014,040747);
-  printf("Current value of 14/40747 is: %o\n", get16(ea));
-  put16(0,ea);
-
-  /* patch SBL instruction to clear L instead */
-  ea = MAKEVA(014,020104);
-  printf("Current value of 14/20104 is: %o\n", get16(ea));
-  put16(0140010, ea);
-  put16(0140010, ea+1);
-#endif
 }
 
 
 static sssn() {
+#if 1
+  static char snbuf[] = "FN      123456  ";  /* dummy serial number for DIAG */
+#else
+  static char snbuf[] = "FN      018554  ";  /* Doug's serial number */
+#endif
   ea_t ea;
   int i;
 
-  printf("SSSN @ %o/%o\n", RPH, RPL);
-  /* gvp->savetraceflags = traceflags = ~TB_MAP;    /*****/
+  //printf("SSSN @ %o/%o\n", RPH, RPL);
+  //gvp->savetraceflags = gvp->traceflags = ~TB_MAP;    /*****/
   TRACE(T_FLOW, " SSSN\n");
-#if 1
   ea = *(unsigned int *)(crs+XB);
-  for (i=0; i<16; i++) {
+  for (i=0; i<8; i++)
+    put16(*(((unsigned short *)snbuf)+i), ea+i);
+  for (i=8; i<16; i++) {
     put16(0, ea+i);
   }
-#else
-  fault(UIIFAULT, RPL, RP);
-#endif
+
+  /* if SSSN is from segment 14, it's probably the rev 23.4.Y2K 
+     system serial number check.  Bypass the check loop. */
+
+  if (RPH == 014)
+    RP += 12;
 }
 
 
@@ -4110,7 +4122,6 @@ main (int argc, char **argv) {
   bootarg = NULL;
   bootfile[0] = 0;
   gvp->pmap32bits = 0;
-  gvp->pmap32mask = 0;
   gvp->csoffset = 0;
   gvp->memlimit = MEMSIZE;
   tport = 0;
@@ -4270,10 +4281,13 @@ main (int argc, char **argv) {
     
   /* set some vars after the options have been read */
 
-  if (cpuid == 15 || cpuid == 18 || cpuid == 19 || cpuid == 24 || cpuid >= 26)
+  if (cpuid == 15 || cpuid == 18 || cpuid == 19 || cpuid == 24 || cpuid >= 26) {
     gvp->pmap32bits = 1;
-  if (cpuid == 33 || cpuid == 37 || cpuid == 39 || cpuid >= 43)
-    gvp->pmap32mask = 0x3;
+    if (cpuid == 33 || cpuid == 37 || cpuid == 39 || cpuid >= 43)
+      gvp->pmap32mask = 0x3FFFF;    /* this is for 512MB physical memory */
+    else
+      gvp->pmap32mask = 0xFFFF;     /* this is for 128MB physical memory */
+  }
   if ((26 <= cpuid && cpuid <= 29) || cpuid >= 35)
     gvp->csoffset = 1;
 
@@ -4324,8 +4338,10 @@ main (int argc, char **argv) {
       rvec[1] = rvec[0]+1040-1;         /* read 1 disk block */
       /* setup DMA register '20 (address only) for the next boot record */
       regs.sym.regdmx[041] = 03000;
-      if (globdisk(bootfile, sizeof(bootfile), bootctrl, bootunit) != 0)
-	fatal("Can't find disk boot device file");
+      if (globdisk(bootfile, sizeof(bootfile), bootctrl, bootunit) != 0) {
+	printf("Can't find disk boot device file %s, or multiple files match this device", bootfile);
+	fatal(NULL);
+      }
 
     } else if ((sswitch & 0x7) == 5) {  /* tape boot */
       bootctrl = 014;
@@ -4362,7 +4378,7 @@ For disk boots, the last 3 digits can be:\n\
       exit(1);
     }
 
-    TRACEA("Boot file is %s\n", bootfile);
+    printf("Booting from file %s\n", bootfile);
     if ((bootfd=open(bootfile, O_RDONLY)) == -1) {
       perror("Error opening boot device file");
       fatal(NULL);
@@ -4603,13 +4619,13 @@ fetch:
 
     } else {                              /* standard interrupt mode */
       m = get16(063);
-      printf("Standard mode interrupt vector loc = %o\n", m);
+      //printf("Standard mode interrupt vector loc = %o\n", m);
       //gvp->traceflags = ~TB_MAP;
       if (m != 0) {
 	put16(RPL, m);
 	RP = m+1;
       } else {
-	fatal("fetch: loc '63 = 0 in standard interrupt mode");
+	fatal("em: loc '63 = 0 when standard mode interrupt occurred");
       }
     }
     crs[MODALS] &= 077777;   /* inhibit interrupts */
@@ -4746,13 +4762,7 @@ xec:
 
 d_iab:  /* 000201 */
   TRACE(T_FLOW, " IAB\n");
-#ifdef FAST
   crsl[GR2] = (crsl[GR2] << 16) | (crsl[GR2] >> 16);
-#else
-  utempa = crs[B];
-  crs[B] = crs[A];
-  crs[A] = utempa;
-#endif
   goto fetch;
 
 d_cgt:  /* 001314 */
@@ -5578,7 +5588,7 @@ d_ptlb:  /* 000064 */
   RESTRICT();
   utempl = *(unsigned int *)(crs+L);
   for (utempa = 0; utempa < STLBENTS; utempa++)
-    if ((utempl & 0x80000000) || gvp->stlb[utempa].ppn == utempl)
+    if ((utempl & 0x80000000) || gvp->stlb[utempa].ppa == (utempl << 10))
       gvp->stlb[utempa].seg = 0xFFFF;
   goto fetch;
 
@@ -5643,6 +5653,12 @@ d_dbgill:  /*  001700, 001701 */
 	 LDA modals        get modals
 	 SAS 1             interrupts enabled?
 	 1702              no, they should be, die
+
+	 Update: this is the "slow halt" instruction.  Ewan explained
+	 that if a HLT instruction is encountered, any DMX in progress
+	 will stop, leading to partial disk records being written.
+	 Using this instruction instead lets Primos delay the halt
+	 until DMX has completed.
       */
 
 d_pbug:  /* 001702 */
@@ -6042,25 +6058,30 @@ d_bfgt:  /* 0141611 */
 
 d_bix:  /* 0141334 */
   TRACE(T_FLOW, " BIX\n");
-  crs[X]++;
-  BXNE;
+  if ((short)(++crs[X]) != 0) 
+    RPL = iget16(RP);
+  else
+    INCRP;
   goto fetch;
 
 d_biy:  /* 0141324 */
   TRACE(T_FLOW, " BIY\n");
-  crs[Y]++;
-  BYNE;
+  if ((short)(++crs[Y]) != 0) 
+    RPL = iget16(RP);
+  else
+    INCRP;
   goto fetch;
 
 d_bdy:  /* 0140724 */
   TRACE(T_FLOW, " BDY\n");
-  crs[Y]--;
-  BYNE;
+  if ((short)(--crs[Y]) != 0) 
+    RPL = iget16(RP);
+  else
+    INCRP;
   goto fetch;
 
 d_bdx:  /* 0140734 */
   TRACE(T_FLOW, " BDX\n");
-  crs[X]--;
 #ifndef NOIDLE
   m = iget16(RP);
   if (crs[X] > 100 && m == RPL-1) {
@@ -6109,7 +6130,7 @@ d_bdx:  /* 0140734 */
       for (i=0; i<64; i++)
 	if (devpoll[i] > 0)
 	  devpoll[i] -= utempl;
-      crs[X] = 0;
+      crs[X] = 1;                            /* decremented below */
       utempa = crs[TIMER];
       if (actualmsec > 0) {
 	crs[TIMER] += actualmsec;
@@ -6126,7 +6147,10 @@ d_bdx:  /* 0140734 */
     stopwatch_stop(&sw_idle);
   }
 #endif
-  BXNE;
+  if ((short)(--crs[X]) != 0) 
+    RPL = iget16(RP);
+  else
+    INCRP;
   goto fetch;
 
 d_a1a:  /* 0141206 */
@@ -6223,16 +6247,13 @@ d_irx:  /* 0140114 */
      unsigned short type promotion! */
 
   TRACE(T_FLOW, " IRX\n");
-  /* XXX: change to if ((++crs[X] & 0xFFFF) == 0) */
-  crs[X]++;
-  if (crs[X] == 0)
+  if ((short)(++crs[X]) == 0)
     INCRP;
   goto fetch;
 
 d_drx:  /* 0140210 */
   TRACE(T_FLOW, " DRX\n");
-  crs[X]--;
-  if (crs[X] == 0)
+  if ((short)(--crs[X]) == 0)
     INCRP;
   goto fetch;
 
@@ -6296,22 +6317,12 @@ d_tya:  /* 0141124 */
 
 d_xca:  /* 0140104 */
   TRACE(T_FLOW, " XCA\n");
-#ifdef FAST
   crsl[GR2] = crsl[GR2] >> 16;
-#else
-  crs[B] = crs[A];
-  crs[A] = 0;
-#endif
   goto fetch;
 
 d_xcb:  /* 0140204 */
   TRACE(T_FLOW, " XCB\n");
-#ifdef FAST
   crsl[GR2] = crsl[GR2] << 16;
-#else
-  crs[A] = crs[B];
-  crs[B] = 0;
-#endif
   goto fetch;
 
 d_tca:  /* 0140407 */
@@ -6551,7 +6562,7 @@ d_fsgt:  /* 0140515 */
   goto fetch;
 
 d_int:  /* 0140554 */
-  TRACE(T_FLOW, " INT\n");
+  TRACE(T_FLOW, " INTr\n");
   /* XXX: do -1073741824.5 and 1073741823.5 work on Prime, or overflow? */
   if (prieee8(crs+FLTH, &tempd) && -1073741824.0 <= tempd && tempd <= 1073741823.0) {
     templ = tempd;
@@ -6632,12 +6643,7 @@ d_cre:  /* 0141404 */
 
 d_crle:  /* 0141410 */
   TRACE(T_FLOW, " CRLE\n");
-#ifdef FAST
   *(long long *)(crs+L) = 0;
-#else
-  *(int *)(crs+L) = 0;
-  *(int *)(crs+E) = 0;
-#endif
   goto fetch;
 
 d_ile:  /* 0141414 */
@@ -8880,7 +8886,7 @@ imodepcl:
 d_ldadld:  /* 00200 */
   crs[A] = get16t(ea);
   if ((crs[KEYS] & 050000) != 040000) {  /* not R-mode or not DP */
-    TRACE(T_FLOW, " LDA ='%o/%d\n", crs[A], *(short *)(crs+A));
+    TRACE(T_FLOW, " LDA ='%o/%d %03o %03o\n", crs[A], *(short *)(crs+A), crs[A]>>8, crs[A] & 0xFF);
   } else {
     TRACE(T_FLOW, " DLD\n");
     crs[B] = get16t(INCVA(ea,1));

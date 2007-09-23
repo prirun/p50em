@@ -164,7 +164,8 @@ int devnone (int class, int func, int device) {
 
   switch (class) {
 
-  case -1:
+  case -1:   /* emulator initialization */
+  case -2:   /* emulator termination  */
     return 0;
 
   case 0:
@@ -255,6 +256,12 @@ int devnone (int class, int func, int device) {
 
 int devasr (int class, int func, int device) {
 
+/* on OSX, doing select() to see if it's okay to write means that there is
+   room for at least 1024 characters.  On other platforms, this constant
+   may need to be lowered.  It can be lowered to 1. */
+
+#define MAXASRBUF 1024
+
   static initialized = 0;
   static FILE *conslog;
   static int ttydev;
@@ -264,6 +271,7 @@ int devasr (int class, int func, int device) {
   static fd_set fds;
   static short vcptime[8] = {7*0, 1};
   static short vcptimeix;
+  static short roomleft = MAXASRBUF;
 
   struct timeval timeout;
   unsigned char ch;
@@ -356,18 +364,21 @@ int devasr (int class, int func, int device) {
     TRACE(T_INST, " SKS '%02o%02o\n", func, device);
 
     if (func == 6) {               /* skip if room for a character */
-      if (crs[MODALS] & 010)       /* PX enabled? */
-	timeout.tv_sec = 0;        /* yes, can't delay */
-      else
-	timeout.tv_sec = 1;        /* single user: okay to delay */
-      timeout.tv_usec = 0;
-      FD_SET(ttydev, &fds);
-      n = select(ttydev+1, NULL, &fds, NULL, &timeout);
-      if (n == -1) {
-	perror(" unable to do write select on tty");
-	fatal(NULL);
+      if (roomleft <= 0) {         /* shouldn't be negative, but safer */
+	if (crs[MODALS] & 010)     /* PX enabled? */
+	  timeout.tv_sec = 0;      /* yes, can't delay */
+	else
+	  timeout.tv_sec = 1;      /* single user: okay to delay */
+	timeout.tv_usec = 0;
+	FD_SET(ttydev, &fds);
+	n = select(ttydev+1, NULL, &fds, NULL, &timeout);
+	if (n == -1) {
+	  perror(" unable to do write select on tty");
+	  fatal(NULL);
+	} else if (n > 0)
+	  roomleft = MAXASRBUF;
       }
-      if (n) {
+      if (roomleft > 0) {
 	IOSKIP;
       }
 
@@ -411,10 +422,8 @@ int devasr (int class, int func, int device) {
 	fatal(NULL);
       }
       ttyflags = newflags;
-#if 1
-      if (doblock)
-	fflush(gvp->tracefile);         /* hack to flush for 32i testing */
-#endif
+      if (doblock)                      /* doblock = no PX = running diags */
+	fflush(gvp->tracefile);         /* flush trace buffer when testing */
 
       if (doblock && needflush) {
 	if (fflush(stdout) == 0) {
@@ -511,6 +520,7 @@ readasr:
 	return;
 #endif
       putchar(ch);
+      roomleft--;
       if (ch != 015)
 	putc(ch, conslog);
       needflush = 1;
@@ -1628,7 +1638,7 @@ int devdisk (int class, int func, int device) {
 #define MAXDRIVES 8
 #define HASHMAX 4451
 
-#if 0
+#if 1
   #define CID4005 0100
 #else
   #define CID4005 0
@@ -2199,9 +2209,11 @@ int devamlc (int class, int func, int device) {
 #define TS_OPTION 3    /* inside an option */
 
   static short inited = 0;
-  static short devices[MAXBOARDS];         /* list of AMLC devices initialized */
-  static int tsfd;                         /* socket fd for terminal server */
-  static struct {                          /* maps socket fd to device & line */
+  static char ttymsg[1024];
+  static int ttymsglen = 0;
+  static short devices[MAXBOARDS];      /* list of AMLC devices initialized */
+  static int tsfd;                      /* socket fd for terminal server */
+  static struct {                       /* maps socket fd to device & line */
     int device;
     int line;
   } socktoline[MAXLINES];
@@ -2241,6 +2253,7 @@ int devamlc (int class, int func, int device) {
   struct timeval timeout;
   unsigned char ch;
   int state;
+  int msgfd;
 
   switch (class) {
 
@@ -2282,6 +2295,14 @@ int devamlc (int class, int func, int device) {
 	if (fcntl(tsfd, F_SETFL, tsflags) == -1) {
 	  perror("unable to set ts flags for AMLC");
 	  fatal(NULL);
+	}
+	if ((msgfd = open("ttymsg", O_RDONLY, 0)) >= 0) {
+	  ttymsglen = read(msgfd, ttymsg, sizeof(ttymsg)-1);
+	  if (ttymsglen >= 0)
+	    ttymsg[ttymsglen] = 0;
+	  close(msgfd);
+	} else if (errno != ENOENT) {
+	  perror("Unable to open ttymsg file");
 	}
       } else
 	fprintf(stderr, "-tport is zero, can't start AMLC devices\n");
@@ -2528,19 +2549,7 @@ int devamlc (int class, int func, int device) {
 	buf[7] = 253;   /* do */
 	buf[8] = 0;     /* binary mode */
 	write(fd, buf, 9);
-	strcpy((void *)buf,"\
-\r\n\
-Welcome to the Prime Computer 50-series emulator, running Primos rev 19.2!\r\n\
-\n\
-  After logging in, use the Prime HELP command for assistance.\r\n\
-  You are welcome to create a directory under GUEST for your files.\r\n\
-  To report bugs or contact the author, send email to prirun@gmail.com\r\n\
-\n\
-Enjoy your time travels!   -Jim Wilcoxson aka JIMMY\r\n\
-\r\n\
-Login please.\r\n\
-OK, ");
-	write(fd, buf, strlen((void *)buf));
+	write(fd, ttymsg, ttymsglen);
       }
     }
 
