@@ -451,6 +451,7 @@ readasr:
 	    TRACEA("\nTRACE ENABLED:\n\n");
 	    gvp->savetraceflags = ~TB_MAP;
 	    gvp->savetraceflags = ~0;
+	    gvp->savetraceflags = TB_FLOW;
 	  } else {
 	    TRACEA("\nTRACE DISABLED:\n\n");
 	    gvp->savetraceflags = 0;

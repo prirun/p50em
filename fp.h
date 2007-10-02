@@ -195,11 +195,23 @@ double ieeepr8(double d) {
   }
 #endif
 
-  /* round the fraction to 48 bits, ensuring no overflow */
+#if 0
+
+  /* round the fraction to 48 bits, ensuring no overflow
+
+     IMPORTANT NOTE: this rounding was disabled because it screws up
+     Prime Information at rev 21.  Information uses a DPFP variable
+     to store a pathname length, adds .5, then rounds it by adding
+     and subtracting the special FP constant 040000 0 0 257.  This
+     process ends up adding 1 to the original variable, making the
+     RUN command fail because the call to TSRC$$ has the pathname
+     length 1 too big.
+  */
 
   if ((frac64 & 0x8000) && ((frac64 & 0x7fffffffffff0000LL) !=  0x7fffffffffff0000LL))
     /* XXX: should this be a subtract for negative numbers? */
     frac64 += 0x10000;
+#endif
 
   frac64 = (frac64 & 0xffffffffffff0000LL) | (exp32 & 0xffff);
   return *(double *)&frac64;
