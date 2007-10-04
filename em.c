@@ -428,7 +428,7 @@ typedef struct {
    order fault bit of vpn is never set.  The ring and extension bits
    are used to store the 3-bit access field from the STLB for the 
    current ring (remember that all brp entries are invalidated by
-   PCL and PRTN when the ring might change).
+   PCL and PRTN when the ring changes).
 
    Storing the access bits in the vpn allows use of of the brp
    cache for write accesses as well as read accesses. */
@@ -482,7 +482,8 @@ typedef struct {
   int supercalls;               /* supercache hits */
   int supermisses;
 
-  void *disp_mr[128];           /* V/R memory ref dispatch table */
+  void *disp_rmr[128];           /* R-mode memory ref dispatch table */
+  void *disp_vmr[128];           /* V-mode memory ref dispatch table */
 
 /* traceflags is the variable used to test tracing of each instruction
    traceuser is the user number to trace, 0 meaning any user
@@ -4510,8 +4511,10 @@ For disk boots, the last 3 digits can be:\n\
 fetch:
 
 #if 0
-  if (gvp->instcount > 32727500)
-    gvp->savetraceflags = ~0;
+  if (gvp->instcount > 2681900)
+    gvp->savetraceflags = TB_FLOW;
+  if (gvp->instcount > 3000000)
+    gvp->savetraceflags = 0;
 #endif
 
 #if 0
@@ -4776,7 +4779,7 @@ xec:
   if ((crs[KEYS] & 016000) == 014000) {   /* 64V mode */
     ea = ea64v(inst, earp);
     TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
-    goto *(gvp->disp_mr[VMRINSTIX(inst)]);
+    goto *(gvp->disp_vmr[VMRINSTIX(inst)]);
 
   } else if ((crs[KEYS] & 0016000) == 010000) {  /* E32I */
       goto imode;
@@ -4788,17 +4791,17 @@ xec:
   } else if (crs[KEYS] & 004000) {        /* 32R/64R */
     ea = ea32r64r(earp, inst);
     TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
-    goto *(gvp->disp_mr[RMRINSTIX(inst)]);
+    goto *(gvp->disp_rmr[RMRINSTIX(inst)]);
 
   } else if (crs[KEYS] & 002000) {
     ea = ea32s(inst);
     TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
-    goto *(gvp->disp_mr[SMRINSTIX(inst)]);
+    goto *(gvp->disp_rmr[SMRINSTIX(inst)]);
 
   } else if ((crs[KEYS] & 016000) == 0) {
     ea = ea16s(inst);
     TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
-    goto *(gvp->disp_mr[SMRINSTIX(inst)]);
+    goto *(gvp->disp_rmr[SMRINSTIX(inst)]);
 
   } else {
     printf("Bad CPU mode in EA calculation, keys = %o\n", crs[KEYS]);
@@ -8928,12 +8931,17 @@ imodepcl:
   fatal("I-mode fall-through?");
 
 
+d_lda:  /* 00200 (V-mode) */
+  crs[A] = get16t(ea);
+  TRACE(T_FLOW, " LDA ='%o/%d %03o %03o\n", crs[A], *(short *)(crs+A), crs[A]>>8, crs[A] & 0xFF);
+  goto fetch;
+
   /* NOTE: don't use get32 for DLD/DST, because it doesn't handle register
      address traps */
 
-d_ldadld:  /* 00200 */
+d_ldadld:  /* 00200 (R-mode) */
   crs[A] = get16t(ea);
-  if ((crs[KEYS] & 050000) != 040000) {  /* not R-mode or not DP */
+  if (!(crs[KEYS] & 040000)) {  /* not DP */
     TRACE(T_FLOW, " LDA ='%o/%d %03o %03o\n", crs[A], *(short *)(crs+A), crs[A]>>8, crs[A] & 0xFF);
   } else {
     TRACE(T_FLOW, " DLD\n");
@@ -8941,7 +8949,12 @@ d_ldadld:  /* 00200 */
   }
   goto fetch;
 
-d_stadst:  /* 00400 */
+d_sta:  /* 00400 (V-mode) */
+  TRACE(T_FLOW, " STA\n");
+  put16t(crs[A],ea);
+  goto fetch;
+
+d_stadst:  /* 00400 (R-mode) */
   put16t(crs[A],ea);
   if ((crs[KEYS] & 050000) != 040000) {
     TRACE(T_FLOW, " STA\n");
@@ -8968,66 +8981,73 @@ d_era:  /* 00500 */
   crs[A] ^= m;
   goto fetch;
 
-d_adddad:  /* 00600 */
-  crs[KEYS] &= ~0120300;                 /* clear C, L, LT, EQ */
+d_add:  /* 00600 (V-mode) */
+  m = get16t(ea);
+  TRACE(T_FLOW, " ADD ='%o/%d\n", m, *(short *)&m);
+  add16(crs+A, m, 0, ea);
+  goto fetch;
+
+d_adddad:  /* 00600 (R-mode) */
+  if (!(crs[KEYS] & 040000))      /* dbl mode? */
+    goto d_add;
+  TRACE(T_FLOW, " DAD\n");
+  crs[KEYS] &= ~0120300;          /* clear C, L, LT, EQ */
   utempa = crs[A];
   m = get16t(ea);
-  if ((crs[KEYS] & 050000) != 040000) {     /* V/I mode or SP */
-    TRACE(T_FLOW, " ADD ='%o/%d\n", m, *(short *)&m);
-    add16(crs+A, m, 0, ea);
-  } else {                                  /* R-mode and DP */
-    TRACE(T_FLOW, " DAD\n");
-    crs[B] += get16t(INCVA(ea,1));
-    utempl = crs[A];
-    if (crs[B] & 0x8000) {
-      utempl++;
-      crs[B] &= 0x7fff;
-    }
-    utempl += m;
-    crs[A] = utempl;
-    if (utempl & 0x10000)                  /* set L-bit if carry */
-      crs[KEYS] |= 020000;  
-    /* NOTE: this EQ test prevents reusing the ADD code :( */
-    if (*(int *)(crs+L) == 0)              /* set EQ? */
-      SETEQ; 
-    if (((~utempa ^ m) & (utempa ^ crs[A])) & 0x8000) {
-      if (*(int *)(crs+L) >= 0)
-	SETLT;
-      mathexception('i', FC_INT_OFLOW, 0);
-    } else if (*(int *)(crs+L) < 0)
-      SETLT;
+  crs[B] += get16t(INCVA(ea,1));
+  utempl = crs[A];
+  if (crs[B] & 0x8000) {
+    utempl++;
+    crs[B] &= 0x7fff;
   }
+  utempl += m;
+  crs[A] = utempl;
+  if (utempl & 0x10000)                  /* set L-bit if carry */
+    crs[KEYS] |= 020000;  
+  /* NOTE: this EQ test prevents reusing the ADD code :( */
+  if (*(int *)(crs+L) == 0)              /* set EQ? */
+    SETEQ; 
+  if (((~utempa ^ m) & (utempa ^ crs[A])) & 0x8000) {
+    if (*(int *)(crs+L) >= 0)
+      SETLT;
+    mathexception('i', FC_INT_OFLOW, 0);
+  } else if (*(int *)(crs+L) < 0)
+    SETLT;
+  goto fetch;
+
+d_sub:  /* 00700 (V-mode) */
+  m = get16t(ea);
+  utempa = crs[A];
+  TRACE(T_FLOW, " SUB ='%o/%d\n", m, *(short *)&m);
+  add16(crs+A, ~m, 1, ea);
   goto fetch;
 
 d_subdsb:  /* 00700 */
+  if (!(crs[KEYS] & 040000))
+    goto d_sub;
+  TRACE(T_FLOW, " DSB\n");
   crs[KEYS] &= ~0120300;   /* clear C, L, and CC */
   utempa = crs[A];
   m = get16t(ea);
-  if ((crs[KEYS] & 050000) != 040000) {
-    TRACE(T_FLOW, " SUB ='%o/%d\n", m, *(short *)&m);
-    add16(crs+A, ~m, 1, ea);
-  } else {
-    TRACE(T_FLOW, " DSB\n");
-    crs[B] -= get16t(INCVA(ea,1));
-    utempl = crs[A];
-    if (crs[B] & 0x8000) {
-      utempl += 0xFFFF;
-      crs[B] &= 0x7fff;
-    }
-    utempl += (unsigned short) ~m;
-    utempl += 1;
-    crs[A] = utempl;                       /* truncate results */
-    if (utempl & 0x10000)                  /* set L-bit if carry */
-      crs[KEYS] |= 020000;  
-    if (*(int *)(crs+L) == 0)              /* set EQ? */
-      SETEQ; 
-    if (((utempa ^ m) & (utempa ^ crs[A])) & 0x8000) {
-      if (*(int *)(crs+L) >= 0)
-	SETLT;
-      mathexception('i', FC_INT_OFLOW, 0);
-    } else if (*(int *)(crs+L) < 0)
-      SETLT;
+  crs[B] -= get16t(INCVA(ea,1));
+  utempl = crs[A];
+  if (crs[B] & 0x8000) {
+    utempl += 0xFFFF;
+    crs[B] &= 0x7fff;
   }
+  utempl += (unsigned short) ~m;
+  utempl += 1;
+  crs[A] = utempl;                       /* truncate results */
+  if (utempl & 0x10000)                  /* set L-bit if carry */
+    crs[KEYS] |= 020000;  
+  if (*(int *)(crs+L) == 0)              /* set EQ? */
+    SETEQ; 
+  if (((utempa ^ m) & (utempa ^ crs[A])) & 0x8000) {
+    if (*(int *)(crs+L) >= 0)
+      SETLT;
+    mathexception('i', FC_INT_OFLOW, 0);
+  } else if (*(int *)(crs+L) < 0)
+    SETLT;
   goto fetch;
 
 d_ora:  /* 00302 */
@@ -9059,13 +9079,13 @@ d_cas:  /* 01100 */
   stopwatch_push(&sw_cas);
   m = get16t(ea);
   TRACE(T_FLOW, " CAS ='%o/%d\n", m, *(short *)&m);
-#if 0
-  if (crs[A] == m) {
-    INCRP;
-  } else if (*(short *)(crs+A) < *(short *)&m) {
-    RPL += 2;
-  }
-#else
+
+#if 1
+
+  /* this crap is to set L & CC like subtract would, even though
+     most programs never tested these after CAS.  add16 can't be
+     used because docs say CAS leaves C-bit unchanged... :( */
+
   crs[KEYS] &= ~020300;   /* clear L, and CC */
   utempa = crs[A];
   utempl = crs[A];
@@ -9082,11 +9102,13 @@ d_cas:  /* 01100 */
   } else if (*(short *)(crs+A) < 0)
     SETLT;
   crs[A] = utempa;                       /* restore A reg */
-  if (crs[A] == m)
-    INCRP;
-  else if (*(short *)(crs+A) < *(short *)&m)
-    RPL += 2;
 #endif
+
+  if (crs[A] == m) {
+    INCRP;
+  } else if (*(short *)(crs+A) < *(short *)&m) {
+    RPL += 2;
+  }
   stopwatch_pop(&sw_cas);
   goto fetch;
 
@@ -9123,39 +9145,39 @@ d_stx:  /* 01500 */
   put16t(crs[X],ea);
   goto fetch;
 
-/* MPY can't overflow in V-mode, but in R-mode (31 bits),
-   -32768*-32768 can overflow and yields 0x8000/0x0000 */
+  /* MPY can't overflow in V-mode */
 
-d_mpy:  /* 01600 */
+d_mpy:  /* 01600 (V-mode) */
+  m = get16t(ea);
+  TRACE(T_FLOW, " MPY ='%o/%d\n", m, *(short *)&m);
+  *(int *)(crs+L) = *(short *)(crs+A) * *(short *)&m;
+  CLEARC;
+  goto fetch;
+
+  /* in R-mode (31 bits), -32768*-32768 can overflow and yields
+   0x8000/0x0000 */
+
+d_mpy_r:  /* 01600 (R-mode) */
   m = get16t(ea);
   TRACE(T_FLOW, " MPY ='%o/%d\n", m, *(short *)&m);
   templ = *(short *)(crs+A) * *(short *)&m;
   CLEARC;
-  if (crs[KEYS] & 010000) {          /* V/I mode */
-    *(int *)(crs+L) = templ;
-  } else {                           /* R/S mode */
-    utempa = crs[A];
-    crs[A] = (templ >> 15);
-    crs[B] = templ & 077777;
-    if (utempa == 0x8000 && m == 0x8000)
-      mathexception('i', FC_INT_OFLOW, 0);
-  }
+  utempa = crs[A];
+  crs[A] = (templ >> 15);
+  crs[B] = templ & 077777;
+  if (utempa == 0x8000 && m == 0x8000)
+    mathexception('i', FC_INT_OFLOW, 0);
   goto fetch;
 
-d_mpl:  /* 01603 */
+d_mpl:  /* 01603 (V-mode) */
+  templ = get32(ea);
+  TRACE(T_FLOW, " MPL ='%o/%d\n", templ, *(int *)&templ);
+  *(long long *)(crs+L) = (long long)(*(int *)(crs+L)) * (long long)templ;
+  CLEARC;
+  goto fetch;
 
-  /* DIAG CPU.FAULT uses this instruction in R-mode to triggger a
-     UII fault, so this instruction (unlike most) checks the keys.
-     This is a general problem with all instructions: they don't
-     ensure the instruction is legal in the current mode */
-
-  if ((crs[KEYS] & 010000)) {        /* V/I mode */
-    templ = get32(ea);
-    TRACE(T_FLOW, " MPL ='%o/%d\n", templ, *(int *)&templ);
-    *(long long *)(crs+L) = (long long)(*(int *)(crs+L)) * (long long)templ;
-    CLEARC;
-  } else 
-    fault(UIIFAULT, RPL, RP);
+d_uii:
+  fault(UIIFAULT, RPL, RP);
   goto fetch;
 
 d_div:  /* 01700 */
@@ -9203,95 +9225,96 @@ d_ldx:  /* 03500 */
   crs[X] = get16t(ea);
   goto fetch;
 
-d_ealeaa:  /* 00101 */
-  if (crs[KEYS] & 010000) {          /* V/I mode */
-    TRACE(T_FLOW, " EAL\n");
-    *(ea_t *)(crs+L) = ea;
-  } else {
-    TRACE(T_FLOW, " EAA\n");
-    crs[A] = ea;
-  }
+d_eal:  /* 00101 (V-mode) */
+  TRACE(T_FLOW, " EAL\n");
+  *(ea_t *)(crs+L) = ea;
   goto fetch;
 
-d_ldljeq:  /* 00203 */
-  if (crs[KEYS] & 010000) {          /* V/I mode */
-    *(unsigned int *)(crs+L) = get32(ea);
-    TRACE(T_FLOW, " LDL ='%o/%d\n", *(unsigned int *)(crs+A), *(int *)(crs+A));
-  } else {
-    TRACE(T_FLOW, " JEQ\n");
-    if (*(short *)(crs+A) == 0)
-      RPL = ea;
-  }
+d_eaa:  /* 00101 (R-mode) */
+  TRACE(T_FLOW, " EAA\n");
+  crs[A] = ea;
   goto fetch;
 
-d_sbljge:  /* 00703 */
-  if (crs[KEYS] & 010000) {          /* V/I mode */
-    utempl = get32(ea);
-    TRACE(T_FLOW, " SBL ='%o/%d\n", utempl, *(int *)&utempl);
-    add32(crsl+GR2, ~utempl, 1, ea);
-  } else {
-    TRACE(T_FLOW, " JGE\n");
-    if (*(short *)(crs+A) >= 0)
-      RPL = ea;
-  }
+d_ldl:  /* 00203 (V-mode) */
+  *(unsigned int *)(crs+L) = get32(ea);
+  TRACE(T_FLOW, " LDL ='%o/%d\n", *(unsigned int *)(crs+A), *(int *)(crs+A));
   goto fetch;
 
-d_pclcrep:  /* 01002 */
+d_jeq:  /* 00203 (R-mode) */
+  TRACE(T_FLOW, " JEQ\n");
+  if (*(short *)(crs+A) == 0)
+    RPL = ea;
+  goto fetch;
+
+d_sbl:  /* 00703 (V-mode) */
+  utempl = get32(ea);
+  TRACE(T_FLOW, " SBL ='%o/%d\n", utempl, *(int *)&utempl);
+  add32(crsl+GR2, ~utempl, 1, ea);
+  goto fetch;
+
+d_jge:  /* 00703 (R-mode) */
+  TRACE(T_FLOW, " JGE\n");
+  if (*(short *)(crs+A) >= 0)
+    RPL = ea;
+  goto fetch;
+
+d_pcl:  /* 01002 (V-mode) */
 
   /* NOTE: real PCL code is in I-mode section! */
 
-  if (crs[KEYS] & 010000)            /* V/I mode */
-    goto imodepcl;
+  goto imodepcl;
+
+d_crep:  /* 01002 (R-mode) */
   TRACE(T_FLOW, " CREP\n");
   put16t(RPL,crs[S]++);
   RPL = ea;
   goto fetch;
 
-d_erljgt:  /* 00503 */
-  if (crs[KEYS] & 010000) {          /* V/I mode */
-    utempl = get32(ea);
-    TRACE(T_FLOW, " ERL ='%o/%d  '%o/'%o  %d/%d\n", utempl, *(int *)&utempl, utempl>>16, utempl&0xFFFF, utempl>>16, utempl&0xFFFF);
-    *(unsigned int *)(crs+L) ^= utempl;
-  } else {
-    TRACE(T_FLOW, " JGT\n");
-    if (*(short *)(crs+A) > 0)
-      RPL = ea;
-  }
+d_erl:  /* 00503 (V-mode) */
+  utempl = get32(ea);
+  TRACE(T_FLOW, " ERL ='%o/%d  '%o/'%o  %d/%d\n", utempl, *(int *)&utempl, utempl>>16, utempl&0xFFFF, utempl>>16, utempl&0xFFFF);
+  *(unsigned int *)(crs+L) ^= utempl;
   goto fetch;
 
-d_stljle:  /* 00403 */
-  if (crs[KEYS] & 010000) {          /* V/I mode */
-    TRACE(T_FLOW, " STL\n");
-    put32(*(unsigned int *)(crs+L),ea);
-  } else {
-    TRACE(T_FLOW, " JLE\n");
-    if (*(short *)(crs+A) <= 0)
-      RPL = ea;
-  }
+d_jgt:  /* 00503 (R-mode) */
+  TRACE(T_FLOW, " JGT\n");
+  if (*(short *)(crs+A) > 0)
+    RPL = ea;
   goto fetch;
 
-d_adljlt:  /* 00603 */
-  if (crs[KEYS] & 010000) {          /* V/I mode */
-    utempl = get32(ea);
-    TRACE(T_FLOW, " ADL ='%o/%d\n", utempl, *(int *)&utempl);
-    add32(crsl+GR2, utempl, 0, ea);
-  } else {
-    TRACE(T_FLOW, " JLT\n");
-    if (*(short *)(crs+A) < 0)
-      RPL = ea;
-  }
+d_stl:  /* 00403 (V-mode) */
+  TRACE(T_FLOW, " STL\n");
+  put32(*(unsigned int *)(crs+L),ea);
   goto fetch;
 
-d_anljne:  /* 00303 */
-  if (crs[KEYS] & 010000) {          /* V/I mode */
-    utempl = get32(ea);
-    TRACE(T_FLOW, " ANL ='%o\n", utempl);
-    *(unsigned int *)(crs+L) &= utempl;
-  } else {
-    TRACE(T_FLOW, " JNE\n");
-    if (*(short *)(crs+A) != 0)
-      RPL = ea;
-  }
+d_jle:  /* 00403 (R-mode) */
+  TRACE(T_FLOW, " JLE\n");
+  if (*(short *)(crs+A) <= 0)
+    RPL = ea;
+  goto fetch;
+
+d_adl:  /* 00603 (V-mode) */
+  utempl = get32(ea);
+  TRACE(T_FLOW, " ADL ='%o/%d\n", utempl, *(int *)&utempl);
+  add32(crsl+GR2, utempl, 0, ea);
+  goto fetch;
+
+d_jlt:  /* 00603 (R-mode) */
+  TRACE(T_FLOW, " JLT\n");
+  if (*(short *)(crs+A) < 0)
+    RPL = ea;
+  goto fetch;
+
+d_anl:  /* 00303 (V-mode) */
+  utempl = get32(ea);
+  TRACE(T_FLOW, " ANL ='%o\n", utempl);
+  *(unsigned int *)(crs+L) &= utempl;
+  goto fetch;
+
+d_jne:  /* 00303 (R-mode) */
+  TRACE(T_FLOW, " JNE\n");
+  if (*(short *)(crs+A) != 0)
+    RPL = ea;
   goto fetch;
 
 d_eaxb:  /* 01202 */
@@ -9299,16 +9322,16 @@ d_eaxb:  /* 01202 */
   *(ea_t *)(crs+XB) = ea;
   goto fetch;
 
-d_dflxjdx:  /* 01502 */
-  if (crs[KEYS] & 010000) {          /* V/I mode */
-    TRACE(T_FLOW, " DFLX\n");
-    crs[X] = get16(ea) * 4;
-  } else {
-    TRACE(T_FLOW, " JDX\n");
-    crs[X]--;
-    if (crs[X] != 0)
-      RPL = ea;
-  }
+d_dflx:  /* 01502 (V-mode) */
+  TRACE(T_FLOW, " DFLX\n");
+  crs[X] = get16(ea) * 4;
+  goto fetch;
+
+d_jdx:  /* 01502 (R-mode) */
+  TRACE(T_FLOW, " JDX\n");
+  crs[X]--;
+  if (crs[X] != 0)
+    RPL = ea;
   goto fetch;
 
 d_sty:  /* 03502 */
@@ -9316,16 +9339,16 @@ d_sty:  /* 03502 */
   put16(crs[Y],ea);
   goto fetch;
 
-d_qflxjix:  /* 01503 */
-  if (crs[KEYS] & 010000) {          /* V/I mode */
-    TRACE(T_FLOW, " QFLX\n");
-    crs[X] = get16(ea) * 8;
-  } else {
-    TRACE(T_FLOW, " JIX\n");
-    crs[X]++;
-    if (crs[X] != 0)
-      RPL = ea;
-  }
+d_qflx:  /* 01503 (V-mode) */
+  TRACE(T_FLOW, " QFLX\n");
+  crs[X] = get16(ea) * 8;
+  goto fetch;
+
+d_jix:  /* 01503 (R-mode) */
+  TRACE(T_FLOW, " JIX\n");
+  crs[X]++;
+  if (crs[X] != 0)
+    RPL = ea;
   goto fetch;
 
 d_flx:  /* 01501 */
@@ -9577,7 +9600,7 @@ d_dfst:  /* 0402 */
   TRACE(T_FLOW, " Stored %f  '%o %o %o %o\n", tempd1, crs[FLTH], crs[FLTL], crs[FLTD], crs[FEXP]);
   goto fetch;
 
- d_ealb:  /* 01302 */
+d_ealb:  /* 01302 */
   TRACE(T_FLOW, " EALB\n");
   *(ea_t *)(crs+LB) = ea;
   goto fetch;
