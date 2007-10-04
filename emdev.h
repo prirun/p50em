@@ -1257,7 +1257,7 @@ int devmt (int class, int func, int device) {
     TRACE(T_TIO,  " POLL device '%02o, enabled=%d, interrupting=%d\n", device, enabled, interrupting);
     if (enabled && (interrupting == 1)) {
       devpoll[device] = 100;         /* assume interrupt will be deferred */
-      if (gvp->intvec == -1 && (crs[MODALS] & 0100000) && gvp->inhcount == 0) {
+      if (gvp->intvec == -1 && (crs[MODALS] & 0100000)) {
 	TRACE(T_TIO,  " CPU interrupt to vector '%o\n", mtvec);
 	gvp->intvec = mtvec;
 	devpoll[device] = 0;
@@ -2086,7 +2086,7 @@ int devdisk (int class, int func, int device) {
 
       case 14: /* DINT = generate interrupt through vector address */
 	TRACE(T_INST|T_DIO,  " interrupt through '%o\n", m1);
-	if (gvp->intvec >= 0 || !(crs[MODALS] & 0100000) || gvp->inhcount > 0)
+	if (gvp->intvec >= 0 || !(crs[MODALS] & 0100000))
 	  dc[device].oar -= 2;     /* can't take interrupt right now */
 	else {
 	  gvp->intvec = m1;

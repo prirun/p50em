@@ -4642,42 +4642,43 @@ fetch:
 
   /* is an interrupt pending, with interrupts enabled? */
 
-  if (gvp->inhcount)
-    gvp->inhcount--;
-  else if (gvp->intvec >= 0 && (crs[MODALS] & 0100000) /* && gvp->inhcount == 0 */) {
-    //printf("fetch: taking interrupt vector '%o, modals='%o\n", gvp->intvec, crs[MODALS]);
-    TRACE(T_FLOW, "\nfetch: taking interrupt vector '%o, modals='%o\n", gvp->intvec, crs[MODALS]);
-    regs.sym.pswpb = RP;
-    regs.sym.pswkeys = crs[KEYS];
+  if (gvp->intvec >= 0 && (crs[MODALS] & 0100000)) {
+    if (gvp->inhcount == 0) {
+      //printf("fetch: taking interrupt vector '%o, modals='%o\n", gvp->intvec, crs[MODALS]);
+      TRACE(T_FLOW, "\nfetch: taking interrupt vector '%o, modals='%o\n", gvp->intvec, crs[MODALS]);
+      regs.sym.pswpb = RP;
+      regs.sym.pswkeys = crs[KEYS];
 
-    if (crs[MODALS] & 010) {              /* PX enabled */
-      //gvp->traceflags = ~TB_MAP;
-      newkeys(014000);
-      RPH = 4;
-      RPL = gvp->intvec;
+      if (crs[MODALS] & 010) {              /* PX enabled */
+	//gvp->traceflags = ~TB_MAP;
+	newkeys(014000);
+	RPH = 4;
+	RPL = gvp->intvec;
 
-    } else if (crs[MODALS] & 040000) {    /* vectored interrupt mode */
-      m = get16(gvp->intvec);
-      if (m != 0) {
-	put16(RPL, m);
-	RP = m+1;
-      } else {
-	printf("fetch: interrupt vector '%o = 0 in vectored interrupt mode\n", gvp->intvec);
-	fatal(NULL);
+      } else if (crs[MODALS] & 040000) {    /* vectored interrupt mode */
+	m = get16(gvp->intvec);
+	if (m != 0) {
+	  put16(RPL, m);
+	  RP = m+1;
+	} else {
+	  printf("fetch: interrupt vector '%o = 0 in vectored interrupt mode\n", gvp->intvec);
+	  fatal(NULL);
+	}
+
+      } else {                              /* standard interrupt mode */
+	m = get16(063);
+	//printf("Standard mode interrupt vector loc = %o\n", m);
+	//gvp->traceflags = ~TB_MAP;
+	if (m != 0) {
+	  put16(RPL, m);
+	  RP = m+1;
+	} else {
+	  fatal("em: loc '63 = 0 when standard mode interrupt occurred");
+	}
       }
-
-    } else {                              /* standard interrupt mode */
-      m = get16(063);
-      //printf("Standard mode interrupt vector loc = %o\n", m);
-      //gvp->traceflags = ~TB_MAP;
-      if (m != 0) {
-	put16(RPL, m);
-	RP = m+1;
-      } else {
-	fatal("em: loc '63 = 0 when standard mode interrupt occurred");
-      }
-    }
-    crs[MODALS] &= 077777;   /* inhibit interrupts */
+      crs[MODALS] &= 077777;   /* inhibit interrupts */
+    } else
+      gvp->inhcount--;
   }
 
   gvp->prevpc = RP;

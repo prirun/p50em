@@ -161,7 +161,7 @@ labB:
        SB%+20,*, which may still be in the same page.  Don't switch to
        UNBR if the new ea is still in the current page */
 
-    if ((((ea_s & 0x8FFF) << 16) | (ea_w & 0xFC00)) != eap->vpn)
+    if ((((ea_s & 0x8FFF) << 16) | (ea_w & 0xFC00)) != (eap->vpn & 0x0FFFFFFF))
       eap = &gvp->brp[UNBR];
   }
   if (xok)
