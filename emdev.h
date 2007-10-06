@@ -1517,17 +1517,20 @@ int devcp (int class, int func, int device) {
 	  }
 	}
 
-	/* update instpermsec every 5 seconds
-	   NB: this should probably be done whether the clock is running
-	   or not */
+	/* update instpermsec every 5 seconds.  Check for instcount
+	   overflow and reset when it occurs.
 
-	if (gvp->instcount-previnstcount > gvp->instpermsec*1000*5) {
-	  gvp->instpermsec = (gvp->instcount-previnstcount) /
-	    ((tv.tv_sec-prev_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-prev_tv.tv_usec)/1000);
-	  //printf("gvp->instcount = %d, previnstcount = %d, diff=%d, instpermsec=%d\n", gvp->instcount, previnstcount, gvp->instcount-previnstcount, gvp->instpermsec);
+	   XXX: this code should probably be done whether or not the clock is running */
+
+	if ((gvp->instcount < previnstcount) || (gvp->instcount-previnstcount > gvp->instpermsec*1000*5)) {
+	  if (gvp->instcount-previnstcount > gvp->instpermsec*1000*5) {
+	    gvp->instpermsec = (gvp->instcount-previnstcount) /
+	      ((tv.tv_sec-prev_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-prev_tv.tv_usec)/1000);
+	    //printf("gvp->instcount = %u, previnstcount = %u, diff=%u, instpermsec=%d\n", gvp->instcount, previnstcount, gvp->instcount-previnstcount, gvp->instpermsec);
 #ifdef NOIDLE
-	  printf("\ninstpermsec=%d\n", gvp->instpermsec);
+	    //printf("\ninstpermsec=%d\n", gvp->instpermsec);
 #endif
+	  }
 	  previnstcount = gvp->instcount;
 	  prev_tv = tv;
 	}

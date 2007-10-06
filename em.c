@@ -721,7 +721,7 @@ readloadmap(char *filename) {
   TRACEA("Reading load map from %s... ", filename);
   if ((mapf = fopen(filename, "r")) == NULL) {
     perror("Map file open");
-    fatal(NULL);
+    fatal("Error reading map file");
   }
   lc = 0;
   while (fgets(line, sizeof(line), mapf) != NULL) {
@@ -1503,13 +1503,11 @@ void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int dswsta
      if PX not enabled, simulate JST p300vec,* to invoke the check.
      Then longjmp back to the fetch loop */
 
-  if (crs[MODALS] & 010) {
-    printf(" map: missing memory while PX enabled\n");
-  } else {
-    m = get16(p300vec);
-    put16(RPL, m);
-    RP = m+1;
-  }
+  if (crs[MODALS] & 010)
+    fatal(" macheck: machine check (missing memory) with PX enabled\n");
+  m = get16(p300vec);
+  put16(RPL, m);
+  RP = m+1;
 
   /* similar code in the fault handler */
 
@@ -2502,15 +2500,10 @@ static argt() {
   /* reload the caller's base registers for EA calculations */
   
   brsave[0] = rp >> 16;    brsave[1] = 0;
-#if 0
-  *(long long *)(brsave+2) = get64(stackfp+4);
-  /* HACK: set ring bits on LB and SB to get correct ring on args */
-  brsave[2] |= (brsave[0] & RINGMASK16);
-  brsave[4] |= (brsave[0] & RINGMASK16);
-#else
+  /* set ring bits on LB and SB to get correct ring on args */
   *(ea_t *)(brsave+2) = get32(stackfp+4) | (rp & RINGMASK32);
   *(ea_t *)(brsave+4) = get32(stackfp+6) | (rp & RINGMASK32);
-#endif
+
   argdisp = crs[Y];
   argsleft = crs[YL];
   while (argsleft > 0 || !crs[XL]) {
@@ -3209,8 +3202,8 @@ static dispatcher() {
 
   if (crs[OWNERL] == pcbw) {
     TRACE(T_PX, "disp: reg set already owned by %o: no save or load\n", crs[OWNERL]);
-    /* NOTE: call newkeys to make sure amask gets set correctly!  Otherwise, 32R mode programs
-       are flaky */
+    /* NOTE: call newkeys to make sure amask gets set correctly!
+       Otherwise, 32R mode programs are flaky */
     newkeys(crs[KEYS]);
   } else {
     pxregsave(0);
@@ -3219,7 +3212,7 @@ static dispatcher() {
 
   RP = *(unsigned int *)(crs+PB);
   crs[PBL] = 0;
-  crs[KEYS] &= ~3;                           /* erase "in dispatcher" and "save done" */
+  crs[KEYS] &= ~3;                 /* erase "in dispatcher" and "save done" */
   TRACE(T_PX, "disp: returning from dispatcher, running process %o/%o at %o/%o, modals=%o, ppa=%o, pla=%o, ppb=%o, plb=%o\n", crs[OWNERH], crs[OWNERL], RPH, RPL, crs[MODALS], regs.sym.pcba, regs.sym.pla, regs.sym.pcbb, regs.sym.plb);
 
   /* if this process' abort flags are set, clear them and take process fault */
@@ -3227,7 +3220,6 @@ static dispatcher() {
   utempa = get16r0(pcbp+PCBABT);
   if (utempa != 0) {
     TRACE(T_PX, "dispatch: abort flags for %o are %o\n", crs[OWNERL], utempa);
-    //printf("dispatch: abort flags for %o are %o\n", crs[OWNERL], utempa);
     put16r0(0, pcbp+PCBABT);
     fault(PROCESSFAULT, utempa, 0);
     fatal("fault returned after process fault");    
@@ -3368,55 +3360,59 @@ static pwait() {
   bol = utempl & 0xFFFF;      /* beginning of wait list */
   TRACE(T_PX, " wait list count was %d, bol was %o\n", count, bol);
   count++;
-  if (count > 0) {      /* I have to wait */
-    if (count == 1 && bol != 0)
-      fatal("WAIT: count == 1 but bol != 0");
-    if (count > 1 && bol == 0)
-      fatal("WAIT: count > 1 but bol == 0");
-    if (regs.sym.pcba == 0)
-      fatal("WAIT: pcba is zero");
+  if (count <= 0) {           /* no wait is needed (mutex locks) */
+    put16(*(unsigned short *)&count, ea); /* so update count and continue */
+    return;
+  }
+
+  /* I have to wait */
+
+  if (count == 1 && bol != 0)
+    fatal("WAIT: count == 1 but bol != 0");
+  if (count > 1 && bol == 0)
+    fatal("WAIT: count > 1 but bol == 0");
+  if (regs.sym.pcba == 0)
+    fatal("WAIT: pcba is zero");
 #if 0
-    /* enabling this causes rev 23.4 to fail:
+  /* enabling this causes rev 23.4 to fail:
 WAIT: pcba=100500 != ownerl=71600
 Fatal error: instruction #86137885 at 6/15274 UNLOAD+'120: 315 1400
 owner=71600 DUMPCB, keys=14000, modals=77           */
 
-    if (regs.sym.pcba != crs[OWNERL]) {
-      printf("WAIT: pcba=%o != ownerl=%o\n", regs.sym.pcba, crs[OWNERL]);
-      fatal(NULL);
-    }
+  if (regs.sym.pcba != crs[OWNERL]) {
+    printf("WAIT: pcba=%o != ownerl=%o\n", regs.sym.pcba, crs[OWNERL]);
+    fatal(NULL);
+  }
 #endif
-    mylev = get16r0(*(ea_t *)(crs+OWNER));
+  mylev = get16r0(*(ea_t *)(crs+OWNER));
 
-    if (bol != 0) {
-      pcbp = MAKEVA(crs[OWNERH],bol);
-      pcblevnext = get32r0(pcbp);
-      pcblev = pcblevnext >> 16;
-    }
-    TRACE(T_PX, " my level=%o, pcblev=%o\n", mylev, pcblev);
+  if (bol != 0) {
+    pcbp = MAKEVA(crs[OWNERH],bol);
+    pcblevnext = get32r0(pcbp);
+    pcblev = pcblevnext >> 16;
+  }
+  TRACE(T_PX, " my level=%o, pcblev=%o\n", mylev, pcblev);
 
-    if (count == 1 || mylev < pcblev) {   /* add me to the beginning */
-      utempl = (count<<16) | crs[OWNERL];
-      put32r0(utempl, ea);    /* update semaphore count/bol */
-    } else {
-      /* do a priority scan... */
-      while (pcblev <= mylev && bol != 0) {
-	prevpcbp = pcbp;
-	bol = pcblevnext & 0xFFFF;
-	if (bol != 0) {
-	  pcbp = MAKEVA(crs[OWNERH],bol);
-	  pcblevnext = get32r0(pcbp);
-	  pcblev = pcblevnext >> 16;
-	}
+  if (count == 1 || mylev < pcblev) {   /* add me to the beginning */
+    utempl = (count<<16) | crs[OWNERL];
+    put32r0(utempl, ea);    /* update semaphore count/bol */
+  } else {
+    /* do a priority scan... */
+    while (pcblev <= mylev && bol != 0) {
+      prevpcbp = pcbp;
+      bol = pcblevnext & 0xFFFF;
+      if (bol != 0) {
+	pcbp = MAKEVA(crs[OWNERH],bol);
+	pcblevnext = get32r0(pcbp);
+	pcblev = pcblevnext >> 16;
       }
-      put16r0(crs[OWNERL], prevpcbp+PCBLINK);
-      put16r0(*(unsigned short *)&count, ea);    /* update count */
-      TRACE(T_PX, " new count=%d, new link for pcb %o=%o, bol=%o\n", count, prevpcbp&0xffff, crs[OWNERL], bol);
     }
-    unready(ea, bol);
-    dispatcher();
-  } else
-    put16(*(unsigned short *)&count, ea); /* just update count and continue */
+    put16r0(crs[OWNERL], prevpcbp+PCBLINK);
+    put16r0(*(unsigned short *)&count, ea);    /* update count */
+    TRACE(T_PX, " new count=%d, new link for pcb %o=%o, bol=%o\n", count, prevpcbp&0xffff, crs[OWNERL], bol);
+  }
+  unready(ea, bol);
+  dispatcher();
 }
 
 /* this handles several forms of notify:
@@ -6133,75 +6129,81 @@ d_bdy:  /* 0140724 */
 
 d_bdx:  /* 0140734 */
   TRACE(T_FLOW, " BDX\n");
-#ifndef NOIDLE
-  m = iget16(RP);
-  if (crs[X] > 100 && m == RPL-1) {
-    struct timeval tv0,tv1;
-    long delayusec, actualmsec;
-
-    /* for BDX *-1 loop (backstop process mainly), we want to change
-       this to a long sleep so that the emulation host's CPU isn't 
-       pegged the whole time the emulator is running.
-
-       So first, check to see if any device times expire sooner than
-       this, and if so, limit the sleep time to the lowest expiration
-       value (this is stored as number of instructions left until the
-       timer expires).
-
-       NOTE: In practice, the clock device ticks at 330 times a sec
-       under standard Primos so we only get to delay about 3ms here,
-       but it still keeps CPU usage to 4-5% on a 1.5GHz Mac.  Primos
-       mods to make the clock tick 20 times per second allows for
-       much longer sleeps here, ie, CPU overhead is 0.7% while idle.
-    */
-
-    stopwatch_start(&sw_idle);
-    utempl = gvp->instpermsec*100;         /* limit delay to 100 msecs */
-    for (i=0; i<64; i++)              /* check device timers */
-      if (devpoll[i])                 /* poll set? */
-	if (devpoll[i] <= 100) {      /* too fast! */
-	  utempl = 1;
-	  break;
-	} else if (devpoll[i] < utempl)
-	  utempl = devpoll[i];
-    utempl--;                         /* utempl = # instructions */
-    delayusec = utempl*1000/gvp->instpermsec;
-    if (delayusec > 1000) {
-      if (gettimeofday(&tv0, NULL) != 0)
-	fatal("em: gettimeofday 0 failed");
-      usleep(delayusec);
-      if (gettimeofday(&tv1, NULL) != 0)
-	fatal("em: gettimeofday 1 failed");
-      actualmsec = (tv1.tv_sec-tv0.tv_sec-1)*1000 + (tv1.tv_usec+1000000-tv0.tv_usec)/1000;
-      // TRACEA(" BDX loop at %o/%o, remainder=%d, owner=%o, utempl=%d, wanted %d us, got %d ms\n", gvp->prevpc>>16, gvp->prevpc&0xffff, crs[X], crs[OWNERL], utempl, delayusec, actualusec);
-
-      /* do timer bookkeeping that would have occurred if we had 
-	 actually looped on BDX utempl times */
-
-      for (i=0; i<64; i++)
-	if (devpoll[i] > 0)
-	  devpoll[i] -= utempl;
-      crs[X] = 1;                            /* decremented below */
-      utempa = crs[TIMER];
-      if (actualmsec > 0) {
-	crs[TIMER] += actualmsec;
-	if (crs[TIMER] < utempa) {
-	  tempea = *(ea_t *)(crs+OWNER);
-	  utempa = get16r0(tempea+4) | 1;    /* set process abort flag */
-	  put16r0(utempa, tempea+4);
-	}
-      } else {
-	crs[TIMERL] += utempl;
-      }
-      gvp->instcount += actualmsec*gvp->instpermsec;
-    }
-    stopwatch_stop(&sw_idle);
-  }
-#endif
-  if ((short)(--crs[X]) != 0) 
-    RPL = iget16(RP);
-  else
+  if ((short)(--crs[X]) == 0) 
     INCRP;
+  else {
+    m = iget16(RP);
+#ifndef NOIDLE
+    if (crs[X] > 100 && m == RPL-1) {
+      struct timeval tv0,tv1;
+      long delayusec, actualmsec;
+
+      /* for BDX *-1 loop (backstop process mainly), we want to change
+	 this to a long sleep so that the emulation host's CPU isn't 
+	 pegged the whole time the emulator is running.
+
+	 So first, check to see if any device times expire sooner than
+	 this, and if so, limit the sleep time to the lowest expiration
+	 value (this is stored as number of instructions left until the
+	 timer expires).
+
+	 NOTE: In practice, the clock device ticks at 330 times a sec
+	 under standard Primos so we only get to delay about 3ms here,
+	 but it still keeps CPU usage to 4-5% on a 1.5GHz Mac.  Primos
+	 mods to make the clock tick 20 times per second allows for
+	 much longer sleeps here, ie, CPU overhead is 0.7% while idle.
+      */
+
+      stopwatch_start(&sw_idle);
+      utempl = gvp->instpermsec*100;         /* limit delay to 100 msecs */
+      for (i=0; i<64; i++)              /* check device timers */
+	if (devpoll[i])                 /* poll set? */
+	  if (devpoll[i] <= 100) {      /* too fast! */
+	    utempl = 1;
+	    break;
+	  } else if (devpoll[i] < utempl)
+	    utempl = devpoll[i];
+      
+      /* this decrement ensures that if a device had a poll pending,
+	 we won't decrement it to zero below, ie, it'll still fire
+	 in the main loop */
+
+      utempl--;                         /* utempl = # instructions */
+
+      delayusec = utempl*1000/gvp->instpermsec;
+      if (delayusec > 1000) {
+	if (gettimeofday(&tv0, NULL) != 0)
+	  fatal("em: gettimeofday 0 failed");
+	usleep(delayusec);
+	if (gettimeofday(&tv1, NULL) != 0)
+	  fatal("em: gettimeofday 1 failed");
+	actualmsec = (tv1.tv_sec-tv0.tv_sec-1)*1000 + (tv1.tv_usec+1000000-tv0.tv_usec)/1000;
+	// TRACEA(" BDX loop at %o/%o, remainder=%d, owner=%o, utempl=%d, wanted %d us, got %d ms\n", gvp->prevpc>>16, gvp->prevpc&0xffff, crs[X], crs[OWNERL], utempl, delayusec, actualusec);
+
+	/* do timer bookkeeping that would have occurred if we had 
+	   actually looped on BDX utempl times */
+
+	for (i=0; i<64; i++)
+	  if (devpoll[i] > 0)
+	    devpoll[i] -= utempl;
+	if (actualmsec > 0) {
+	  utempa = crs[TIMER];
+	  crs[TIMER] += actualmsec;
+	  if (crs[TIMER] < utempa) {           /* timer overflowed */
+	    tempea = *(ea_t *)(crs+OWNER);
+	    utempa = get16r0(tempea+4) | 1;    /* set process abort flag */
+	    put16r0(utempa, tempea+4);
+	  }
+	} else {
+	  crs[TIMERL] += utempl;
+	}
+	gvp->instcount += actualmsec*gvp->instpermsec;
+      }
+      stopwatch_stop(&sw_idle);
+    }
+#endif
+    RPL = m;
+  }
   goto fetch;
 
 d_a1a:  /* 0141206 */
