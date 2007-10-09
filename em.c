@@ -384,32 +384,35 @@ typedef struct {
    to hold the virtual page address and corresponding MEM[] pointer
    for a few special pages:
 
+   - the 4 base registers (PBBR, SBBR, LBBR, XBBR)
    - the current instruction page (RPBR)
    - sector zero (S0BR) of the current procedure
-   - the 4 base registers (PBBR, SBBR, LBBR, XBBR)
+   - field address registers 0 and 1 (F0BR, F1BR)
    - "unknown", used for indirect references (UNBR)
 
-   When an effective address is calculated, eap is set to point to
-   one of these cache entries.  If the reference is a write reference,
-   mapva always is called to do access checking.  But for reads, the
-   mapva call might be bypassed if the EA is within the page pointed
-   to by the eap entry.  If the mapva call is not bypassed for read,
-   then the eap entry is updated.
+   When an effective address is calculated, eap is set to point to one
+   of these cache entries.  If the EA, which is a virtual address,
+   references the same page as the cache entry pointed to by eap, then
+   the mapva call can be bypassed and the physical memory address
+   calculated using the cache.  If the cache can't be used, either
+   because the entry is invalid or the access isn't allowed (only for
+   writes), mapva is called to do the mapping and (assuming it doesn't
+   fault) the eap cache entry is updated.
 
    This special cache is invalidated whenever the STLB is changed,
    whenever a ring change occurs, and whenever a process exchange
-   occurs; no access checking is done when the cache is used: the
-   cache entry is either valid, meaning that the program has at least
-   read access to the page, or the cache entry is invalid (special
-   value of 0x000000FF, which is not a virtual page address - the
-   right 10 bits must be zero for the start of a page), in which case
-   mapva is called.
+   occurs.  For reads, no access checking is needed when the cache is
+   used: the cache entry is either valid, meaning that the program has
+   at least read access to the page, or the cache entry is invalid
+   (special value of 0x000000FF, which is not a virtual page address -
+   the right 10 bits must be zero for the start of a page), in which
+   case mapva is called.
 
-   The special cache could also be used for write references if each
-   entry were extended to have a "write okay" flag.  This would be
-   set when mapva is called and returns an access of 3 (WACC) instead
-   of 2 (RACC), and putxx routines could check for write access before
-   using the cache entry.
+   The special cache is also be used for write references.  Bits 2-4
+   of the cache entry vpn are the access bits from mapva, so bit 4
+   being 1 means that writes are allowed.  
+
+   IMPORTANT NOTE: bit 4 MUST BE CHECKED before all write references!
 */
 
 #define PBBR 0
@@ -431,7 +434,10 @@ typedef struct {
    PCL and PRTN when the ring changes).
 
    Storing the access bits in the vpn allows use of of the brp
-   cache for write accesses as well as read accesses. */
+   cache for write accesses as well as read accesses.  Only bit
+   4 (write allowed) is used, but since a 3-bit value comes back
+   from mapva, it's easier just to put it all in vpn.
+ */
 
 typedef struct {
   unsigned short *memp;       /* MEM[] physical page address */
@@ -443,7 +449,7 @@ void *disp_gen[4096];         /* generic dispatch table */
 /* "gv" is a static structure used to hold "hot" global variables.  These
    are pointed to by a dedicated register, so that the usual PowerPC global
    variable instructions aren't needed: these variables can be directly
-   referenced by instructions */
+   referenced by instructions as long as the structure is < 16K bytes. */
 
 typedef struct {
 
@@ -475,7 +481,7 @@ typedef struct {
 
   int csoffset;                 /* concealed stack segment offset */
 
-  int livereglim;               /* 010 if seg enabled, 040 if disabled */
+  unsigned int livereglim;      /* 010 if seg enabled, 040 if disabled */
 
   int mapvacalls;               /* # of mapva calls */
   int mapvamisses;              /* STLB misses */
@@ -1930,7 +1936,7 @@ static ea_t ea16s (unsigned short inst) {
   }
   va = MAKEVA(RPH, ea);
   if (ea < gvp->livereglim)                      /* flag live register ea */
-    return va | 0x80000000;
+    return 0x80000000 | va | (RP & RINGMASK32);
   return va;
 }
 
@@ -1968,7 +1974,7 @@ static ea_t ea32s (unsigned short inst) {
   ea &= amask;
   va = MAKEVA(RPH, ea);
   if (ea < gvp->livereglim)                      /* flag live register ea */
-    return va | 0x80000000;
+    return 0x80000000 | va | (RP & RINGMASK32);
   return va;
 }
 
@@ -2032,7 +2038,7 @@ static inline ea_t ea32r64r (ea_t earp, unsigned short inst) {
   ea &= amask;
   va = MAKEVA(rph, ea);
   if (ea < gvp->livereglim)                      /* flag live register ea */
-    return va | 0x80000000;
+    return 0x80000000 | va | (RP & RINGMASK32);
   return va;
 
 special:
@@ -2136,7 +2142,7 @@ special:
   va = MAKEVA(rph, ea);
   if (ea >= gvp->livereglim)
     return va;
-  return va | 0x80000000;                     /* flag live register ea */
+  return 0x80000000 | va | (RP & RINGMASK32);  /* flag live register ea */
 }
 
 #include "ea64v.h"
@@ -4681,6 +4687,7 @@ fetch:
   }
 
   gvp->prevpc = RP;
+
 #if 0
   /* NOTE: Rev 21 Sys Arch Guide, 2nd Ed, pg 3-32 says:
 
@@ -4689,23 +4696,32 @@ fetch:
      instruction, an address trap always occurs.  The only exception
      to this is if the machine is operating in 32I mode."
 
-     However, if this code is enabled, the Primos boot fails very
-     early, before verifying memory.
+     The line below is equivalent to:
 
-     NOTE 8/21/07: I think the problem here is that the test should
-     be:
-
+     ea = RP
      if !i-mode
        if segmented and ealow < 010 or !segmented and ealow < 040
          set ea to trap
+
+     NOTE 10/9/2007 (JW):
+     iget16 has checks for RP < 0 to indicate an address trap, and all
+     of the EA calculations can generate traps (and set the high-order
+     bit) except 32I.  
+
+     If it's a bad idea for RP to have the high-order bit set, then
+     this code can be enabled, along with special handling in JMP,
+     JSXB, JSY, JSX, and JST that is currently disabled.  I couldn't
+     see that one way worked better than the other, except enabling
+     this check on every instruction fetch is more overhead.  Setting
+     the HO bit of RP does expose this to Primos when a fault occurs
+     while executing code in registers.
   */
 
-  ea = RP;
-  if ((ea & 0xFFFF) < 010)
-    ea = 0x80000000 | (ea & 0xFFFF);
+  inst = iget16(RP | ((RPL >= gvp->livereglim || (crs[KEYS] & 0016000) == 010000) ? 0 : 0x80000000));
+#else
+  inst = iget16(RP);
 #endif
 
-  inst = iget16(RP);
   INCRP;
 
   /* while a process is running, RP is the real program counter, PBH
@@ -4897,7 +4913,7 @@ d_lfli0:  /* 001303 */
   TRACE(T_FLOW, " LFLI 0\n");
   utempa = iget16(RP);
   PUTFLR(0,utempa);
-  RP++;
+  INCRP;
   TRACE(T_FLOW, " Load Field length with %d, FLR=%x, actual = %d\n", utempa, crsl[FLR0], GETFLR(0));
   goto fetch;
 
@@ -5812,6 +5828,7 @@ d_cea:  /* 000111 */
 	ea += crs[X];
       if (!i)                          /* not indirect */
 	break;
+      /* XXX: should this be gvp->livereglim? */
       if (ea < 040)
 	m = get16(0x80000000|ea);
       else
@@ -5826,6 +5843,7 @@ d_cea:  /* 000111 */
   case 3:                       /* 32R */
     while (crs[A] & 0100000) {
       ea = crs[A] & 077777;
+      /* XXX: should this be gvp->livereglim? */
       if (ea < 040)
 	crs[A] = get16(0x80000000|ea);
       else
@@ -8968,7 +8986,12 @@ d_stadst:  /* 00400 (R-mode) */
 
 d_jmp:  /* 00100 */
   TRACE(T_FLOW, " JMP\n");
-  RP = ea;
+#if 0
+  if (*(int *)&ea < 0)          /* jumping to register address */
+    RPL = ea;                   /* preserve segment number in RP */
+  else
+#endif
+    RP = ea;
   goto fetch;
 
 d_ana:  /* 00300 */
@@ -9071,7 +9094,13 @@ d_jst:  /* 01000 */
   else
     m = (get16t(ea) & ~gvp->amask) | RPL;
   put16t(m, ea);
-  RP = INCVA(ea,1);
+#if 0
+  if (*(int *)&ea < 0)          /* jumping to register address */
+    RPL = ea;                   /* preserve segment number in RP */
+  else
+#endif
+    RP = ea;
+  INCRP;
   gvp->brp[RPBR] = *eap;
   if ((RP & RINGMASK32) == 0)
     gvp->inhcount = 1;
@@ -9133,13 +9162,23 @@ d_ima:  /* 01300 */
 d_jsy:  /* 01400 */
   TRACE(T_FLOW, " JSY\n");
   crs[Y] = RPL;
-  RP = ea;
+#if 0
+  if (*(int *)&ea < 0)          /* jumping to register address */
+    RPL = ea;                   /* preserve segment number in RP */
+  else
+#endif
+    RP = ea;
   goto fetch;
 
 d_jsxb:  /* 01402 */
   TRACE(T_FLOW, " JSXB\n");
   *(unsigned int *)(crs+XB) = RP;
-  RP = ea;
+#if 0
+  if (*(int *)&ea < 0)          /* jumping to register address */
+    RPL = ea;                   /* preserve segment number in RP */
+  else
+#endif
+    RP = ea;
   goto fetch;
 
 d_stx:  /* 01500 */
@@ -9366,7 +9405,12 @@ d_ldy:  /* 03501 */
 d_jsx:  /* 03503 */
   TRACE(T_FLOW, " JSX\n");
   crs[X] = RPL;
-  RP = ea;
+#if 0
+  if (*(int *)&ea < 0)          /* jumping to register address */
+    RPL = ea;                   /* preserve segment number in RP */
+  else
+#endif
+    RP = ea;
   goto fetch;
 
 /* XXX: this should set the L bit like subtract */

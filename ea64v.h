@@ -59,7 +59,7 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
       return MAKEVA(ea_s, ea_w);
     }
     TRACE(T_EAV, " Live register '%o\n", ea_w);
-    return 0x80000000 | ea_w;
+    return 0x80000000 | ea_w | (RP & RINGMASK32);
   }
 
   i = inst & 0100000;           /* indirect is bit 1 (left/MS bit) */
@@ -110,7 +110,7 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
   }
 
   TRACE(T_EAV, " Live register '%o\n", ea_w);
-  return 0x80000000 | ea_w;
+  return 0x80000000 | ea_w | (RP & RINGMASK32);
 
 
   /* here for long, 2-word, V-mode memory reference */
