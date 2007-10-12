@@ -33,6 +33,8 @@ http://tima-cmp.imag.fr/~guyot/Cours/Oparithm/english/Op_Ar2.htm
 
 */
 
+#include <float.h>
+
 #define GETFRAC(d) (*(long long *)&(d) & 0xFFFFFFFFFFFF0000LL)
 
 /* getdp unpacks a Prime DPFP into 48-bit sign + mantissa (left
@@ -138,29 +140,38 @@ int prieee8(void *dp, double *d) {
    this conversion cannot overflow/underflow, but precision may be
    lost */
 
-double ieeepr8(double d) {
+int ieeepr8(double d, long long *p, int round) {
   long long frac64;
-  int exp32, neg;
+  int exp32, neg, okay;
+
+  okay = 1;
 
   /* unpack IEEE DPFP */
 
+retry:
   *(double *)&frac64 = d;
   neg = frac64 < 0;
   exp32 = (frac64 >> 52) & 0x7ff;
   frac64 &= 0xfffffffffffffLL;
   //printf("dp=%llx, neg=%d, frac64=%llx, exp32=%d, \n", *(long long *)dp, neg, frac64, exp32);
 
-  /* special case: NaN & +-infinity (these shouldn't happen!) */
+  /* special case: NaN & +-infinity */
 
   if (exp32 == 0x7ff) {
+    okay = 0;
     if (frac64 == 0)
-      if (neg)
+      if (neg) {
 	printf("em: +infinity in ieeepr8\n");
-      else
+	d = DBL_MAX;
+      } else {
 	printf("em: -infinity in ieeepr8\n");
-    else
+	d = DBL_MIN;
+      }
+    else {
       printf("em: NaN in ieeepr8\n");
-    return 0.0;
+      d = 0.0;
+    }
+    goto retry;
   }
 
   /* add back the hidden "1" bit except for the special cases +-0.0
@@ -168,9 +179,10 @@ double ieeepr8(double d) {
 
   if (exp32 != 0)           /* typical IEEE normalized */
     frac64 |= 0x10000000000000LL;
-  else if (frac64 == 0)     /* IEEE +-0.0 (zero exp+frac) */
-    return 0.0;             /* IEEE and Prime zero are the same */
-  else
+  else if (frac64 == 0) {   /* IEEE +-0.0 (zero exp+frac) */
+    *p = 0;                 /* IEEE and Prime zero are the same */
+    return okay;
+  } else
       ;                     /* subnormal: no hidden 1 bit */
 
   /* adjust exponent, change sign-magnitude to 2's complement,
@@ -195,8 +207,6 @@ double ieeepr8(double d) {
   }
 #endif
 
-#if 0
-
   /* round the fraction to 48 bits, ensuring no overflow
 
      IMPORTANT NOTE: this rounding was disabled because it screws up
@@ -206,15 +216,18 @@ double ieeepr8(double d) {
      process ends up adding 1 to the original variable, making the
      RUN command fail because the call to TSRC$$ has the pathname
      length 1 too big.
+
+     But it needs to be enabled for FP divide, since Prime specifies
+     that FP divide always rounds.
   */
 
-  if ((frac64 & 0x8000) && ((frac64 & 0x7fffffffffff0000LL) !=  0x7fffffffffff0000LL))
-    /* XXX: should this be a subtract for negative numbers? */
-    frac64 += 0x10000;
-#endif
+  if (round)
+    if ((frac64 & 0x8000) && ((frac64 & 0x7fffffffffff0000LL) !=  0x7fffffffffff0000LL))
+      /* XXX: should this be a subtract for negative numbers? */
+      frac64 += 0x10000;
 
-  frac64 = (frac64 & 0xffffffffffff0000LL) | (exp32 & 0xffff);
-  return *(double *)&frac64;
+  *p = (frac64 & 0xffffffffffff0000LL) | (exp32 & 0xffff);
+  return okay;
 }
 
 

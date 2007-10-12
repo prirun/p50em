@@ -450,8 +450,8 @@ readasr:
 	  if (gvp->savetraceflags == 0) {
 	    TRACEA("\nTRACE ENABLED:\n\n");
 	    gvp->savetraceflags = ~TB_MAP;
-	    gvp->savetraceflags = TB_FLOW;
 	    gvp->savetraceflags = ~0;
+	    gvp->savetraceflags = TB_FLOW;
 	  } else {
 	    TRACEA("\nTRACE DISABLED:\n\n");
 	    gvp->savetraceflags = 0;
@@ -1504,11 +1504,10 @@ int devcp (int class, int func, int device) {
 	   the correct time.  In addition to lowering overhead, slower
 	   clock tick rates make catching up much faster. */
 
-#ifndef FIXEDCLOCK
 	if (abs(ticks-targetticks) > 5000 && datnowea != 0)
 	  ticks = -1;
 	else if (ticks < targetticks)
-	  devpoll[device] = 200;                /* behind, so catch-up */
+	  devpoll[device] = 100;                /* behind, so catch-up */
 	else if (ticks > targetticks)
 	  devpoll[device] = devpoll[device]*2;  /* ahead, so slow down */
 	else {                                  /* just right! */
@@ -1517,7 +1516,6 @@ int devcp (int class, int func, int device) {
 	    ticks = 0;
 	  }
 	}
-#endif
 
 	/* update instpermsec every 5 seconds.  Check for instcount
 	   overflow and reset when it occurs.

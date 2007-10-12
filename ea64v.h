@@ -42,14 +42,9 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
     if (inst & 0400) {
       TRACE(T_EAV, " Short LB relative, LB=%o/%o\n", crs[LBH], crs[LBL]);
       eap = &gvp->brp[LBBR];
-#if 1
       ea_s = crs[LBH] | (ea_s & RINGMASK16);
       ea_w += crs[LBL];
       return MAKEVA(ea_s, ea_w);
-#else
-      ea_w += crs[LBL];
-      return (((*(int *)(crs+LBH) | (earp & RINGMASK32)) & 0xFFFF0000) | ea_w);
-#endif
     }
     if (ea_w >= gvp->livereglim) {
       eap = &gvp->brp[SBBR];
@@ -59,7 +54,11 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
       return MAKEVA(ea_s, ea_w);
     }
     TRACE(T_EAV, " Live register '%o\n", ea_w);
-    return 0x80000000 | ea_w | (RP & RINGMASK32);
+#if 0
+    return 0x80000000 | ea_w;
+#else
+    return 0x80000000 | (rph << 16) | ea_w;
+#endif
   }
 
   i = inst & 0100000;           /* indirect is bit 1 (left/MS bit) */
@@ -101,17 +100,23 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
     TRACE(T_EAV, " Postindex, new ea_w=%o\n", ea_w);
   }
 
+  /* if ea_w is within RP's brp cache page, set eap to match;
+     otherwise, use PB's cache page */
+
   if (ea_w >= gvp->livereglim) {
-    if ((ea_w ^ RPL) & 0xFC00)
-      eap = &gvp->brp[PBBR];
+    if (((ea_w ^ RPL) & 0xFC00) == 0)
+      eap = &gvp->brp[RPBR];          /* occurs 80% */
     else
-      eap = &gvp->brp[RPBR];
+      eap = &gvp->brp[PBBR];          /* occurs 20% */
     return MAKEVA(ea_s, ea_w);
   }
 
   TRACE(T_EAV, " Live register '%o\n", ea_w);
-  return 0x80000000 | ea_w | (RP & RINGMASK32);
-
+#if 0
+  return 0x80000000 | ea_w;
+#else
+  return 0x80000000 | (rph << 16) | ea_w;
+#endif
 
   /* here for long, 2-word, V-mode memory reference */
 
@@ -137,15 +142,20 @@ labB:
   ea_w = crs[PBL+br*2] + a;
 
   if (xok)
-    if (ixy == 1 || ixy == 4)
-      ea_w += crs[Y];
-    else if (ixy == 2 || ixy == 6)
+    if (ixy == 2 || ixy == 6)
       ea_w += crs[X];
+  else if (ixy == 1 || ixy == 4)
+      ea_w += crs[Y];
 
-  /* if this is a PB% address, use RPBR instead if it's in range */
+#if 0
+    /* if this is a PB% address, use RPBR instead if it's in range
 
-  if (br == 0 && ((((ea_s & 0x8FFF) << 16) | (ea_w & 0xFC00)) == gvp->brp[RPBR].vpn))
-    eap = &gvp->brp[RPBR];
+       NOTE: this has been disabled, because gcov showed it only
+       occurred 0.5% of the time */
+
+    if (br == 0 && ((((ea_s & 0x8FFF) << 16) | (ea_w & 0xFC00)) == gvp->brp[RPBR].vpn))
+      eap = &gvp->brp[RPBR];
+#endif
 
   if (ixy >= 3) {
     ea = MAKEVA(ea_s, ea_w);
@@ -165,12 +175,12 @@ labB:
       eap = &gvp->brp[UNBR];
   }
   if (xok)
-    if (ixy == 5) {
-      TRACE(T_EAV, " Postindex, old ea_w=%o, Y='%o/%d\n", ea_w, crs[Y], *(short *)(crs+Y));
-      ea_w += crs[Y];
-    } else if (ixy == 7) {
+    if (ixy == 7) {
       TRACE(T_EAV, " Postindex, old ea_w=%o, X='%o/%d\n", ea_w, crs[X], *(short *)(crs+X));
       ea_w += crs[X];
+    } else if (ixy == 5) {
+      TRACE(T_EAV, " Postindex, old ea_w=%o, Y='%o/%d\n", ea_w, crs[Y], *(short *)(crs+Y));
+      ea_w += crs[Y];
     }
   return MAKEVA(ea_s, ea_w);
 }

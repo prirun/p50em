@@ -511,7 +511,7 @@ typedef struct {
 
 static gv_t gv;
 
-#if 1
+#ifndef NOREGS
 register gv_t *gvp asm ("r28");
 register brp_t *eap asm ("r27");   /* effective address brp pointer */
 #else
@@ -839,6 +839,9 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
 
   /* map virtual address if segmentation is enabled */
 
+  if (ea & 0x80000000)
+    fatal("mapva: fault bit set on EA");
+
   if (crs[MODALS] & 4) {
 #ifndef NOTRACE
     gvp->mapvacalls++;
@@ -1068,8 +1071,10 @@ static inline unsigned short get16(ea_t ea) {
   unsigned short access;
 
 #if DBG
-  if (ea & 0x80000000)
-    warn("address trap in get16");
+  if (ea & 0x80000000) {
+    printf("address trap in get16, ea=%o/%o\n", ea>>16, ea&0xffff);
+    fatal(NULL);
+  }
 #endif
 
 #if 0
@@ -1129,8 +1134,10 @@ static unsigned short get16r(ea_t ea, ea_t rpring) {
   unsigned short access;
 
 #if DBG
-  if (ea & 0x80000000)
-    warn("address trap in get16r");
+  if (ea & 0x80000000) {
+    printf("address trap in get16r, ea=%o/%o\n", ea>>16, ea&0xffff);
+    fatal(NULL);
+  }
 #endif
 
   /* if passed-in ring == RP ring, use get16 and maybe avoid mapva;
@@ -1152,8 +1159,10 @@ static unsigned int get32m(ea_t ea) {
   unsigned short m[2];
 
 #if DBG
-  if (ea & 0x80000000)                 /* check for live register access */
-    warn("address trap in get32m");
+  if (ea & 0x80000000) {
+    printf("address trap in get32m, ea=%o/%o\n", ea>>16, ea&0xffff);
+    fatal(NULL);
+  }
 #endif
 
 #ifndef NOTRACE
@@ -1173,8 +1182,10 @@ static inline unsigned int get32(ea_t ea) {
   pa_t pa;
 
 #if DBG
-  if (ea & 0x80000000)                 /* check for live register access */
-    warn("address trap in get32");
+  if (ea & 0x80000000) {
+    printf("address trap in get32, ea=%o/%o\n", ea>>16, ea&0xffff);
+    fatal(NULL);
+  }
 #endif
 
 #ifdef FAST
@@ -1200,8 +1211,10 @@ static unsigned int get32r(ea_t ea, ea_t rpring) {
   unsigned short access;
 
 #if DBG
-  if (ea & 0x80000000)                  /* check for live register access */
-    warn("address trap in get32r");
+  if (ea & 0x80000000) {
+    printf("address trap in get32r, ea=%o/%o\n", ea>>16, ea&0xffff);
+    fatal(NULL);
+  }
 #endif
 
   /* if passed-in ring == RP ring, use get32 and maybe avoid mapva */
@@ -1223,8 +1236,10 @@ static long long get64r(ea_t ea, ea_t rpring) {
   /* check for live register access */
 
 #if DBG
-  if (ea & 0x80000000)
-    warn("address trap in get64");
+  if (ea & 0x80000000) {
+    printf("address trap in get64r, ea=%o/%o\n", ea>>16, ea&0xffff);
+    fatal(NULL);
+  }
 #endif
 
   pa = mapva(ea, rpring, RACC, &access);
@@ -1293,7 +1308,7 @@ static long long get64r(ea_t ea, ea_t rpring) {
 unsigned short iget16t(ea_t ea) {
   unsigned short access;
 
-  if (*(int *)&ea > 0) {
+  if (*(int *)&ea >= 0) {
     gvp->brp[RPBR].memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
     gvp->brp[RPBR].vpn = (ea & 0x0FFFFC00) | (access << 28);
     return gvp->brp[RPBR].memp[ea & 0x3FF];
@@ -1319,8 +1334,10 @@ static inline put16(unsigned short value, ea_t ea) {
   unsigned short access;
 
 #if DBG
-  if (ea & 0x80000000)
-    warn("address trap in put16");
+  if (ea & 0x80000000) {
+    printf("address trap in put16, ea=%o/%o\n", ea>>16, ea&0xffff);
+    fatal(NULL);
+  }
 #endif
 
 #ifdef FAST
@@ -1352,8 +1369,10 @@ static put16r(unsigned short value, ea_t ea, ea_t rpring) {
   unsigned short access;
 
 #if DBG
-  if (ea & 0x80000000)
-    warn("address trap in put16r");
+  if (ea & 0x80000000) {
+    printf("address trap in put16r, ea=%o/%o\n", ea>>16, ea&0xffff);
+    fatal(NULL);
+  }
 #endif
 
   /* if passed-in ring == RP ring, use put16 and maybe avoid mapva */
@@ -1367,11 +1386,6 @@ static put16r(unsigned short value, ea_t ea, ea_t rpring) {
 /* put16trap handles stores that ARE address traps */
 
 static put16trap(unsigned short value, ea_t ea) {
-
-#ifdef DBG
-  if (*(int *)&ea >= 0)
-    warn("real EA in put16trap");
-#endif
 
   ea = ea & 0xFFFF;
   if (ea < 7)
@@ -1408,8 +1422,10 @@ static put32(unsigned int value, ea_t ea) {
   unsigned short *m;
 
 #if DBG
-  if (ea & 0x80000000)               /* check for live register access */
-    warn("address trap in put32");
+  if (ea & 0x80000000) {
+    printf("address trap in put32, ea=%o/%o\n", ea>>16, ea&0xffff);
+    fatal(NULL);
+  }
 #endif
 
 #ifdef FAST
@@ -1450,8 +1466,10 @@ static put32r(unsigned int value, ea_t ea, ea_t rpring) {
   unsigned short *m;
 
 #if DBG
-  if (ea & 0x80000000)                 /* check for live register access */
-    warn("address trap in put32");
+  if (ea & 0x80000000) {
+    printf("address trap in put32r, ea=%o/%o\n", ea>>16, ea&0xffff);
+    fatal(NULL);
+  }
 #endif
 
   /* if passed-in ring == RP ring, use put32 and maybe avoid mapva */
@@ -1477,8 +1495,10 @@ static put64r(long long value, ea_t ea, ea_t rpring) {
   /* check for live register access */
 
 #if DBG
-  if (ea & 0x80000000)
-    warn("address trap in put64");
+  if (ea & 0x80000000) {
+    printf("address trap in put64r, ea=%o/%o\n", ea>>16, ea&0xffff);
+    fatal(NULL);
+  }
 #endif
 
   pa = mapva(ea, rpring, WACC, &access);
@@ -1685,15 +1705,23 @@ static int (*devmap[64])(int, int, int) = {
 
 
 static void warn(char *msg) {
-  printf("emulator warning:\n  instruction #%d at %o/%o: %o %o keys=%o, modals=%o\n  %s\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, get16(gvp->prevpc), get16(gvp->prevpc+1),crs[KEYS], crs[MODALS], msg);
+  printf("emulator warning:\n  instruction #%d at %o/%o: %o %o keys=%o, modals=%o\n  %s\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, get16t(gvp->prevpc), get16t(gvp->prevpc+1),crs[KEYS], crs[MODALS], msg);
 }
     
 
 static void fatal(char *msg) {
+  static int fatal_called = 0;
   ea_t pcbp, csea;
   unsigned short first,next,last,this;
   unsigned short cs[6];
   int i;
+
+  if (fatal_called) {
+    printf("Nested call to fatal()\n");
+    exit(1);
+  }
+
+  fatal_called = 1;
 
   stopwatch_stop(&sw_all);
   printf("\n");
@@ -1714,7 +1742,7 @@ static void fatal(char *msg) {
   printf("Fatal error");
   if (msg)
     printf(": %s", msg);
-  printf("\ninstruction #%d at %o/%o %s: %o %o\nowner=%o %s, keys=%o, modals=%o\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), get16(gvp->prevpc), get16(gvp->prevpc+1), crs[OWNERL], searchloadmap(*(unsigned int *)(crs+OWNER),' '), crs[KEYS], crs[MODALS]);
+  printf("\ninstruction #%d at %o/%o %s: %o %o\nowner=%o %s, keys=%o, modals=%o\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), get16t(gvp->prevpc), get16t(gvp->prevpc+1), crs[OWNERL], searchloadmap(*(unsigned int *)(crs+OWNER),' '), crs[KEYS], crs[MODALS]);
   
   /* dump concealed stack entries */
 
@@ -1808,6 +1836,14 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
   else
     faultrp = gvp->prevpc;
 
+  /* NOTE: RP may have the fault bit set if executing from registers.
+     This is an emulator-ism to let us know we're executing registers
+     without having to do tests on every instruction fetch.  But this
+     can confuse Primos (dmstk for example), so don't ever store it
+     this way. */
+
+  faultrp &= 0x7FFFFFFF;
+
   /* save RP, keys in regfile, fcode and faddr in crs */
 
   regs.sym.pswpb = faultrp;
@@ -1882,7 +1918,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
     TRACE(T_FAULT, "fault: jumping to fault table entry at RP=%o/%o\n", RPH, RPL);
 
   } else {                   /* process exchange is disabled */
-    //TRACE(T_FAULT, "fault '%o occurred at %o/%o, instruction=%o, modals=%o\n", fvec, faultrp>>16, faultrp&0xffff, get16(faultrp), crs[MODALS]);
+    //TRACE(T_FAULT, "fault '%o occurred at %o/%o, instruction=%o, modals=%o\n", fvec, faultrp>>16, faultrp&0xffff, get16t(faultrp), crs[MODALS]);
     /* XXX: need to check for standard/vectored interrupt mode here... */
     m = get16(fvec);
     if (m != 0) {
@@ -1906,17 +1942,26 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
 }
 
 
-/* 16S Addressing Mode */
+/* 16S Addressing Mode 
+
+   NOTE: when fetching indirect words via address traps, ie, the word
+   is in a register, the segment and ring bits are unimportant.  But
+   when returning the final EA, seg and ring are important: if a JMP
+   instruction is executing, and the target of the jump is a register,
+   the seg and ring fields of RP must be maintained.  Otherwise, a
+   restricted instruction like HLT executed from a register would
+   actually halt the machine.  Yes, this actually happened to me! :-)
+*/
 
 static ea_t ea16s (unsigned short inst) {
   
-  unsigned short ea, m, rpl, amask, i, x;
-  ea_t va;
+  unsigned short rpl, amask, i, x;
+  ea_t ea, va;
 
   i = inst & 0100000;                            /* indirect */
   x = ((inst & 036000) != 032000) ? (inst & 040000) : 0;
   amask = 037777;
-  rpl = gvp->prevpc;
+  rpl = gvp->prevpc;                             /* S-mode uses backed PC! */
   if (inst & 001000)
     ea = (rpl & 037000) | (inst & 0777);         /* current sector */
   else
@@ -1926,17 +1971,17 @@ static ea_t ea16s (unsigned short inst) {
       ea += crs[X];
     if (!i)                                      /* not indirect */
       break;
-    if (ea < gvp->livereglim)
-      m = get16t(0x80000000|ea);
-    else
-      m = get16t(MAKEVA(RPH,ea));
-    i = m & 0100000;
-    x = m & 040000;
-    ea = m & 037777;                             /* go indirect */
+    ea &= amask;
+    if (ea < gvp->livereglim)                    /* flag live register ea */
+      ea |= 0x80000000;
+    ea = get16t(ea);                             /* get indirect word */
+    i = ea & 0100000;
+    x = ea & 040000;
   }
+  ea &= amask;
   va = MAKEVA(RPH, ea);
   if (ea < gvp->livereglim)                      /* flag live register ea */
-    return 0x80000000 | va | (RP & RINGMASK32);
+    va |= 0x80000000;
   return va;
 }
 
@@ -1945,8 +1990,8 @@ static ea_t ea16s (unsigned short inst) {
 
 static ea_t ea32s (unsigned short inst) {
   
-  unsigned short ea, m,rpl, amask, i, x;
-  ea_t va;
+  unsigned short rpl, amask, i, x;
+  ea_t ea, va;
 
   i = inst & 0100000;                            /* indirect */
   x = ((inst & 036000) != 032000) ? (inst & 040000) : 0;
@@ -1962,22 +2007,20 @@ static ea_t ea32s (unsigned short inst) {
     }
   }
   while (i) {
-    if (ea < gvp->livereglim)
-      m = get16t(0x80000000|ea);
-    else
-      m = get16t(MAKEVA(RPH,ea));
-    i = m & 0100000;
-    ea = m & 077777;                             /* go indirect */
+    ea &= amask;
+    if (ea < gvp->livereglim)                    /* flag live register ea */
+      ea |= 0x80000000;
+    ea = get16t(ea);                             /* go indirect */
+    i = ea & 0100000;
   }
   if (x)                                         /* postindex */
     ea += crs[X];
   ea &= amask;
   va = MAKEVA(RPH, ea);
   if (ea < gvp->livereglim)                      /* flag live register ea */
-    return 0x80000000 | va | (RP & RINGMASK32);
+    va |= 0x80000000;
   return va;
 }
-
 
 /* NOTE: the difference between 32R and 64R, besides the extra address
    bit, is that 32R indirect words have an indirect bit for multi-level
@@ -2015,16 +2058,17 @@ static inline ea_t ea32r64r (ea_t earp, unsigned short inst) {
       x = 0;
     }
   }
+  ea &= amask;
   while (i) {
     if (ea >= gvp->livereglim)
       m = get16(MAKEVA(rph,ea));
     else
       m = get16trap(ea);
     TRACE(T_EAR, " Indirect, old ea=%o, [ea]=%o\n", ea, m);
-    if ((crs[KEYS] & 016000) == 06000)           /* 32R mode? */
-      i = m & 0100000;                           /* yes, multiple indirects */
+    if ((crs[KEYS] & 016000) == 04000)           /* 64R mode? */
+      i = 0;                                     /* yes, single indirect */
     else
-      i = 0;                                     /* no, 64R mode, single indirect */
+      i = m & 0100000;                           /* 32R - multiple indirects */
     ea = m & amask;                              /* go indirect */
     TRACE(T_EAR, " Indirect, new i=%d, new ea=%o\n", i!=0, ea);
     eap = &gvp->brp[UNBR];
@@ -2038,7 +2082,7 @@ static inline ea_t ea32r64r (ea_t earp, unsigned short inst) {
   ea &= amask;
   va = MAKEVA(rph, ea);
   if (ea < gvp->livereglim)                      /* flag live register ea */
-    return 0x80000000 | va | (RP & RINGMASK32);
+    va |= 0x80000000;
   return va;
 
 special:
@@ -2069,10 +2113,10 @@ special:
       else
 	m = get16trap(ea);
       TRACE(T_EAR, " Indirect, old ea=%o, [ea]=%o\n", ea, m);
-      if ((crs[KEYS] & 016000) == 06000)
-	i = m & 0100000;
-      else
+      if ((crs[KEYS] & 016000) == 04000)
 	i = 0;
+      else
+	i = m & 0100000;
       ea = m & amask;
       TRACE(T_EAR, " Indirect, new i=%d, new ea=%o\n", i!=0, ea);
       eap = &gvp->brp[UNBR];
@@ -2093,10 +2137,10 @@ special:
       else
 	m = get16trap(ea);
       TRACE(T_EAR, " Indirect, ea=%o, [ea]=%o\n", ea, m);
-      if ((crs[KEYS] & 016000) == 06000)
-	i = m & 0100000;
-      else
+      if ((crs[KEYS] & 016000) == 04000)
 	i = 0;
+      else
+	i = m & 0100000;
       ea = m & amask;
       TRACE(T_EAR, " Indirect, new i=%d, new ea=%o\n", i!=0, ea);
     }
@@ -2126,10 +2170,10 @@ special:
 	m = get16(MAKEVA(rph,ea));
       else
 	m = get16trap(ea);
-      if ((crs[KEYS] & 016000) == 06000)
-	i = m & 0100000;
-      else
+      if ((crs[KEYS] & 016000) == 04000)
 	i = 0;
+      else
+	i = m & 0100000;
       ea = m & amask;
       eap = &gvp->brp[UNBR];
     }
@@ -2140,9 +2184,9 @@ special:
   }
   ea &= amask;
   va = MAKEVA(rph, ea);
-  if (ea >= gvp->livereglim)
-    return va;
-  return 0x80000000 | va | (RP & RINGMASK32);  /* flag live register ea */
+  if (ea < gvp->livereglim)      /* flag live register ea */
+    va |= 0x80000000;
+  return va;
 }
 
 #include "ea64v.h"
@@ -3152,7 +3196,7 @@ static dispatcher() {
 
   /* save RP in current register set before possibly switching */
 
-  *(unsigned int *)(crs+PB) = RP;
+  *(unsigned int *)(crs+PB) = (RP & 0x7FFFFFFF);
 
   /* find a register set for this process */
 
@@ -3217,6 +3261,13 @@ static dispatcher() {
   }
 
   RP = *(unsigned int *)(crs+PB);
+
+  /* if we were executing from registers and not in I-mode, make sure
+     the fault bit is set again on RP.  We try to hide this hack from
+     Primos. */
+
+  if (RPL < gvp->livereglim && ((crs[KEYS] & 0016000) != 010000))
+    RP |= 0x80000000;
   crs[PBL] = 0;
   crs[KEYS] &= ~3;                 /* erase "in dispatcher" and "save done" */
   TRACE(T_PX, "disp: returning from dispatcher, running process %o/%o at %o/%o, modals=%o, ppa=%o, pla=%o, ppb=%o, plb=%o\n", crs[OWNERH], crs[OWNERL], RPH, RPL, crs[MODALS], regs.sym.pcba, regs.sym.pla, regs.sym.pcbb, regs.sym.plb);
@@ -3284,7 +3335,7 @@ unready: I'm not first on the ready list
   TRACE(T_PX, "unready: new rl bol/eol = %o/%o\n", rl>>16, rl&0xFFFF);
   put16r0(newlink, pcbp+1);   /* update my pcb link */
   put32r0(waitlist, pcbp+2);  /* update my pcb wait address */
-  *(unsigned int *)(crs+PB) = RP;
+  *(unsigned int *)(crs+PB) = (RP & 0x7FFFFFFF);
   pxregsave(1);
   regs.sym.pcba = 0;
 }
@@ -3479,9 +3530,11 @@ static nfy(unsigned short inst) {
     if (inst & 2)                /* clear active interrupt */
       gvp->intvec = -1;
     /* not sure about all this... Case 85/87 */
-    RP = regs.sym.pswpb;
-    crs[PBH] = RPH;
     newkeys(regs.sym.pswkeys);
+    RP = regs.sym.pswpb;
+    crs[PBH] = RPH;              /* NOTE: won't have fault bit */
+    if (RPL < gvp->livereglim && ((crs[KEYS] & 0016000) != 010000))
+      RP |= 0x80000000;
   }
 
   if (resched || (inst & 4))
@@ -4264,7 +4317,7 @@ main (int argc, char **argv) {
 	  gvp->traceflags |= TB_RIO;
 	else if (strcmp(argv[i],"all") == 0)
 	  gvp->traceflags = ~0;
-	else if (isdigit(argv[i][0]) && strlen(argv[i]) < 2 && sscanf(argv[i],"%d", &templ) == 1)
+	else if (isdigit(argv[i][0]) && strlen(argv[i]) <= 2 && sscanf(argv[i],"%d", &templ) == 1)
 	  gvp->traceuser = 0100000 | (templ<<6);   /* form OWNERL for user # */
 	else if (strlen(argv[i]) == 6 && sscanf(argv[i],"%o", &templ) == 1)
 	  gvp->traceuser = templ;                  /* specify OWNERL directly */
@@ -4345,11 +4398,12 @@ main (int argc, char **argv) {
 
   /* initialize all devices */
 
-  for (i=0; i<64; i++)
+  for (i=0; i<64; i++) {
     if (devmap[i](-1, 0, i)) {   /* if initialization fails, */
       devmap[i] = devnone;       /* remove device */
       fprintf(stderr, "emulator: device '%o failed initialization - device removed\n", i);
     }
+  }
 
 
   /* if a filename follows -boot, load and execute this R-mode runfile
@@ -4651,7 +4705,7 @@ fetch:
     if (gvp->inhcount == 0) {
       //printf("fetch: taking interrupt vector '%o, modals='%o\n", gvp->intvec, crs[MODALS]);
       TRACE(T_FLOW, "\nfetch: taking interrupt vector '%o, modals='%o\n", gvp->intvec, crs[MODALS]);
-      regs.sym.pswpb = RP;
+      regs.sym.pswpb = RP & 0x7FFFFFFF;
       regs.sym.pswkeys = crs[KEYS];
 
       if (crs[MODALS] & 010) {              /* PX enabled */
@@ -4715,6 +4769,12 @@ fetch:
      this check on every instruction fetch is more overhead.  Setting
      the HO bit of RP does expose this to Primos when a fault occurs
      while executing code in registers.
+
+     NOTE 2: clear A, JMP# 1, and instead of getting a program halt
+     or restricted instruction signal raised, a pointer fault occurs
+     because Primos can't handle 160000/000001 as the fault address.
+     So maybe this code should be enabled (?), along with the 5 jump
+     instructions.
   */
 
   inst = iget16(RP | ((RPL >= gvp->livereglim || (crs[KEYS] & 0016000) == 010000) ? 0 : 0x80000000));
@@ -4727,14 +4787,14 @@ fetch:
   /* while a process is running, RP is the real program counter, PBH
      is the active procedure segment, and PBL is zero.  When a
      process stops running, RP is copied to PB.  When a process
-     starts running again, PB is copied to RP. */
+     starts running again, PB is copied to RP.
+     XXX: it'd be nice to remove this, if possible. */
 
-#ifdef FAST
-  *(int *)(crs+PBH) = RP & 0xFFFF0000;
-#else
-  crs[PBH] = RPH;
-  crs[PBL] = 0;
-#endif
+  *(int *)(crs+PBH) = RP & 0x7FFF0000;
+
+  /* earp is used for RP-relative address calculations.  It is the
+     same as RP, except during an xec instruction.  See d_xec */
+
   earp = RP;
 
 
@@ -5717,19 +5777,17 @@ d_dbgill:  /*  001700, 001701 */
 	 SAS 1             interrupts enabled?
 	 1702              no, they should be, die
 
-	 Update: this is the "slow halt" instruction.  Ewan explained
-	 that if a HLT instruction is encountered, any DMX in progress
-	 will stop, leading to partial disk records being written.
-	 Using this instruction instead lets Primos delay the halt
-	 until DMX has completed.
+	 Update: this is the "slow halt" instruction.  Ewan Milne
+	 explained that if a HLT instruction is encountered on some
+	 machines,, any DMX in progress will stop, possibly leading to
+	 partial disk records being written.  Using this illegal
+	 instruction instead of HLT lets Primos delay the halt until
+	 DMX has completed.
       */
 
 d_pbug:  /* 001702 */
   TRACE(T_FLOW, " 1702?\n", inst);
-  if (RP & RINGMASK32)
-    fault(ILLINSTFAULT, RPL, RP);
-  else
-    fatal("Primos software assertion failure");
+  fault(ILLINSTFAULT, RPL, RP);
   fatal(NULL);  /* just in case of a bogus return (coding error) */
 
 d_irtn:  /* 000601 */
@@ -5737,9 +5795,11 @@ d_irtn:  /* 000601 */
   RESTRICT();
   //fatal("IRTN causes a loop in CPU.CACHE Case 4");
 irtn:
+  newkeys(regs.sym.pswkeys);
   RP = regs.sym.pswpb;
   crs[PBH] = RPH;
-  newkeys(regs.sym.pswkeys);
+  if (RPL < gvp->livereglim && ((crs[KEYS] & 0016000) != 010000))
+    RP |= 0x80000000;
   crs[MODALS] |= 0100000;
 #if 0
   if (regs.sym.pcba != 0) {
@@ -5828,9 +5888,8 @@ d_cea:  /* 000111 */
 	ea += crs[X];
       if (!i)                          /* not indirect */
 	break;
-      /* XXX: should this be gvp->livereglim? */
-      if (ea < 040)
-	m = get16(0x80000000|ea);
+      if (ea < gvp->livereglim)
+	m = get16trap(ea);
       else
 	m = get16(MAKEVA(RPH,ea));
       i = m & 0100000;
@@ -5843,9 +5902,8 @@ d_cea:  /* 000111 */
   case 3:                       /* 32R */
     while (crs[A] & 0100000) {
       ea = crs[A] & 077777;
-      /* XXX: should this be gvp->livereglim? */
-      if (ea < 040)
-	crs[A] = get16(0x80000000|ea);
+      if (ea < gvp->livereglim)
+	crs[A] = get16trap(ea);
       else
 	crs[A] = get16(MAKEVA(RPH,ea));
     }
@@ -6657,7 +6715,7 @@ d_inta:  /* 0140531 */
 d_flta:  /* 0140532 */
   TRACE(T_FLOW, " FLTA\n");
   tempd = *(short *)(crs+A);
-  *(double *)(crs+FLTH) = ieeepr8(tempd);
+  ieeepr8(tempd, (long long *)(crs+FLTH), 0);
   goto fetch;
 
 d_intl:  /* 0140533 */
@@ -8193,7 +8251,6 @@ imode:
     case 6:
       dr &= 2;
       TRACE(T_FLOW, " FA\n");
-      CLEARC;
       if (*(int *)&ea >= 0) {
 	immu64 = get32(ea);
 	immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
@@ -8203,14 +8260,15 @@ imode:
 	  tempa1 = crsl[FAC0+dr+1] & 0xffff;
 	  tempa2 = immu64 & 0xffff;
 	  if (abs(tempa1-tempa2) < 48)
-	    if (prieee8(crsl+FAC0+dr, &tempd1) && prieee8(&immu64, &tempd2)) {
-	      *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1+tempd2);
-	      XCLEARC;   /* XXX: test overflow */
-	    } else
+	    if (prieee8(crsl+FAC0+dr, &tempd1) 
+		&& prieee8(&immu64, &tempd2)
+		&& ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC0+dr), 0))
+	      CLEARC;
+	    else
 	      mathexception('f', FC_SFP_OFLOW, ea);
-	else if (tempa1 < tempa2)
-	  *(long long *)(crsl+FAC0+dr) = immu64;
-      } else
+	  else if (tempa1 < tempa2)
+	    *(long long *)(crsl+FAC0+dr) = immu64;
+	} else
 	  *(long long *)(crsl+FAC0+dr) = immu64;
       else if (*(int *)(crsl+FAC0+dr) == 0)
 	*(long long *)(crsl+FAC0+dr) = 0;
@@ -8220,15 +8278,15 @@ imode:
     case 7:
       dr &= 2;
       TRACE(T_FLOW, " DFA\n");
-      CLEARC;
       if (*(int *)&ea >= 0)
 	immu64 = get64(ea);
       if (*(int *)&immu64)
 	if (*(int *)(crsl+FAC0+dr))
-	  if (prieee8(crsl+FAC0+dr, &tempd1) && prieee8(&immu64, &tempd2)) {
-	    *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1+tempd2);
-	    XCLEARC;   /* XXX: test overflow */
-	  } else
+	  if (prieee8(crsl+FAC0+dr, &tempd1) 
+	      && prieee8(&immu64, &tempd2)
+	      && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC0+dr), 0))
+	    CLEARC;
+	  else
 	    mathexception('f', FC_DFP_OFLOW, ea);
 	else
 	  *(long long *)(crsl+FAC0+dr) = immu64;
@@ -8310,7 +8368,6 @@ imode:
     case 2:
       dr &= 2;
       TRACE(T_FLOW, " FS\n");
-      CLEARC;
       if (*(int *)&ea >= 0) {
 	immu64 = get32(ea);
 	immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
@@ -8320,10 +8377,11 @@ imode:
 	  tempa1 = crsl[FAC0+dr+1] & 0xffff;
 	  tempa2 = immu64 & 0xffff;
 	  if (abs(tempa1-tempa2) < 48)
-	    if (prieee8(crsl+FAC0+dr, &tempd1) && prieee8(&immu64, &tempd2)) {
-	      *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1-tempd2);
-	      XCLEARC;   /* XXX: test overflow */
-	    } else
+	    if (prieee8(crsl+FAC0+dr, &tempd1) 
+		&& prieee8(&immu64, &tempd2)
+	        && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC0+dr), 0))
+	      CLEARC;
+	    else
 	      mathexception('f', FC_SFP_OFLOW, ea);
 	  else if (tempa1 < tempa2) {
 	    *(long long *)(crsl+FAC0+dr) = immu64;
@@ -8341,15 +8399,15 @@ imode:
     case 3:
       dr &= 2;
       TRACE(T_FLOW, " DFS\n");
-      CLEARC;
       if (*(int *)&ea >= 0)
 	immu64 = get64(ea);
       if (*(int *)&immu64)
 	if (*(int *)(crsl+FAC0+dr))
-	  if (prieee8(crsl+FAC0+dr, &tempd1) && prieee8(&immu64, &tempd2)) {
-	    *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1-tempd2);
-	    XCLEARC;   /* XXX: test overflow */
-	  } else
+	  if (prieee8(crsl+FAC0+dr, &tempd1) 
+	      && prieee8(&immu64, &tempd2)
+	      && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC0+dr), 0))
+	    CLEARC;
+	  else
 	    mathexception('f', FC_DFP_OFLOW, ea);
 	else {
 	  *(long long *)(crsl+FAC0+dr) = immu64;
@@ -8363,17 +8421,17 @@ imode:
     case 6:
       dr &= 2;
       TRACE(T_FLOW, " FM\n");
-      CLEARC;
       if (*(int *)(crsl+FAC0+dr)) {
 	if (*(int *)&ea >= 0) {
 	  immu64 = get32(ea);
 	  immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
 	}
 	if (*(int *)&immu64)
-	  if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC0+dr, &tempd1)) {
-	    *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1*tempd2);
-	    XCLEARC;   /* XXX: test overflow */
-	  } else
+	  if (prieee8(&immu64, &tempd2) 
+	      && prieee8(crsl+FAC0+dr, &tempd1)
+	      && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC0+dr), 0))
+	    CLEARC;
+	  else
 	    mathexception('f', FC_SFP_OFLOW, ea);
 	else            /* operand = 0.0: no multiply */
 	  *(long long *)(crsl+FAC0+dr) = 0;
@@ -8385,15 +8443,15 @@ imode:
     case 7:
       dr &= 2;
       TRACE(T_FLOW, " DFM\n");
-      CLEARC;
       if (*(int *)(crsl+FAC0+dr)) {
 	if (*(int *)&ea >= 0)
 	  immu64 = get64(ea);
 	if (*(int *)&immu64)
-	  if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC0+dr, &tempd1)) {
-	    *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1*tempd2);
-	    XCLEARC;   /* XXX: test overflow */
-	  } else
+	  if (prieee8(&immu64, &tempd2) 
+	      && prieee8(crsl+FAC0+dr, &tempd1)
+	      && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC0+dr), 0))
+	    CLEARC;
+	  else
 	    mathexception('f', FC_DFP_OFLOW, ea);
 	else             /* operand = 0.0: no multiply */
 	  *(long long *)(crsl+FAC0+dr) = 0;
@@ -8460,17 +8518,17 @@ imode:
     case 2:
       dr &= 2;
       TRACE(T_FLOW, " FD\n");
-      CLEARC;
       if (*(int *)&ea >= 0) {
 	immu64 = get32(ea);
 	immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
       }
       if (*(int *)&immu64)
 	if (*(int *)(crsl+FAC0+dr))
-	  if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC0+dr, &tempd1)) {
-	    *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1/tempd2);
-	    XCLEARC;   /* XXX: test overflow */
-	  } else
+	  if (prieee8(&immu64, &tempd2) 
+	      && prieee8(crsl+FAC0+dr, &tempd1)
+	      && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC0+dr), 1))
+	    CLEARC;
+	  else
 	    mathexception('f', FC_SFP_OFLOW, ea);
 	else            /* operand = 0.0 */
 	  *(long long *)(crsl+FAC0+dr) = 0;
@@ -8482,15 +8540,15 @@ imode:
     case 3:
       dr &= 2;
       TRACE(T_FLOW, " DFD\n");
-      CLEARC;
       if (*(int *)&ea >= 0)
 	immu64 = get64(ea);
       if (*(int *)&immu64)
 	if (*(int *)(crsl+FAC0+dr))
-	  if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC0+dr, &tempd1)) {
-	    *(double *)(crsl+FAC0+dr) = ieeepr8(tempd1/tempd2);
-	    XCLEARC;   /* XXX: test overflow */
-	  } else
+	  if (prieee8(&immu64, &tempd2) 
+	      && prieee8(crsl+FAC0+dr, &tempd1)
+	      && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC0+dr), 1))
+	    CLEARC;
+	  else
 	    mathexception('f', FC_DFP_OFLOW, ea);
 	else
 	  *(long long *)(crsl+FAC0+dr) = 0;
@@ -8986,12 +9044,7 @@ d_stadst:  /* 00400 (R-mode) */
 
 d_jmp:  /* 00100 */
   TRACE(T_FLOW, " JMP\n");
-#if 0
-  if (*(int *)&ea < 0)          /* jumping to register address */
-    RPL = ea;                   /* preserve segment number in RP */
-  else
-#endif
-    RP = ea;
+  RP = ea;
   goto fetch;
 
 d_ana:  /* 00300 */
@@ -9094,12 +9147,7 @@ d_jst:  /* 01000 */
   else
     m = (get16t(ea) & ~gvp->amask) | RPL;
   put16t(m, ea);
-#if 0
-  if (*(int *)&ea < 0)          /* jumping to register address */
-    RPL = ea;                   /* preserve segment number in RP */
-  else
-#endif
-    RP = ea;
+  RP = ea;
   INCRP;
   gvp->brp[RPBR] = *eap;
   if ((RP & RINGMASK32) == 0)
@@ -9162,23 +9210,13 @@ d_ima:  /* 01300 */
 d_jsy:  /* 01400 */
   TRACE(T_FLOW, " JSY\n");
   crs[Y] = RPL;
-#if 0
-  if (*(int *)&ea < 0)          /* jumping to register address */
-    RPL = ea;                   /* preserve segment number in RP */
-  else
-#endif
-    RP = ea;
+  RP = ea;
   goto fetch;
 
 d_jsxb:  /* 01402 */
   TRACE(T_FLOW, " JSXB\n");
   *(unsigned int *)(crs+XB) = RP;
-#if 0
-  if (*(int *)&ea < 0)          /* jumping to register address */
-    RPL = ea;                   /* preserve segment number in RP */
-  else
-#endif
-    RP = ea;
+  RP = ea;
   goto fetch;
 
 d_stx:  /* 01500 */
@@ -9405,12 +9443,7 @@ d_ldy:  /* 03501 */
 d_jsx:  /* 03503 */
   TRACE(T_FLOW, " JSX\n");
   crs[X] = RPL;
-#if 0
-  if (*(int *)&ea < 0)          /* jumping to register address */
-    RPL = ea;                   /* preserve segment number in RP */
-  else
-#endif
-    RP = ea;
+  RP = ea;
   goto fetch;
 
 /* XXX: this should set the L bit like subtract */
@@ -9431,7 +9464,6 @@ d_cls:  /* 01103 */
 
 d_fad:  /* 00601 */
   TRACE(T_FLOW, " FAD\n");
-  CLEARC;
   immu64 = get32(ea);
   immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
   if (*(int *)&immu64)
@@ -9439,10 +9471,11 @@ d_fad:  /* 00601 */
       tempa1 = crs[FEXP];
       tempa2 = immu64 & 0xffff;
       if (abs(tempa1-tempa2) < 48)
-	if (prieee8(crsl+FAC1, &tempd1) && prieee8(&immu64, &tempd2)) {
-	  *(double *)(crsl+FAC1) = ieeepr8(tempd1+tempd2);
-	  XCLEARC;   /* XXX: test overflow */
-	} else
+	if (prieee8(crsl+FAC1, &tempd1) 
+	    && prieee8(&immu64, &tempd2)
+	    && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC1), 0))
+	  CLEARC;
+	else
 	  mathexception('f', FC_SFP_OFLOW, ea);
       else if (tempa1 < tempa2)
 	*(long long *)(crsl+FAC1) = immu64;
@@ -9462,15 +9495,15 @@ d_fcs:  /* 01101 */
 
 d_fdv:  /* 01701 */
   TRACE(T_FLOW, " FDV\n");
-  CLEARC;
   immu64 = get32(ea);
   immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
   if (*(int *)&immu64)
     if (*(int *)(crsl+FAC1))
-      if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC1, &tempd1)) {
-	*(double *)(crsl+FAC1) = ieeepr8(tempd1/tempd2);
-	XCLEARC;   /* XXX: test overflow */
-      } else
+      if (prieee8(&immu64, &tempd2) 
+	  && prieee8(crsl+FAC1, &tempd1)
+	  && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC1), 1))
+	CLEARC;
+      else
 	mathexception('f', FC_SFP_OFLOW, ea);
     else            /* operand = 0.0 */
       *(long long *)(crsl+FAC1) = 0;
@@ -9487,15 +9520,15 @@ d_fld:  /* 0201 */
 
 d_fmp:  /* 01601 */
   TRACE(T_FLOW, " FMP\n");
-  CLEARC;
   if (*(int *)(crsl+FAC1)) {
     immu64 = get32(ea);
     immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
     if (*(int *)&immu64)
-      if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC1, &tempd1)) {
-	*(double *)(crsl+FAC1) = ieeepr8(tempd1*tempd2);
-	XCLEARC;   /* XXX: test overflow */
-      } else
+      if (prieee8(&immu64, &tempd2) 
+	  && prieee8(crsl+FAC1, &tempd1)
+	  && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC1), 0))
+	CLEARC;
+      else
 	mathexception('f', FC_SFP_OFLOW, ea);
     else            /* operand = 0.0: no multiply */
       *(long long *)(crsl+FAC1) = 0;
@@ -9505,7 +9538,6 @@ d_fmp:  /* 01601 */
 
 d_fsb:  /* 00701 */
   TRACE(T_FLOW, " FSB\n");
-  CLEARC;
   immu64 = get32(ea);
   immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
   if (*(int *)&immu64)
@@ -9513,10 +9545,11 @@ d_fsb:  /* 00701 */
       tempa1 = crs[FEXP];
       tempa2 = immu64 & 0xffff;
       if (abs(tempa1-tempa2) < 48)
-	if (prieee8(crsl+FAC1, &tempd1) && prieee8(&immu64, &tempd2)) {
-	  *(double *)(crsl+FAC1) = ieeepr8(tempd1-tempd2);
-	  XCLEARC;   /* XXX: test overflow */
-	} else
+	if (prieee8(crsl+FAC1, &tempd1) 
+	    && prieee8(&immu64, &tempd2)
+	    && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC1), 0))
+	  CLEARC;
+	else
 	  mathexception('f', FC_SFP_OFLOW, ea);
       else if (tempa1 < tempa2) {
 	*(long long *)(crsl+FAC1) = immu64;
@@ -9543,15 +9576,15 @@ d_fst:  /* 0401 */
 
 d_dfad:  /* 0602 */
   TRACE(T_FLOW, " DFAD\n");
-  CLEARC;
   immu64 = get64(ea);
   if (*(int *)&immu64)
     if (*(int *)(crsl+FAC1))
-      if (prieee8(crsl+FAC1, &tempd1) && prieee8(&immu64, &tempd2)) {
+      if (prieee8(crsl+FAC1, &tempd1) 
+	  && prieee8(&immu64, &tempd2)
+	  && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC1), 0)) {
+	CLEARC;
 	TRACE(T_FLOW, " %f ('%o %o %o %o) + %f (%o %o %o %o)\n", tempd1, crs[FLTH], crs[FLTL], crs[FLTD], crs[FEXP], tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
-	*(double *)(crsl+FAC1) = ieeepr8(tempd1+tempd2);
 	TRACE(T_FLOW, " = %f ('%o %o %o %o)\n", tempd1+tempd2, crs[FLTH], crs[FLTL], crs[FLTD], crs[FEXP]);
-	XCLEARC;   /* XXX: test overflow */
       } else
 	mathexception('f', FC_DFP_OFLOW, ea);
     else
@@ -9568,16 +9601,16 @@ d_dfcs:  /* 01102 */
 
 d_dfdv:  /* 01702 */
   TRACE(T_FLOW, " DFDV\n");
-  CLEARC;
   if (*(int *)&ea >= 0)
     immu64 = get64(ea);
   if (*(int *)&immu64)
     if (*(int *)(crsl+FAC1))
-      if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC1, &tempd1)) {
+      if (prieee8(&immu64, &tempd2) 
+	  && prieee8(crsl+FAC1, &tempd1)
+	  && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC1), 1)) {
+	CLEARC;
 	TRACE(T_FLOW, " %f ('%o %o %o %o) / %f (%o %o %o %o)\n", tempd1, crs[FLTH], crs[FLTL], crs[FLTD], crs[FEXP], tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
-	*(double *)(crsl+FAC1) = ieeepr8(tempd1/tempd2);
 	TRACE(T_FLOW, " = %f ('%o %o %o %o)\n", tempd1/tempd2, crs[FLTH], crs[FLTL], crs[FLTD], crs[FEXP]);
-	XCLEARC;   /* XXX: test overflow */
       } else
 	mathexception('f', FC_DFP_OFLOW, ea);
     else
@@ -9598,15 +9631,15 @@ d_dfld:  /* 0202 */
 
 d_dfmp:  /* 01602 */
   TRACE(T_FLOW, " DFMP\n");
-  CLEARC;
   if (*(int *)(crsl+FAC1)) {
     immu64 = get64(ea);
     if (*(int *)&immu64)
-      if (prieee8(&immu64, &tempd2) && prieee8(crsl+FAC1, &tempd1)) {
-	TRACE(T_FLOW, " %f ('%o %o %o %o) / %f (%o %o %o %o)\n", tempd1, crs[FLTH], crs[FLTL], crs[FLTD], crs[FEXP], tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
-	*(double *)(crsl+FAC1) = ieeepr8(tempd1*tempd2);
+      if (prieee8(&immu64, &tempd2) 
+	  && prieee8(crsl+FAC1, &tempd1)
+	  && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC1), 0)) {
+	CLEARC;
+	TRACE(T_FLOW, " %f ('%o %o %o %o) * %f (%o %o %o %o)\n", tempd1, crs[FLTH], crs[FLTL], crs[FLTD], crs[FEXP], tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
 	TRACE(T_FLOW, " = %f ('%o %o %o %o)\n", tempd1*tempd2, crs[FLTH], crs[FLTL], crs[FLTD], crs[FEXP]);
-	XCLEARC;   /* XXX: test overflow */
       } else
 	mathexception('f', FC_DFP_OFLOW, ea);
     else             /* operand = 0.0: no multiply */
@@ -9617,15 +9650,15 @@ d_dfmp:  /* 01602 */
 
 d_dfsb:  /* 0702 */
   TRACE(T_FLOW, " DFSB\n");
-  CLEARC;
   immu64 = get64(ea);
   if (*(int *)&immu64)
     if (*(int *)(crsl+FAC1))
-      if (prieee8(crsl+FAC1, &tempd1) && prieee8(&immu64, &tempd2)) {
-	TRACE(T_FLOW, " %f ('%o %o %o %o) / %f (%o %o %o %o)\n", tempd1, crs[FLTH], crs[FLTL], crs[FLTD], crs[FEXP], tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
-	*(double *)(crsl+FAC1) = ieeepr8(tempd1-tempd2);
+      if (prieee8(crsl+FAC1, &tempd1) 
+	  && prieee8(&immu64, &tempd2)
+	  && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC1), 0)) {
+	CLEARC;
+	TRACE(T_FLOW, " %f ('%o %o %o %o) - %f (%o %o %o %o)\n", tempd1, crs[FLTH], crs[FLTL], crs[FLTD], crs[FEXP], tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
 	TRACE(T_FLOW, " = %f ('%o %o %o %o)\n", tempd1-tempd2, crs[FLTH], crs[FLTL], crs[FLTD], crs[FEXP]);
-	XCLEARC;   /* XXX: test overflow */
       } else
 	mathexception('f', FC_DFP_OFLOW, ea);
     else {

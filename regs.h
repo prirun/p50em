@@ -179,7 +179,7 @@ static union {
    Putting them in dedicated registers gives about an 11% performance boost
    and reduces the code size from 146K to 136K */
 
-#if 1
+#ifndef NOREGS
 
 /* store RP and crsl in dedicated registers 29-30 (Power PC) */
 
