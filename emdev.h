@@ -449,9 +449,9 @@ readasr:
 	  printf("Trace owner = %o/%o\n", crs[OWNER], crs[OWNERL]);
 	  if (gvp->savetraceflags == 0) {
 	    TRACEA("\nTRACE ENABLED:\n\n");
-	    gvp->savetraceflags = ~TB_MAP;
+	    gvp->savetraceflags = ~T_MAP;
 	    gvp->savetraceflags = ~0;
-	    gvp->savetraceflags = TB_FLOW;
+	    gvp->savetraceflags = T_FLOW|T_FAULT;
 	  } else {
 	    TRACEA("\nTRACE DISABLED:\n\n");
 	    gvp->savetraceflags = 0;
@@ -1035,7 +1035,7 @@ int devmt (int class, int func, int device) {
       devpoll[device] = 10;
 
       if ((crs[A] & 0x00E0) == 0x0020) {       /* rewind */
-	//gvp->traceflags = ~TB_MAP;
+	//gvp->traceflags = ~T_MAP;
 	TRACE(T_TIO, " rewind\n");
 	if (lseek(unit[u].fd, 0, SEEK_SET) == -1) {
 	  perror("Unable to rewind tape drive file");
@@ -1375,7 +1375,7 @@ int devcp (int class, int func, int device) {
 
     } else if (func == 015) {   /* set interrupt mask */
       /* this enables tracing when the clock process initializes */
-      //gvp->traceflags = ~TB_MAP;
+      //gvp->traceflags = ~T_MAP;
       //TRACEA("Clock interrupt enabled!\n");
       enabled = 1;
       SETCLKPOLL;
@@ -1402,7 +1402,7 @@ int devcp (int class, int func, int device) {
     if (func == 011) {             /* input ID */
       crs[A] = 020;                /* this is the Option-A board */
       crs[A] = 0120;               /* this is the SOC board */
-      //gvp->traceflags = ~TB_MAP;
+      //gvp->traceflags = ~T_MAP;
     } else if (func == 016) {
       crs[A] = sswitch;
     } else if (func == 017) {      /* read switches pushed down */
@@ -1504,6 +1504,7 @@ int devcp (int class, int func, int device) {
 	   the correct time.  In addition to lowering overhead, slower
 	   clock tick rates make catching up much faster. */
 
+#ifndef FIXEDCLOCK
 	if (abs(ticks-targetticks) > 5000 && datnowea != 0)
 	  ticks = -1;
 	else if (ticks < targetticks)
@@ -1516,6 +1517,7 @@ int devcp (int class, int func, int device) {
 	    ticks = 0;
 	  }
 	}
+#endif
 
 	/* update instpermsec every 5 seconds.  Check for instcount
 	   overflow and reset when it occurs.
@@ -1693,7 +1695,7 @@ int devdisk (int class, int func, int device) {
   char rtfile[16];          /* read trace file name */
   int rtnw;                 /* total number of words read (all channels) */
 
-  //gvp->traceflags |= TB_DIO;
+  //gvp->traceflags |= T_DIO;
 
   switch (class) {
 
@@ -1751,7 +1753,7 @@ int devdisk (int class, int func, int device) {
     TRACE(T_INST|T_DIO, " INA '%2o%2o\n", func, device);
 
     /* this turns tracing on when the Primos disk processes initialize */
-    //gvp->traceflags = ~TB_MAP;
+    //gvp->traceflags = ~T_MAP;
 
     /* INA's are only accepted when the controller is not busy */
 
@@ -2095,7 +2097,7 @@ int devdisk (int class, int func, int device) {
 	  gvp->intvec = m1;
 	  dc[device].state = S_INT;
 	}
-	//gvp->traceflags = ~TB_MAP;
+	//gvp->traceflags = ~T_MAP;
 	devpoll[device] = 10;
 	return;
 
@@ -3040,7 +3042,7 @@ int devpnc (int class, int func, int device) {
 #define DELIM " \t\n"
 #define PDELIM ":"
 
-  //gvp->traceflags = ~TB_MAP;
+  //gvp->traceflags = ~T_MAP;
 
   if (nport <= 0) {
     if (class == -1)

@@ -265,37 +265,23 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
    T_PX         Process exchange
 */
 
-#define TB_EAR   0x00000001
-#define TB_EAV   0x00000002
-#define TB_EAI   0x00000004
-#define TB_INST  0x00000008
-#define TB_FLOW  0x00000010
-#define TB_MODE  0x00000020
-#define TB_EAAP  0x00000040
-#define TB_DIO   0x00000080
-#define TB_MAP   0x00000100
-#define TB_PCL   0x00000200
-#define TB_FAULT 0x00000400
-#define TB_PX    0x00000800
-#define TB_TIO   0x00001000
-#define TB_TERM  0x00002000
-#define TB_RIO   0x00004000
-
-#define T_EAR   TB_EAR
-#define T_EAV   TB_EAV
-#define T_EAI   TB_EAI
-#define T_INST  TB_INST
-#define T_FLOW  TB_FLOW
-#define T_MODE  TB_MODE
-#define T_EAAP  TB_EAAP
-#define T_DIO   TB_DIO
-#define T_MAP   TB_MAP
-#define T_PCL   TB_PCL
-#define T_FAULT TB_FAULT
-#define T_PX    TB_PX
-#define T_TIO   TB_TIO
-#define T_TERM  TB_TERM
-#define T_RIO   TB_RIO
+#define T_EAR   0x00000001
+#define T_EAV   0x00000002
+#define T_EAI   0x00000004
+#define T_INST  0x00000008
+#define T_FLOW  0x00000010
+#define T_MODE  0x00000020
+#define T_EAAP  0x00000040
+#define T_DIO   0x00000080
+#define T_MAP   0x00000100
+#define T_PCL   0x00000200
+#define T_FAULT 0x00000400
+#define T_PX    0x00000800
+#define T_TIO   0x00001000
+#define T_TERM  0x00002000
+#define T_RIO   0x00004000
+#define T_GET   0x00002000
+#define T_PUT   0x00001000
 
 #define BITMASK16(b) (0x8000 >> ((b)-1))
 #define BITMASK32(b) ((unsigned int)(0x80000000) >> ((b)-1))
@@ -1075,13 +1061,6 @@ static inline unsigned short get16(ea_t ea) {
     printf("address trap in get16, ea=%o/%o\n", ea>>16, ea&0xffff);
     fatal(NULL);
   }
-#endif
-
-#if 0
-  /* idle loop runs faster if this is enabled, but executable is 27K
-     bigger and programs (ADD) run slower.  Maybe inline expansions of
-     get16 & fastmap are too big for cache (?) */
-  return MEM[fastmap(ea, RP, RACC)];
 #endif
 
 #ifdef FAST
@@ -2380,29 +2359,46 @@ static unsigned short dumppcb(unsigned short pcb) {
 }
 
 /* stack extension, called with size of extension in 16-bit words,
-   returns a pointer to the extension */
+   the stackroot segment.
 
-static ea_t stex(unsigned int extsize) {
-  short stackrootseg;
-  ea_t stackrootp, stackfp;
+   According to the ISG, STEX can create a multi-segment extension,
+   but the emulator doesn't support this and will fault.
 
-  if (extsize & 1) extsize++;
+   NOTE: see related code in PCL and PRTN.
+*/
+
+static ea_t stex(unsigned int framesize) {
+  short stackrootseg, stackseg;
+  unsigned long utempl;
+  ea_t stackfp, fpva;
+
+  if (framesize > 0xFFFF)
+    fault(RESTRICTFAULT, 0, 0);
+
+  framesize = (framesize + 1) & 0xFFFE;    /* round up to even */
+  eap = &gvp->brp[SBBR];
   stackrootseg = get16((*(unsigned int *)(crs+SB))+1);
-  stackrootp = MAKEVA(stackrootseg,0);
-  stackfp = get32(stackrootp);
+  stackseg = stackrootseg;
+  stackfp = get32(MAKEVA(stackseg,0));
 
-  /* find a stack segment where this extension will fit */
+  /* see if there is room for this frame */
 
-  while (stackfp != 0 && (stackfp & 0xFFFF) + extsize > 0xFFFF) {
-    stackfp = get32(MAKEVA(stackfp>>16, 2));
-    TRACE(T_FLOW, " no room for frame, extension pointer is %o/%o\n", stackfp>>16, stackfp&0xFFFF);
+  if ((stackfp & 0xFFFF) + framesize > 0xFFFF) {
+
+    /* no, follow the extension pointer in the last stack segment to
+       the next stack segment */
+
+    stackseg = SEGNO32(stackfp);
+    fpva = MAKEVA(stackseg, 2);
+    stackfp = get32(fpva);
+    TRACE(T_PCL, " no room for frame, extension pointer at %o/%o is %o/%o\n", fpva>>16, fpva&0xffff, stackfp>>16, stackfp&0xFFFF);
+    if (stackfp == 0 || (stackfp & 0xFFFF) + framesize > 0xFFFF)
+      fault(STACKFAULT, 0, MAKEVA(stackseg,0) | (RP & RINGMASK32));
   }
-  if (stackfp == 0)
-    fault(STACKFAULT, 0, MAKEVA(stackrootseg,0) | (RP & RINGMASK32));
 
   /* update the stack free pointer */
 
-  put32((stackfp+extsize) & ~RINGMASK32, stackrootp);
+  put32((stackfp+framesize) & ~RINGMASK32, MAKEVA(stackrootseg, 0));
   TRACE(T_FLOW, " stack extension is at %o/%o\n", stackfp>>16, stackfp&0xffff);
   return stackfp;
 }
@@ -2414,23 +2410,29 @@ static ea_t stex(unsigned int extsize) {
    If changing rings, make sure to invalidate the brp cache. */
 
 static inline void prtn() {
-  unsigned short stackrootseg;
+  unsigned short stackroot;
   ea_t newrp,newsb,newlb;
+  ea_t fpva;
+  unsigned short fpseg;
   unsigned short keys;
+  int maxloop;
 
-  stackrootseg = get16(*(unsigned int *)(crs+SB)+1);
+  eap = &gvp->brp[SBBR];
+  stackroot = get16(*(unsigned int *)(crs+SB)+1);
   newrp = get32(*(unsigned int *)(crs+SB)+2);
   newsb = get32(*(unsigned int *)(crs+SB)+4);
   newlb = get32(*(unsigned int *)(crs+SB)+6);
   keys = get16(*(unsigned int *)(crs+SB)+8);
-  put32(*(unsigned int *)(crs+SB), MAKEVA(stackrootseg,0));
+
+  /* update the stack free pointer */
+
+  put32(*(unsigned int *)(crs+SB), MAKEVA(stackroot, 0));
   if ((newrp ^ RP) & RINGMASK32)
     invalidate_brp();
   RP = newrp | (RP & RINGMASK32);
   *(unsigned int *)(crs+SB) = newsb;
   *(unsigned int *)(crs+LB) = newlb;
   newkeys(keys & 0177770);
-  invalidate_brp();
   //TRACE(T_FLOW, " Finished PRTN, RP=%o/%o\n", RPH, RPL);
 }
 
@@ -2484,6 +2486,7 @@ static inline ea_t pclea(unsigned short brsave[6], ea_t rp, unsigned short *bita
     if (ea & 0x80000000)
       fault(POINTERFAULT, ea>>16, 0);    /* XXX: faddr=0? */
     iwea = ea;
+    eap = &gvp->brp[br];
     ea = get32(iwea);
     TRACE(T_PCL, " Indirect pointer is %o/%o\n", ea>>16, ea & 0xFFFF);
 #if 1
@@ -2544,6 +2547,7 @@ static argt() {
   /* stackfp is the new stack frame, rp is in the middle of
      argument templates and is advanced after each transfer */
 
+  eap = &gvp->brp[SBBR];
   stackfp = *(unsigned int *)(crs+SB);
   rp = get32(stackfp+2);
 
@@ -2634,19 +2638,21 @@ static argt() {
 
 static pcl (ea_t ecbea) {
   short i,j;
+  unsigned long utempl;
   unsigned short access;
   unsigned short ecb[9];
   short bit;                  /* bit offset for args */
   ea_t newrp;                 /* start of new proc */
   ea_t ea;
   ea_t rp;                    /* return pointer */
-  short stackrootseg;
-  unsigned short stacksize;
+  short stackrootseg, stackseg;
+  unsigned short framesize;
   short store;                /* true if store bit set on AP */
   short storedargs;           /* # of arguments that have been stored */
   short lastarg;              /* true if "last" bit seen in PCL arglist */
   ea_t argp;                  /* where to store next arg in new frame */
   ea_t stackfp;               /* new stack frame pointer */
+  ea_t fpva;                  /* virtual address of the free pointer */
   pa_t pa;                    /* physical address of ecb */
   unsigned short brsave[6];   /* old PB,SB,LB */
   unsigned short utempa;
@@ -2659,7 +2665,7 @@ static pcl (ea_t ecbea) {
 #if 0
   if (ecbea == UNWIND_) {
     printf("pcl: calling unwind_ at %d\n", gvp->instcount);
-    gvp->savetraceflags = ~TB_MAP;
+    gvp->savetraceflags = ~T_MAP;
   }
 #endif
 
@@ -2697,35 +2703,46 @@ static pcl (ea_t ecbea) {
   TRACE(T_PCL, " ecb.pb: %o/%o\n ecb.framesize: %d\n ecb.stackroot %o\n ecb.argdisp: %o\n ecb.nargs: %d\n ecb.lb: %o/%o\n ecb.keys: %o\n", ecb[0], ecb[1], ecb[2], ecb[3], ecb[4], ecb[5], ecb[6], ecb[7], ecb[8]);
 
   newrp = *(unsigned int *)(ecb+0);
-  if (access != 1)    /* not a gate, but weaken ring (outward calls) */
+  if (access != 1)    /* not a gate, so weaken ring (outward calls) */
     newrp = newrp | (RP & RINGMASK32);
 
   /* setup stack frame
-     NOTE: newrp must be used here so that accesses succeed when calling 
-     an inner ring procedure. */
 
+     NOTE: newrp must be used here so that accesses succeed when
+     calling an inner ring procedure.
+
+     NOTE: see related code in STEX and PRTN.
+  */
+
+  framesize = (ecb[2] + 1) & 0xFFFE;   /* round up frame size to even */
   stackrootseg = ecb[3];
+  eap = &gvp->brp[SBBR];
   if (stackrootseg == 0) {
-    eap = &gvp->brp[SBBR];
     stackrootseg = get16((*(unsigned int *)(crs+SB)) + 1);
     TRACE(T_PCL, " stack root in ecb was zero, stack root from caller is %o\n", stackrootseg);
   }
-  stackfp = get32r(MAKEVA(stackrootseg,0), newrp);
-  TRACE(T_PCL, " stack free pointer: %o/%o, current ring=%o, new ring=%o\n", stackfp>>16, stackfp&0xFFFF, (RPH&RINGMASK16)>>13, (newrp&RINGMASK32)>>29);
-  stacksize = ecb[2];
+  stackseg = stackrootseg;
 
-  /* if there isn't room for this frame, check the stack extension
-     pointer */
+  stackfp = get32r(MAKEVA(stackrootseg, 0), newrp);
+  TRACE(T_PCL, " stack free pointer is %o/%o, current ring=%o, new ring=%o\n", stackfp>>16, stackfp&0xFFFF, (RPH&RINGMASK16)>>13, (newrp&RINGMASK32)>>29);
 
-  if ((stackfp & 0xFFFF) + stacksize > 0xFFFF) {
-    stackfp = get32r(MAKEVA(stackrootseg,2), newrp);
-    TRACE(T_PCL, " no room for frame, extension pointer is %o/%o\n", stackfp>>16, stackfp&0xFFFF);
+  /* see if there is room for this frame */
 
-    /* XXX: faddr may need to be the last segment tried when this is changed to loop.
-       CPU.PCL Case 26 wants fault address word number to be 3; set EHDB */
+  if ((stackfp & 0xFFFF) + framesize > 0xFFFF) {
 
-    if (stackfp == 0 || (stackfp & 0xFFFF) + stacksize > 0xFFFF)
-      fault(STACKFAULT, 0, MAKEVA(stackrootseg,0) | (newrp & RINGMASK32));
+    /* no, follow the extension pointer in the last stack segment to
+       the next stack segment */
+
+    stackseg = SEGNO32(stackfp);
+    fpva = MAKEVA(stackseg, 2);
+    stackfp = get32r(fpva, newrp);
+    TRACE(T_PCL, " no room for frame, extension pointer at %o/%o is %o/%o\n", fpva>>16, fpva&0xffff, stackfp>>16, stackfp&0xFFFF);
+
+    /* CPU.PCL Case 26 wants fault address word number to be 3 for some
+       CPU models; set EHDB switch in CPU.PCL to avoid this error */
+
+    if (stackfp == 0 || (stackfp & 0xFFFF) + framesize > 0xFFFF)
+      fault(STACKFAULT, 0, MAKEVA(stackseg,0) | (newrp & RINGMASK32));
   }
 
   /* setup the new stack frame at stackfp
@@ -2760,7 +2777,12 @@ static pcl (ea_t ecbea) {
   if (access == 1)                 /* for gate access, don't weaken ring */
     *(unsigned int *)(crs+SB) = stackfp;
   else
+#if 1
     *(unsigned int *)(crs+SB) = (stackfp & ~RINGMASK32) | (RP & RINGMASK32);
+#else
+  /* XXX: use newrp ring, right?  What about setting ring on LB, below? */
+    *(unsigned int *)(crs+SB) = (stackfp & ~RINGMASK32) | (newrp & RINGMASK32);
+#endif
   TRACE(T_PCL, " new SB=%o/%o\n", crs[SBH], crs[SBL]);
   *(unsigned int *)(crs+LB) = *(unsigned int *)(ecb+6);
   newkeys(ecb[8] & 0177770);
@@ -2772,11 +2794,11 @@ static pcl (ea_t ecbea) {
      pointer if the extension pointer was followed.  Try setting EHDB
      to suppress this spurious DIAG error. */
 
-  ea = MAKEVA(stackrootseg,0) | (newrp & RINGMASK32);
+  ea = MAKEVA(stackrootseg, 0) | (newrp & RINGMASK32);
   if (cpuid == 15)
-    put32r(stackfp+stacksize, ea, newrp);
+    put32r(stackfp+framesize, ea, newrp);
   else
-    put32r((stackfp+stacksize) & ~RINGMASK32, ea, newrp);
+    put32r((stackfp+framesize) & ~RINGMASK32, ea, newrp);
 
   /* transfer arguments if arguments are expected.  There is no
      documentation explaining how the Y register is used during
@@ -2900,6 +2922,7 @@ static void calf(ea_t ea) {
 
   /* get concealed stack entry address */
 
+  eap = &gvp->brp[UNBR];
   first = get16r0(pcbp+PCBCSFIRST);
   next = get16r0(pcbp+PCBCSNEXT);
   last = get16r0(pcbp+PCBCSLAST);
@@ -2911,6 +2934,7 @@ static void calf(ea_t ea) {
   csea = MAKEVA(crs[OWNERH]+gvp->csoffset, this);
   TRACE(T_FAULT,"CALF: cs frame is at %o/%o\n", csea>>16, csea&0xFFFF);
 
+#if DBG
   /* make sure ecb specifies zero args (not part of the architecture)
 
      NOTE: this check needs get16r0 too because in Rev 19, segment 5
@@ -2922,26 +2946,31 @@ static void calf(ea_t ea) {
     printf("CALF ecb at %o/%o has arguments!\n", ea>>16, ea&0xFFFF);
     fatal(NULL);
   }
+#endif
 
   pcl(ea);
 
   /* get the concealed stack entries and adjust the new stack frame */
 
+  eap = &gvp->brp[UNBR];
   *(unsigned int *)(cs+0) = get32r0(csea+0);
-  *(long long *)(cs+2) = get64r0(csea+2);
+  *(unsigned int *)(cs+2) = get32r0(csea+2);
+  *(unsigned int *)(cs+4) = get32r0(csea+4);
+
+  /* pop the concealed stack 
+     XXX: this was after code below.  Does it matter? */
+
+  put16r0(this, pcbp+PCBCSNEXT);
 
   TRACE(T_FAULT, "CALF: cs entry: retpb=%o/%o, retkeys=%o, fcode=%o, faddr=%o/%o\n", cs[0], cs[1], cs[2], cs[3], cs[4], cs[5]);
 
+  eap = &gvp->brp[SBBR];
   stackfp = *(unsigned int *)(crs+SB);
   put16(1, stackfp+0);                          /* flag it as CALF frame */
   put32(*(unsigned int *)(cs+0), stackfp+2);    /* return PB */
   put16(cs[2], stackfp+8);                      /* return keys */
   put16(cs[3], stackfp+10);                     /* fault code */
   put32(*(unsigned int *)(cs+4), stackfp+11);   /* fault address */
-
-  /* pop the concealed stack */
-
-  put16r0(this, pcbp+PCBCSNEXT);
 }
 
 
@@ -3575,7 +3604,7 @@ static lpsw() {
   } else 
     gvp->livereglim = 040;
 #if 0
-  gvp->savetraceflags |= TB_FLOW;    /****/
+  gvp->savetraceflags |= T_FLOW;    /****/
 #endif
   if (crs[MODALS] & 010) {
     TRACE(T_PX, "Process exchange enabled:\n");
@@ -3611,7 +3640,7 @@ static sssn() {
   int i;
 
   //printf("SSSN @ %o/%o\n", RPH, RPL);
-  //gvp->savetraceflags = gvp->traceflags = ~TB_MAP;    /*****/
+  //gvp->savetraceflags = gvp->traceflags = ~T_MAP;    /*****/
   TRACE(T_FLOW, " SSSN\n");
   ea = *(unsigned int *)(crs+XB);
   for (i=0; i<8; i++)
@@ -4028,6 +4057,8 @@ static int ldar(ea_t ea) {
       result = 1;
     else if (ea == 024)
       result = -1;
+    else if (ea == 7)
+      result = RP;
     else
       result = regs.u32[ea];
   } else {
@@ -4047,7 +4078,10 @@ static star(unsigned int val32, ea_t ea) {
       printf("em: STLR ea '%o is out of range for this cpu model.\nThis -cpuid may not be supported by this version of software\nTry a lower -cpuid", ea);
       fatal(NULL);
     }
-    regs.u32[ea & 0777] = val32;
+    ea &= 0777;
+    regs.u32[ea] = val32;
+    if (ea == 7)
+      RP = val32;
   } else {
     ea &= 037;
     if (ea > 017) RESTRICT();
@@ -4286,35 +4320,39 @@ main (int argc, char **argv) {
       while (i+1 < argc && argv[i+1][0] != '-') {
 	i++;
 	if (strcmp(argv[i],"ear") == 0)
-	  gvp->traceflags |= TB_EAR;
+	  gvp->traceflags |= T_EAR;
 	else if (strcmp(argv[i],"eav") == 0)
-	  gvp->traceflags |= TB_EAV;
+	  gvp->traceflags |= T_EAV;
 	else if (strcmp(argv[i],"eai") == 0)
-	  gvp->traceflags |= TB_EAI;
+	  gvp->traceflags |= T_EAI;
 	else if (strcmp(argv[i],"inst") == 0)
-	  gvp->traceflags |= TB_INST;
+	  gvp->traceflags |= T_INST;
 	else if (strcmp(argv[i],"flow") == 0)
-	  gvp->traceflags |= TB_FLOW;
+	  gvp->traceflags |= T_FLOW;
 	else if (strcmp(argv[i],"mode") == 0)
-	  gvp->traceflags |= TB_MODE;
+	  gvp->traceflags |= T_MODE;
 	else if (strcmp(argv[i],"eaap") == 0)
-	  gvp->traceflags |= TB_EAAP;
+	  gvp->traceflags |= T_EAAP;
 	else if (strcmp(argv[i],"dio") == 0)
-	  gvp->traceflags |= TB_DIO;
+	  gvp->traceflags |= T_DIO;
 	else if (strcmp(argv[i],"map") == 0)
-	  gvp->traceflags |= TB_MAP;
+	  gvp->traceflags |= T_MAP;
 	else if (strcmp(argv[i],"pcl") == 0)
-	  gvp->traceflags |= TB_PCL;
+	  gvp->traceflags |= T_PCL;
 	else if (strcmp(argv[i],"fault") == 0)
-	  gvp->traceflags |= TB_FAULT;
+	  gvp->traceflags |= T_FAULT;
 	else if (strcmp(argv[i],"px") == 0)
-	  gvp->traceflags |= TB_PX;
+	  gvp->traceflags |= T_PX;
 	else if (strcmp(argv[i],"tio") == 0)
-	  gvp->traceflags |= TB_TIO;
+	  gvp->traceflags |= T_TIO;
 	else if (strcmp(argv[i],"term") == 0)
-	  gvp->traceflags |= TB_TERM;
+	  gvp->traceflags |= T_TERM;
 	else if (strcmp(argv[i],"rio") == 0)
-	  gvp->traceflags |= TB_RIO;
+	  gvp->traceflags |= T_RIO;
+	else if (strcmp(argv[i],"put") == 0)
+	  gvp->traceflags |= T_PUT;
+	else if (strcmp(argv[i],"get") == 0)
+	  gvp->traceflags |= T_GET;
 	else if (strcmp(argv[i],"all") == 0)
 	  gvp->traceflags = ~0;
 	else if (isdigit(argv[i][0]) && strlen(argv[i]) <= 2 && sscanf(argv[i],"%d", &templ) == 1)
@@ -4568,7 +4606,7 @@ fetch:
 
 #if 0
   if (gvp->instcount > 2681900)
-    gvp->savetraceflags = TB_FLOW;
+    gvp->savetraceflags = T_FLOW;
   if (gvp->instcount > 3000000)
     gvp->savetraceflags = 0;
 #endif
@@ -4588,7 +4626,7 @@ fetch:
      following ARGT (if PCL completes w/o faults) */
 
   if (TRACEUSER && SEGNO16(RPH) == 041 && 06200 <= RPL && RPL <= 06201) { /* ac$set */
-    gvp->savetraceflags = ~TB_MAP;
+    gvp->savetraceflags = ~T_MAP;
     printf("enable trace, RPH=%o, RPL=%o\n", SEGNO16(RPH), RPL);
   }
   if (TRACEUSER && SEGNO16(RPH) == 013 && 044030 <= RPL && RPL <= 044031) { /* setrc$ */
@@ -4600,7 +4638,7 @@ fetch:
 #if 0
   /* this is for FTN Generic 3 trace */
   if (SEGNO16(RPH) == 04000 && RPL >= 034750 && RPL <= 034760)
-    gvp->savetraceflags = ~TB_MAP;
+    gvp->savetraceflags = ~T_MAP;
   else
     gvp->savetraceflags = 0;
 #endif
@@ -4645,7 +4683,7 @@ fetch:
      To track this down, turn on tracing just before this instruction. */
 
   if (75370000 < gvp->instcount && gvp->instcount < 75380000)
-    gvp->traceflags = ~TB_MAP;
+    gvp->traceflags = ~T_MAP;
 #endif
 
 #if 0
@@ -4709,7 +4747,7 @@ fetch:
       regs.sym.pswkeys = crs[KEYS];
 
       if (crs[MODALS] & 010) {              /* PX enabled */
-	//gvp->traceflags = ~TB_MAP;
+	//gvp->traceflags = ~T_MAP;
 	newkeys(014000);
 	RPH = 4;
 	RPL = gvp->intvec;
@@ -4727,7 +4765,7 @@ fetch:
       } else {                              /* standard interrupt mode */
 	m = get16(063);
 	//printf("Standard mode interrupt vector loc = %o\n", m);
-	//gvp->traceflags = ~TB_MAP;
+	//gvp->traceflags = ~T_MAP;
 	if (m != 0) {
 	  put16(RPL, m);
 	  RP = m+1;
@@ -5073,6 +5111,7 @@ d_nop:  /* 000001 */
 d_rsav:  /* 000715 */
   TRACE(T_FLOW, " RSAV\n");
   ea = apea(NULL);
+  eap = &gvp->brp[SBBR];   /* registers almost always saved on the stack */
   j = 1;
   savemask = 0;
   for (i = 11; i >= 0; i--) {
@@ -5092,6 +5131,7 @@ d_rsav:  /* 000715 */
 d_rrst:  /* 000717 */
   TRACE(T_FLOW, " RRST\n");
   ea = apea(NULL);
+  eap = &gvp->brp[SBBR];   /* registers almost always saved on the stack */
   savemask = get16(ea);
   TRACE(T_INST, " Save mask=%o\n", savemask);
   j = 1;
@@ -7140,7 +7180,7 @@ d_smcs:  /* 0101200 */
 d_badgen:
   TRACEA(" unrecognized generic instruction!\n");
   printf("em: #%d %o/%o: Unrecognized generic instruction '%o!\n", gvp->instcount, RPH, RPL, inst);
-  //gvp->traceflags = ~TB_MAP;
+  //gvp->traceflags = ~T_MAP;
   fault(UIIFAULT, RPL, RP);
   fatal(NULL);
 
@@ -8663,7 +8703,7 @@ imodepcl:
       if (gvp->numtraceprocs > 0 && TRACEUSER)
 	for (i=0; i<gvp->numtraceprocs; i++)
 	  if (traceprocs[i].ecb == (ea & 0xFFFFFFF) && traceprocs[i].sb == -1) {
-	    gvp->traceflags = ~TB_MAP;
+	    gvp->traceflags = ~T_MAP;
 	    gvp->savetraceflags = gvp->traceflags;
 	    traceprocs[i].sb = *(int *)(crs+SB);
 	    printf("Enabled trace for %s at sb '%o/%o\n", traceprocs[i].name, crs[SBH], crs[SBL]);
