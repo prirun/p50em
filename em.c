@@ -194,12 +194,6 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 #define SETC crs[KEYS] |= 0100000
 #define CLEARC crs[KEYS] &= 077777
 
-/* XEXPC, XSETC, XCLEARC are stubs to indicate that the C-bit may not be set correctly */
-
-#define XEXPC   EXPC
-#define XCLEARC CLEARC
-#define XSETC   SETC
-
 /* EXPCL sets both the C and L bits for shift instructions */
 
 #define EXPCL(onoff) \
@@ -415,14 +409,25 @@ typedef struct {
 /* NOTE: vpn is a segment number/word offset Prime virtual address
    corresponding to the physical page of memory in memp.  The high-
    order fault bit of vpn is never set.  The ring and extension bits
-   are used to store the 3-bit access field from the STLB for the 
-   current ring (remember that all brp entries are invalidated by
-   PCL and PRTN when the ring changes).
+   are used to store the 3-bit access field from the STLB for the
+   current ring.
 
-   Storing the access bits in the vpn allows use of of the brp
-   cache for write accesses as well as read accesses.  Only bit
-   4 (write allowed) is used, but since a 3-bit value comes back
-   from mapva, it's easier just to put it all in vpn.
+   All brp entries are invalidated by PCL and PRTN when the ring
+   changes, ITLB, PTLB, and LIOT (STLB changes), and when OWNERL
+   changes (process exchange).
+
+   Storing the access bits in the vpn allows use of of the brp cache
+   for write accesses as well as read accesses.  Only bit 4 (write
+   allowed) is used, but since a 3-bit value comes back from mapva,
+   it's easier just to put it all in vpn.
+
+   IMPORTANT NOTE: the "get" calls do not store the access field in
+   the brp cache entry; the first write to a page must clear the "page
+   unmodified" bit in the Primos page maps, and mapva is the only way
+   to do this.  So the first "put" has to go through mapva.  An
+   alternative would be to store the page map pointer in brp and use
+   bit 3 of vpn as a flag for whether the page map has to be modified,
+   but this is more work for probably little gain.
  */
 
 typedef struct {
@@ -835,7 +840,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
     seg = SEGNO32(ea);
     stlbix = STLBIX(ea);
     stlbp = gvp->stlb+stlbix;
-#if DBG
+#ifdef DBG
     if (stlbix >= STLBENTS) {
       printf("STLB index %d is out of range for va %o/%o!\n", stlbix, ea>>16, ea&0xffff);
       fatal(NULL);
@@ -931,7 +936,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
   if (pa < gvp->memlimit)
 #endif
     return pa;
-#if DBG
+#ifdef DBG
   printf(" map: Memory address '%o (%o/%o) is out of range 0-'%o (%o/%o) at #%d!\n", pa, pa>>16, pa & 0xffff, gvp->memlimit-1, (gvp->memlimit-1)>>16, (gvp->memlimit-1) & 0xffff, gvp->instcount);
 #endif
 
@@ -1056,7 +1061,7 @@ const static unsigned int mapio(ea_t ea) {
 static inline unsigned short get16(ea_t ea) {
   unsigned short access;
 
-#if DBG
+#ifdef DBG
   if (ea & 0x80000000) {
     printf("address trap in get16, ea=%o/%o\n", ea>>16, ea&0xffff);
     fatal(NULL);
@@ -1075,7 +1080,7 @@ static inline unsigned short get16(ea_t ea) {
     gvp->supermisses++;
 #endif
     eap->memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
-    eap->vpn = (ea & 0x0FFFFC00) | (access << 28);
+    eap->vpn = ea & 0x0FFFFC00;
     return eap->memp[ea & 0x3FF];
   }
 #else
@@ -1112,7 +1117,7 @@ static inline unsigned short get16t(ea_t ea) {
 static unsigned short get16r(ea_t ea, ea_t rpring) {
   unsigned short access;
 
-#if DBG
+#ifdef DBG
   if (ea & 0x80000000) {
     printf("address trap in get16r, ea=%o/%o\n", ea>>16, ea&0xffff);
     fatal(NULL);
@@ -1137,7 +1142,7 @@ static unsigned int get32m(ea_t ea) {
   unsigned short access;
   unsigned short m[2];
 
-#if DBG
+#ifdef DBG
   if (ea & 0x80000000) {
     printf("address trap in get32m, ea=%o/%o\n", ea>>16, ea&0xffff);
     fatal(NULL);
@@ -1149,7 +1154,7 @@ static unsigned int get32m(ea_t ea) {
 #endif
   if ((ea & 01777) <= 01776) {
     eap->memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
-    eap->vpn = (ea & 0x0FFFFC00) | (access << 28);
+    eap->vpn = ea & 0x0FFFFC00;
     return *(unsigned int *)&eap->memp[ea & 0x3FF];
   }
   return (get16(ea) << 16) | get16(INCVA(ea,1));
@@ -1160,7 +1165,7 @@ static unsigned int get32m(ea_t ea) {
 static inline unsigned int get32(ea_t ea) {
   pa_t pa;
 
-#if DBG
+#ifdef DBG
   if (ea & 0x80000000) {
     printf("address trap in get32, ea=%o/%o\n", ea>>16, ea&0xffff);
     fatal(NULL);
@@ -1189,7 +1194,7 @@ static unsigned int get32r(ea_t ea, ea_t rpring) {
   pa_t pa;
   unsigned short access;
 
-#if DBG
+#ifdef DBG
   if (ea & 0x80000000) {
     printf("address trap in get32r, ea=%o/%o\n", ea>>16, ea&0xffff);
     fatal(NULL);
@@ -1214,7 +1219,7 @@ static long long get64r(ea_t ea, ea_t rpring) {
 
   /* check for live register access */
 
-#if DBG
+#ifdef DBG
   if (ea & 0x80000000) {
     printf("address trap in get64r, ea=%o/%o\n", ea>>16, ea&0xffff);
     fatal(NULL);
@@ -1289,7 +1294,7 @@ unsigned short iget16t(ea_t ea) {
 
   if (*(int *)&ea >= 0) {
     gvp->brp[RPBR].memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
-    gvp->brp[RPBR].vpn = (ea & 0x0FFFFC00) | (access << 28);
+    gvp->brp[RPBR].vpn = ea & 0x0FFFFC00;
     return gvp->brp[RPBR].memp[ea & 0x3FF];
   }
   return get16trap(ea);
@@ -1312,7 +1317,7 @@ static inline unsigned short iget16(ea_t ea) {
 static inline put16(unsigned short value, ea_t ea) {
   unsigned short access;
 
-#if DBG
+#ifdef DBG
   if (ea & 0x80000000) {
     printf("address trap in put16, ea=%o/%o\n", ea>>16, ea&0xffff);
     fatal(NULL);
@@ -1347,7 +1352,7 @@ static inline put16(unsigned short value, ea_t ea) {
 static put16r(unsigned short value, ea_t ea, ea_t rpring) {
   unsigned short access;
 
-#if DBG
+#ifdef DBG
   if (ea & 0x80000000) {
     printf("address trap in put16r, ea=%o/%o\n", ea>>16, ea&0xffff);
     fatal(NULL);
@@ -1400,7 +1405,7 @@ static put32(unsigned int value, ea_t ea) {
   unsigned short access;
   unsigned short *m;
 
-#if DBG
+#ifdef DBG
   if (ea & 0x80000000) {
     printf("address trap in put32, ea=%o/%o\n", ea>>16, ea&0xffff);
     fatal(NULL);
@@ -1444,7 +1449,7 @@ static put32r(unsigned int value, ea_t ea, ea_t rpring) {
   unsigned short access;
   unsigned short *m;
 
-#if DBG
+#ifdef DBG
   if (ea & 0x80000000) {
     printf("address trap in put32r, ea=%o/%o\n", ea>>16, ea&0xffff);
     fatal(NULL);
@@ -1473,7 +1478,7 @@ static put64r(long long value, ea_t ea, ea_t rpring) {
 
   /* check for live register access */
 
-#if DBG
+#ifdef DBG
   if (ea & 0x80000000) {
     printf("address trap in put64r, ea=%o/%o\n", ea>>16, ea&0xffff);
     fatal(NULL);
@@ -2934,7 +2939,7 @@ static void calf(ea_t ea) {
   csea = MAKEVA(crs[OWNERH]+gvp->csoffset, this);
   TRACE(T_FAULT,"CALF: cs frame is at %o/%o\n", csea>>16, csea&0xFFFF);
 
-#if DBG
+#ifdef DBG
   /* make sure ecb specifies zero args (not part of the architecture)
 
      NOTE: this check needs get16r0 too because in Rev 19, segment 5
