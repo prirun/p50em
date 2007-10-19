@@ -452,6 +452,7 @@ readasr:
 	    gvp->savetraceflags = ~T_MAP;
 	    gvp->savetraceflags = ~0;
 	    gvp->savetraceflags = T_FLOW|T_FAULT;
+	    gvp->savetraceflags = T_GET;
 	  } else {
 	    TRACEA("\nTRACE DISABLED:\n\n");
 	    gvp->savetraceflags = 0;
@@ -2198,7 +2199,11 @@ int devamlc (int class, int func, int device) {
 #define MAXLINES 128
 #define MAXFD MAXLINES+20
 #define MAXBOARDS 8
-  /* AMLC poll rate in milliseconds */
+
+  /* AMLC poll rate (ms).  Max data rate = queue size*1000/AMLCPOLL
+     The max AMLC queue size is 256 (octal 400), so a poll rate of
+     75 will generate about 3400 chars per second. */
+
 #define AMLCPOLL 75
 
 #if 1
@@ -2222,7 +2227,7 @@ int devamlc (int class, int func, int device) {
   static struct {                       /* maps socket fd to device & line */
     int device;
     int line;
-  } socktoline[MAXLINES];
+  } fdtoline[MAXFD];
   static struct {
     char dmqmode;                       /* 0=DMT, 1=DMQ */
     char bufnum;                        /* 0=1st input buffer, 1=2nd */
@@ -2236,7 +2241,7 @@ int devamlc (int class, int func, int device) {
     unsigned short recvenabled;         /* 1 bit per line */
     unsigned short ctinterrupt;         /* 1 bit per line */
     unsigned short dss;                 /* 1 bit per line */
-    unsigned short sockfd[16];          /* Unix socket fd, 1 per line */
+    unsigned short fd[16];              /* Unix fd, 1 per line */
     unsigned short tstate[16];          /* terminal state (telnet) */
     unsigned short room[16];            /* room (chars) left in input buffer */
     unsigned short recvlx;              /* next line to check for recv data */
@@ -2254,12 +2259,16 @@ int devamlc (int class, int func, int device) {
   int fd;
   unsigned int addrlen;
   unsigned char buf[1024];      /* max size of DMQ buffer */
-  int i, n, n2, nw, newdevice;
+  int i, n, maxn, n2, nw, newdevice;
   fd_set fds;
   struct timeval timeout;
   unsigned char ch;
   int state;
   int msgfd;
+
+  unsigned short qtop, qbot, qtemp;
+  unsigned short qseg, qmask, qents;
+  ea_t qentea;
 
   switch (class) {
 
@@ -2269,8 +2278,14 @@ int devamlc (int class, int func, int device) {
        AMLC boards are configured */
 
     if (!inited) {
+
+      /* initially, we don't know about any AMLC boards */
+
       for (i=0; i<MAXBOARDS; i++)
 	devices[i] = 0;
+
+      /* start listening for connections */
+
       if (tport != 0) {
 	tsfd = socket(AF_INET, SOCK_STREAM, 0);
 	if (tsfd == -1) {
@@ -2301,14 +2316,6 @@ int devamlc (int class, int func, int device) {
 	if (fcntl(tsfd, F_SETFL, tsflags) == -1) {
 	  perror("unable to set ts flags for AMLC");
 	  fatal(NULL);
-	}
-	if ((msgfd = open("ttymsg", O_RDONLY, 0)) >= 0) {
-	  ttymsglen = read(msgfd, ttymsg, sizeof(ttymsg)-1);
-	  if (ttymsglen >= 0)
-	    ttymsg[ttymsglen] = 0;
-	  close(msgfd);
-	} else if (errno != ENOENT) {
-	  perror("Unable to open ttymsg file");
 	}
       } else
 	fprintf(stderr, "-tport is zero, can't start AMLC devices\n");
@@ -2426,8 +2433,9 @@ int devamlc (int class, int func, int device) {
       /* if DTR drops on a connected line, disconnect */
       if (!(crs[A] & 0x400) && (dc[device].dss & BITMASK16(lx+1))) {
 	/* see similar code below */
-	write(dc[device].sockfd[lx], "\r\nDisconnecting logged out session\r\n", 36);
-	close(dc[device].sockfd[lx]);
+	write(dc[device].fd[lx], "\r\nDisconnecting logged out session\r\n", 36);
+	close(dc[device].fd[lx]);
+	dc[device].fd[lx] = 0;
 	dc[device].dss &= ~BITMASK16(lx+1);
 	//printf("em: closing AMLC line %d on device '%o\n", lx, device);
       }
@@ -2503,26 +2511,28 @@ int devamlc (int class, int func, int device) {
 	perror("accept error for AMLC");
       }
     } else {
-      if (fd >= MAXFD)
-	fatal("New connection fd is too big");
       newdevice = 0;
-      for (i=0; devices[i] && !newdevice && i<MAXBOARDS; i++)
-	for (lx=0; lx<16; lx++) {
-	  /* NOTE: don't allow connections on clock line */
-	  if (lx == 15 && (i+1 == MAXBOARDS || !devices[i+1]))
+      if (fd >= MAXFD)
+	warn("devamlc: new socket fd is too big");
+      else {
+	for (i=0; devices[i] && !newdevice && i<MAXBOARDS; i++)
+	  for (lx=0; lx<16; lx++) {
+	    /* NOTE: don't allow connections on clock line */
+	    if (lx == 15 && (i+1 == MAXBOARDS || !devices[i+1]))
+		break;
+	    if (dc[devices[i]].fd[lx] == 0) {
+	      newdevice = devices[i];
+	      fdtoline[fd].device = newdevice;
+	      fdtoline[fd].line = lx;
+	      dc[newdevice].dss |= BITMASK16(lx+1);
+	      dc[newdevice].fd[lx] = fd;
+	      dc[newdevice].tstate[lx] = TS_DATA;
+	      dc[newdevice].room[lx] = 64;
+	      //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
 	      break;
-	  if (!(dc[devices[i]].dss & BITMASK16(lx+1))) {
-	    newdevice = devices[i];
-	    socktoline[fd].device = newdevice;
-	    socktoline[fd].line = lx;
-	    dc[newdevice].dss |= BITMASK16(lx+1);
-	    dc[newdevice].sockfd[lx] = fd;
-	    dc[newdevice].tstate[lx] = TS_DATA;
-	    dc[newdevice].room[lx] = 64;
-	    //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
-	    break;
+	    }
 	  }
-	}
+      }
       if (!newdevice) {
 	warn("No free AMLC connection");
 	write(fd, "\rAll AMLC lines are in use!\r\n", 29);
@@ -2555,7 +2565,19 @@ int devamlc (int class, int func, int device) {
 	buf[7] = 253;   /* do */
 	buf[8] = 0;     /* binary mode */
 	write(fd, buf, 9);
-	write(fd, ttymsg, ttymsglen);
+
+	/* send out the ttymsg greeting */
+
+	if ((msgfd = open("ttymsg", O_RDONLY, 0)) >= 0) {
+	  ttymsglen = read(msgfd, ttymsg, sizeof(ttymsg)-1);
+	  if (ttymsglen >= 0) {
+	    ttymsg[ttymsglen] = 0;
+	    write(fd, ttymsg, ttymsglen);
+	  }
+	  close(msgfd);
+	} else if (errno != ENOENT) {
+	  perror("Unable to open ttymsg file");
+	}
       }
     }
 
@@ -2567,19 +2589,11 @@ int devamlc (int class, int func, int device) {
        not currently connected, to drain the tty output buffer.
        Otherwise, the DMQ buffer fills, this stalls the tty output
        buffer, and when the next connection occurs on this line, the
-       output buffer from the previous terminal session will then be
+       output buffer from the previous terminal session will be
        displayed to the new user. */
 
     if (dc[device].dss || dc[device].xmitenabled) {
       for (lx = 0; lx < 16; lx++) {
-
-	/* Lots of opportunity to optimize transmits: rather than
-	   using the rtq instruction, do a mapva call to access the
-	   qcb directly, pack the queue data to a buffer, attempt to
-	   write the buffer to the socket, and then update the qcb to
-	   reflect how many bytes were actually written.  This would
-	   avoid lots of get16/mapva calls and the write select could
-	   be removed. */
 
 	if (dc[device].xmitenabled & BITMASK16(lx+1)) {
 	  n = 0;
@@ -2587,23 +2601,30 @@ int devamlc (int class, int func, int device) {
 	    qcbea = dc[device].baseaddr + lx*4;
 	    if (dc[device].dss & BITMASK16(lx+1)) {
 
-	      /* ensure there's some room in the socket buffer */
+	      /* this line is connected, determine max chars to write
+	         XXX: maxn should scale, depending on the actual line
+		 throughput and AMLC poll rate */
 
-	      timeout.tv_sec = 0;
-	      timeout.tv_usec = 0;
-	      FD_ZERO(&fds);
-	      FD_SET(dc[device].sockfd[lx], &fds);
-	      if (select(dc[device].sockfd[lx]+1, NULL, &fds, NULL, &timeout) <= 0)
-		continue;                /* no room at the inn */
+	      maxn = sizeof(buf);
+	      qtop = get16io(qcbea);
+	      qbot = get16io(qcbea+1);
+	      if (qtop == qbot)
+		continue;        /* queue is empty, try next line */
+	      qseg = get16io(qcbea+2);
+	      qmask = get16io(qcbea+3);
+	      qents = (qbot-qtop) & qmask;
+	      if (qents < maxn)
+		maxn = qents;
+	      qentea = MAKEVA(qseg & 0xfff, qtop);
 
 	      /* pack DMQ characters into a buffer & fix parity */
 
 	      n = 0;
-	      while (n < sizeof(buf) && rtq(qcbea, &utempa, 0)) {
-		if (utempa & 0x8000) {           /* valid character */
-		  //printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
-		  buf[n++] = utempa & 0x7F;
-		}
+	      for (i=0; i < maxn; i++) {
+		utempa = MEM[qentea];
+		qentea = (qentea & ~qmask) | ((qentea+1) & qmask);
+		//printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
+		buf[n++] = utempa & 0x7F;
 	      }
 	    } else {         /* no line connected, just drain queue */
 	      //printf("Draining output queue on line %d\n", lx);
@@ -2616,31 +2637,42 @@ int devamlc (int class, int func, int device) {
 		//printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
 		buf[n++] = utempa & 0x7F;
 	      }
-	      put16io(0, dc[device].baseaddr + lx);
 	    }
+
 	    /* would need to setup DMT xmit poll here, and/or look for
 	       char time interrupt.  In practice, DMT isn't used when
 	       the AMLC device is configured as a QAMLC */
 	  }
 
-	  /* NOTE: on a partial write, data sent to the terminal is
-	     lost.  The best option would be to find out how much room
-	     is left in the socket buffer and only remove that many
-	     characters from the queue in the loop above.
+	  /* n chars have been packed into buf; see how many we can send */
 
-	     Mac OSX write selects on sockets will only return true if
-	     there are SO_SNDLOWAT (defaults to 1024) bytes available in
-	     the write buffer.  Since the max DMQ buffer size is also
-	     1024, the write below should never fail because of the
-	     write select above.  On other OS's, it may be necessary to
-	     limit the number of characters dequeued in the loop above.
-	  */
+	  if (n > 0) {
+	    nw = write(dc[device].fd[lx], buf, n);
+	    if (nw > 0) {
 
-	  if (n > 0)
-	    if ((nw = write(dc[device].sockfd[lx], buf, n)) != n) {
-	      perror("Writing to AMLC");
-	      fprintf(stderr," %d bytes written, but %d bytes sent\n", n, nw);
-	    }
+	      /* nw chars were sent; for DMQ, update the queue head
+		 top to reflect nw dequeued entries.  For DMT, clear
+		 the dedicated cell (only writes 1 char at a time) */
+
+	      if (dc[device].dmqmode) {
+		qtop = (qtop & ~qmask) | ((qtop+nw) & qmask);
+		put16io(qtop, qcbea);
+	      } else
+		put16io(0, dc[device].baseaddr + lx);
+	    } else if (nw == -1)
+	      if (errno == EAGAIN || errno == EWOULDBLOCK)
+		;
+	      else if (errno == EPIPE || errno == ECONNRESET) {
+		/* see similar code above */
+		close(dc[device].fd[lx]);
+		dc[device].fd[lx] = 0;
+		dc[device].dss &= ~BITMASK16(lx+1);
+		//printf("em: closing AMLC line %d on device '%o\n", lx, device);
+	      } else {
+		perror("Writing to AMLC");
+		fprintf(stderr," %d bytes written, but %d bytes sent\n", n, nw);
+	      }
+	  }
 	}
       }
     }
@@ -2692,7 +2724,7 @@ int devamlc (int class, int func, int device) {
           if (n2 > 64)        /* don't let 1 line hog the resource */
 	    n2 = 64;
 
-	  while ((n = read(dc[device].sockfd[lx], buf, n2)) == -1 && errno == EINTR)
+	  while ((n = read(dc[device].fd[lx], buf, n2)) == -1 && errno == EINTR)
 	    ;
 	  //printf("processing recv on device %o, line %d, b#=%d, n2=%d, n=%d\n", device, lx, dc[device].bufnum, n2, n);
 
@@ -2709,7 +2741,8 @@ int devamlc (int class, int func, int device) {
 	    else if (errno == EPIPE || errno == ECONNRESET) {
 
 	      /* see similar code above */
-	      close(dc[device].sockfd[lx]);
+	      close(dc[device].fd[lx]);
+	      dc[device].fd[lx] = 0;
 	      dc[device].dss &= ~BITMASK16(lx+1);
 	      //printf("em: closing AMLC line %d on device '%o\n", lx, device);
 	    } else {
@@ -3542,8 +3575,8 @@ xmitdone:
 	for (lx=0; lx<16; lx++)
 	  if (!(dc[devices[i]].dss & BITMASK16(lx+1))) {
 	    newdevice = devices[i];
-	    socktoline[fd].device = newdevice;
-	    socktoline[fd].line = lx;
+	    fdtoline[fd].device = newdevice;
+	    fdtoline[fd].line = lx;
 	    dc[newdevice].dss |= BITMASK16(lx+1);
 	    dc[newdevice].sockfd[lx] = fd;
 	    //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);

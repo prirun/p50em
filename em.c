@@ -1544,7 +1544,7 @@ void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int dswsta
 
 static int rtq(ea_t qcbea, unsigned short *qent, ea_t rp) {
 
-  unsigned int qtop, qbot, qtemp;
+  unsigned short qtop, qbot, qtemp;
   unsigned short qseg, qmask;
   ea_t qentea;
 
@@ -1565,14 +1565,14 @@ static int rtq(ea_t qcbea, unsigned short *qent, ea_t rp) {
     *qent = MEM[qentea];
   }
   qtop = (qtop & ~qmask) | ((qtop+1) & qmask);
-  put16r(qtop & 0xFFFF, qcbea, rp);
+  put16r(qtop, qcbea, rp);
   return 1;
 }
 
 
 static int abq(ea_t qcbea, unsigned short qent, ea_t rp) {
 
-  unsigned int qtop, qbot, qtemp;
+  unsigned short qtop, qbot, qtemp;
   unsigned short qseg, qmask;
   ea_t qentea;
 
@@ -1598,7 +1598,7 @@ static int abq(ea_t qcbea, unsigned short qent, ea_t rp) {
 
 static int rbq(ea_t qcbea, unsigned short *qent, ea_t rp) {
 
-  unsigned int qtop, qbot, qtemp;
+  unsigned short qtop, qbot, qtemp;
   unsigned short qseg, qmask;
   ea_t qentea;
 
@@ -1619,7 +1619,7 @@ static int rbq(ea_t qcbea, unsigned short *qent, ea_t rp) {
 
 static int atq(ea_t qcbea, unsigned short qent, ea_t rp) {
 
-  unsigned int qtop, qbot, qtemp;
+  unsigned short qtop, qbot, qtemp;
   unsigned short qseg, qmask;
   ea_t qentea;
 
@@ -1638,7 +1638,7 @@ static int atq(ea_t qcbea, unsigned short qent, ea_t rp) {
 
 static unsigned short tstq(ea_t qcbea) {
 
-  unsigned int qtop, qbot, qmask;
+  unsigned short qtop, qbot, qmask;
 
   qtop = get16(qcbea);
   qbot = get16(qcbea+1);
