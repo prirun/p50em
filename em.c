@@ -3774,11 +3774,22 @@ static inline arfa(int n, int val) {
   TRACE(T_FLOW, " after add, FAR=%o/%o, FLR=%o\n", crsl[FAR0+2*n]>>16, crsl[FAR0+2*n]&0xFFFF, crsl[FLR0+2*n]);
 }
 
+/* inline function to extract shift count from an instruction */
+
+static inline unsigned short shiftcount (inst) {
+  unsigned short scount;
+  scount = -inst & 077;
+  if (scount == 0)
+    scount = 0100;
+  return scount;
+}
 
 /* 32-bit shifts */
 
-static inline unsigned int lrs(unsigned int val, short scount) {
+static inline unsigned int lrs(unsigned int val, unsigned short inst) {
+  unsigned short scount;
 
+  scount = shiftcount(inst);
   if (scount <= 32) {
     EXPCL(val & (((unsigned int)0x80000000) >> (32-scount)));
     return (*(int *)&val) >> scount;
@@ -3790,9 +3801,11 @@ static inline unsigned int lrs(unsigned int val, short scount) {
     return 0;
 }
 
-static inline unsigned int lls(unsigned int val, short scount) {
+static inline unsigned int lls(unsigned int val, unsigned short inst) {
+  unsigned short scount;
   int templ;
 
+  scount = shiftcount(inst);
   if (scount < 32) {
     templ = 0x80000000;
     templ = templ >> scount;         /* create mask */
@@ -3806,8 +3819,10 @@ static inline unsigned int lls(unsigned int val, short scount) {
   }
 }
 
-static inline unsigned int lll(unsigned int val, short scount) {
+static inline unsigned int lll(unsigned int val, unsigned short inst) {
+  unsigned short scount;
 
+  scount = shiftcount(inst);
   if (scount <= 32) {
     EXPCL(val & (((unsigned int)0x80000000) >> (scount-1)));
     return val << scount;
@@ -3816,8 +3831,10 @@ static inline unsigned int lll(unsigned int val, short scount) {
     return 0;
 }
 
-static inline unsigned int lrl(unsigned int val, short scount) {
+static inline unsigned int lrl(unsigned int val, unsigned short inst) {
+  unsigned short scount;
 
+  scount = shiftcount(inst);
   if (scount <= 32) {
     EXPCL(val & (((unsigned int)0x80000000) >> (32-scount)));
     return val >> scount;
@@ -3828,8 +3845,10 @@ static inline unsigned int lrl(unsigned int val, short scount) {
 
 /* 16-bit shifts */
 
-static inline unsigned short arl (unsigned short val, short scount) {
+static inline unsigned short arl (unsigned short val, unsigned short inst) {
+  unsigned short scount;
 
+  scount = shiftcount(inst);
   if (scount <= 16) {
     EXPCL(val & (((unsigned short)0x8000) >> (16-scount)));
     return val >> scount;
@@ -3839,8 +3858,10 @@ static inline unsigned short arl (unsigned short val, short scount) {
   }
 }
 
-static inline unsigned short all (unsigned short val, short scount) {
+static inline unsigned short all (unsigned short val, unsigned short inst) {
+  unsigned short scount;
 
+  scount = shiftcount(inst);
   if (scount <= 16) {
     EXPCL(val & (((unsigned short)0x8000) >> (scount-1)));
     return val << scount;
@@ -3850,10 +3871,11 @@ static inline unsigned short all (unsigned short val, short scount) {
   }
 }
 
-static inline unsigned short als (unsigned short val, short scount) {
-
+static inline unsigned short als (unsigned short val, unsigned short inst) {
+  unsigned short scount;
   short tempa;
 
+  scount = shiftcount(inst);
   if (scount <= 15) {
     tempa = 0100000;
     tempa = tempa >> scount;         /* create mask */
@@ -3866,8 +3888,10 @@ static inline unsigned short als (unsigned short val, short scount) {
   return 0;
 }
 
-static inline unsigned short ars (unsigned short val, short scount) {
+static inline unsigned short ars (unsigned short val, unsigned short inst) {
+  unsigned short scount;
 
+  scount = shiftcount(inst);
   if (scount <= 16) {
     EXPCL(val & (((unsigned short)0x8000) >> (16-scount)));
     return (*(short *)&val) >> scount;
@@ -3881,15 +3905,19 @@ static inline unsigned short ars (unsigned short val, short scount) {
 
 /* 32-bit rotates */
 
-static inline unsigned int lrr(unsigned int val, short scount) {
+static inline unsigned int lrr(unsigned int val, unsigned short inst) {
+  unsigned short scount;
 
+  scount = shiftcount(inst);
   scount = ((scount-1)%32)+1;         /* make scount 1-32 */
   EXPCL(val & (((unsigned int)0x80000000) >> (32-scount)));
   return (val >> scount) | (val << (32-scount));
 }
 
-static inline unsigned int llr(unsigned int val, short scount) {
+static inline unsigned int llr(unsigned int val, unsigned short inst) {
+  unsigned short scount;
 
+  scount = shiftcount(inst);
   scount = ((scount-1)%32)+1;         /* make scount 1-32 */
   EXPCL(val & (((unsigned int)0x80000000) >> (scount-1)));
   return (val << scount) | (val >> (32-scount));
@@ -3897,15 +3925,19 @@ static inline unsigned int llr(unsigned int val, short scount) {
 
 /* 16-bit rotates */
 
-static inline unsigned int alr(unsigned short val, short scount) {
+static inline unsigned int alr(unsigned short val, unsigned short inst) {
+  unsigned short scount;
 
+  scount = shiftcount(inst);
   scount = ((scount-1)%16)+1;         /* make scount 1-16 */
   EXPCL(val & (((unsigned short)0x8000) >> (scount-1)));
   return (val << scount) | (val >> (16-scount));
 }
 
-static inline unsigned int arr(unsigned short val, short scount) {
+static inline unsigned int arr(unsigned short val, unsigned short inst) {
+  unsigned short scount;
 
+  scount = shiftcount(inst);
   scount = ((scount-1)%16)+1;         /* make scount 1-16 */
   EXPCL(val & (((unsigned short)0x8000) >> (16-scount)));
   return (val >> scount) | (val << (16-scount));
@@ -6924,7 +6956,6 @@ d_mdxx:  /* 01304-01307, 01324 */
   TRACE(T_FLOW, " MDxx\n");
   goto fetch;
 
-d_gen1:
 
   /* this is a bit weird here: the shift group is really only for
      V-mode instructions, but Prime put some I-mode generics in
@@ -6933,144 +6964,138 @@ d_gen1:
      something like LRL executed in I-mode, but the emulator will
      just do it.  */
 
-  //TRACE(T_INST, " shift group\n");
-  scount = -inst & 077;
-  if (scount == 0)
-    scount = 0100;
-  switch (inst & 01700) {
+d_lrl:  /* 00000 - LRL */
+  TRACE(T_FLOW, " LRL %d\n", shiftcount(inst));
+  crsl[GR2] = lrl(crsl[GR2], inst);
+  goto fetch;
 
-  case 00000: /* LRL */
-    TRACE(T_FLOW, " LRL %d\n", scount);
-    crsl[GR2] = lrl(crsl[GR2], scount);
-    break;
-
-  case 00100: /* LRS (different in R & V modes) */
-    TRACE(T_FLOW, " LRS %d\n", scount);
-    if (crs[KEYS] & 010000) {          /* V/I mode */
-      crsl[GR2] = lrs(crsl[GR2], scount);
+d_lrs:  /* 00100 - LRS (different in R & V modes) */
+  TRACE(T_FLOW, " LRS %d\n", shiftcount(inst));
+  if (crs[KEYS] & 010000) {          /* V/I mode */
+    crsl[GR2] = lrs(crsl[GR2], inst);
+  } else {
+    scount = shiftcount(inst);
+    utempa = crs[B] & 0x8000;        /* save B bit 1 */
+    if (scount <= 31) {
+      templ = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
+      EXPCL(templ & BITMASK32(32-scount));
+      templ = templ >> (scount+1);
+      crs[A] = templ >> 15;
+      crs[B] = (templ & 0x7FFF) | utempa;
+    } else if (crs[A] & 0x8000) {
+      *(int *)(crs+A) = 0xFFFF7FFF | utempa;
+      SETCL;
     } else {
-      utempa = crs[B] & 0x8000;        /* save B bit 1 */
-      if (scount <= 31) {
-	templ = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
-	EXPCL(templ & BITMASK32(32-scount));
-	templ = templ >> (scount+1);
-	crs[A] = templ >> 15;
-	crs[B] = (templ & 0x7FFF) | utempa;
-      } else if (crs[A] & 0x8000) {
-	*(int *)(crs+A) = 0xFFFF7FFF | utempa;
-	SETCL;
-      } else {
-	CLEARCL;
-	*(int *)(crs+A) = utempa;
-      }
+      CLEARCL;
+      *(int *)(crs+A) = utempa;
     }
-    break;
-
-  case 00200: /* LRR */
-    TRACE(T_FLOW, " LRR %d\n", scount);
-    crsl[GR2] = lrr(crsl[GR2], scount);
-    break;
-
-  case 00300: 
-    switch (inst) {
-
-    case 0040310: /* SSSN */
-      sssn();
-      break;
-
-    case 0040300: /* DRN */
-    case 0040301: /* DRNP */
-    case 0040302: /* DRNZ */
-    case 0040303: /* FRNP */
-    case 0040320: /* FRNM */
-    case 0040321: /* FRNZ */
-      TRACE(T_FLOW, " DRNx/FRNx(V) UII\n");
-      fault(UIIFAULT, RPL, RP);
-      break;
-
-    default:
-      goto badshift;
-    }
-    break;
-
-  case 00400: /* ARL */
-    TRACE(T_FLOW, " ARL %d\n", scount);
-    crs[A] = arl(crs[A], scount);
-    break;
-
-  case 00500: /* ARS */
-    TRACE(T_FLOW, " ARS %d\n", scount);
-    crs[A] = ars(crs[A], scount);
-    break;
-
-  case 00600: /* ARR */
-    TRACE(T_FLOW, " ARR %d\n", scount);
-    crs[A] = arr(crs[A], scount);
-    break;
-
-  case 01000: /* LLL */
-    TRACE(T_FLOW, " LLL %d\n", scount);
-    crsl[GR2] = lll(crsl[GR2], scount);
-    break;
-
-  case 01100: /* LLS (different in R/V modes) */
-    TRACE(T_FLOW, " LLS %d\n", scount);
-    if (crs[KEYS] & 010000)                /* V/I mode */
-      crsl[GR2] = lls(crsl[GR2], scount);
-    else {
-      utempa = crs[B] & 0x8000;            /* save B bit 1 */
-      if (scount < 31) {
-	utempl = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
-	templ2 = 0x80000000;
-	templ2 = templ2 >> scount;         /* create mask */
-	templ2 = templ2 & utempl;          /* grab bits */
-	templ2 = templ2 >> (31-scount);    /* sign extend them */
-	EXPCL(!(templ2 == -1 || templ2 == 0));
-	//printf(" before: A=%x, B=%x, utempl=%x, ", crs[A], crs[B], utempl);
-	utempl = utempl << scount;
-	crs[A] = utempl >> 16;
-	crs[B] = ((utempl >> 1) & 0x7FFF) | utempa;
-	//printf(" after: A=%x, B=%x, utempl=%x\n", crs[A], crs[B], utempl);
-      } else {
-	EXPCL(*(unsigned int *)(crs+A) != 0);
-	*(unsigned int *)(crs+A) = utempa;
-      }
-    }
-    if ((crs[KEYS] & 0100400) == 0100400)
-      mathexception('i', FC_INT_OFLOW, 0);
-    break;
-
-  case 01200: /* LLR */
-    TRACE(T_FLOW, " LLR %d\n", scount);
-    crsl[GR2] = llr(crsl[GR2], scount);
-    break;
-
-  case 01400: /* ALL */
-    TRACE(T_FLOW, " ALL %d\n", scount);
-    crs[A] = all(crs[A], scount);
-    break;
-
-  case 01500: /* ALS */
-    TRACE(T_FLOW, " ALS %d\n", scount);
-    crs[A] = als(crs[A], scount);
-    if ((crs[KEYS] & 0100400) == 0100400)
-      mathexception('i', FC_INT_OFLOW, 0);
-    break;
-
-  case 01600: /* ALR */
-    TRACE(T_FLOW, " ALR %d\n", scount);
-    crs[A] = alr(crs[A], scount);
-    break;
-
-  default:
-badshift:
-    printf("emulator warning: unrecognized class 1 (shift) generic instruction %06o at %o/%o\n", inst, RPH, RPL);
-    TRACE(T_FLOW, " unrecognized shift instruction!: %o\n", inst);
   }
   goto fetch;
 
-  /* class 2 generic instructions (skip group) */
+d_lrr:  /* 00200 - LRR */
+  TRACE(T_FLOW, " LRR %d\n", shiftcount(inst));
+  crsl[GR2] = lrr(crsl[GR2], inst);
+  goto fetch;
 
+d_300shift:  /* 00300 - generic extension */
+  switch (inst) {
+
+  case 0040310: /* SSSN */
+    sssn();
+    break;
+
+  case 0040300: /* DRN */
+  case 0040301: /* DRNP */
+  case 0040302: /* DRNZ */
+  case 0040303: /* FRNP */
+  case 0040320: /* FRNM */
+  case 0040321: /* FRNZ */
+    TRACE(T_FLOW, " DRNx/FRNx(V) UII\n");
+    fault(UIIFAULT, RPL, RP);
+    break;
+
+  default:
+    goto d_badshift;
+  }
+  goto fetch;
+
+d_arl:  /* 00400 - ARL */
+  TRACE(T_FLOW, " ARL %d\n", shiftcount(inst));
+  crs[A] = arl(crs[A], inst);
+  goto fetch;
+
+d_ars:  /* 00500 - ARS */
+  TRACE(T_FLOW, " ARS %d\n", shiftcount(inst));
+  crs[A] = ars(crs[A], inst);
+  goto fetch;
+
+d_arr:  /* 00600 - ARR */
+  TRACE(T_FLOW, " ARR %d\n", shiftcount(inst));
+  crs[A] = arr(crs[A], inst);
+  goto fetch;
+
+d_lll:  /* 01000 - LLL */
+  TRACE(T_FLOW, " LLL %d\n", shiftcount(inst));
+  crsl[GR2] = lll(crsl[GR2], inst);
+  goto fetch;
+
+d_lls:  /* 01100 - LLS (different in R/V modes) */
+  TRACE(T_FLOW, " LLS %d\n", shiftcount(inst));
+  if (crs[KEYS] & 010000)                /* V/I mode */
+    crsl[GR2] = lls(crsl[GR2], inst);
+  else {
+    scount = shiftcount(inst);
+    utempa = crs[B] & 0x8000;            /* save B bit 1 */
+    if (scount < 31) {
+      utempl = (crs[A]<<16) | ((crs[B] & 0x7FFF)<<1);
+      templ2 = 0x80000000;
+      templ2 = templ2 >> scount;         /* create mask */
+      templ2 = templ2 & utempl;          /* grab bits */
+      templ2 = templ2 >> (31-scount);    /* sign extend them */
+      EXPCL(!(templ2 == -1 || templ2 == 0));
+      //printf(" before: A=%x, B=%x, utempl=%x, ", crs[A], crs[B], utempl);
+      utempl = utempl << scount;
+      crs[A] = utempl >> 16;
+      crs[B] = ((utempl >> 1) & 0x7FFF) | utempa;
+      //printf(" after: A=%x, B=%x, utempl=%x\n", crs[A], crs[B], utempl);
+    } else {
+      EXPCL(*(unsigned int *)(crs+A) != 0);
+      *(unsigned int *)(crs+A) = utempa;
+    }
+  }
+  if ((crs[KEYS] & 0100400) == 0100400)
+    mathexception('i', FC_INT_OFLOW, 0);
+  goto fetch;
+
+d_llr:  /* 01200 - LLR */
+  TRACE(T_FLOW, " LLR %d\n", shiftcount(inst));
+  crsl[GR2] = llr(crsl[GR2], inst);
+  goto fetch;
+
+d_all:  /* 01400 - ALL */
+  TRACE(T_FLOW, " ALL %d\n", shiftcount(inst));
+  crs[A] = all(crs[A], inst);
+  goto fetch;
+
+d_als:  /* 01500 - ALS */
+  TRACE(T_FLOW, " ALS %d\n", shiftcount(inst));
+  crs[A] = als(crs[A], inst);
+  if ((crs[KEYS] & 0100400) == 0100400)
+    mathexception('i', FC_INT_OFLOW, 0);
+  goto fetch;
+
+d_alr:  /* 01600 - ALR */
+  TRACE(T_FLOW, " ALR %d\n", shiftcount(inst));
+  crs[A] = alr(crs[A], inst);
+  goto fetch;
+
+d_badshift:
+  printf("emulator warning: unrecognized class 1 (shift) generic instruction %06o at %o/%o\n", inst, RPH, RPL);
+  TRACE(T_FLOW, " unrecognized shift instruction!: %o\n", inst);
+  goto fetch;
+
+
+  /* class 2 generic instructions (skip group) */
 
 d_nopskp:  /* 0101000 */
   TRACE(T_FLOW, " NOP-SKP\n");
@@ -8116,21 +8141,18 @@ imode:
 
   case 005:
     TRACE(T_FLOW, " SHL\n");
-    scount = -ea & 077;
-    if (scount == 0)
-      scount = 0100;
     switch ((ea >> 14) & 3) {
     case 0:
-      crsl[dr] = lll(crsl[dr], scount);
+      crsl[dr] = lll(crsl[dr], ea);
       break;
     case 1:
-      crs[dr*2] = all(crs[dr*2], scount);
+      crs[dr*2] = all(crs[dr*2], ea);
       break;
     case 2:
-      crsl[dr] = lrl(crsl[dr], scount);
+      crsl[dr] = lrl(crsl[dr], ea);
       break;
     case 3:
-      crs[dr*2] = arl(crs[dr*2], scount);
+      crs[dr*2] = arl(crs[dr*2], ea);
       break;
     default:
       warn("I-mode SHL switch?");
@@ -8234,25 +8256,22 @@ imode:
 
   case 015:
     TRACE(T_FLOW, " SHA\n");
-    scount = -ea & 077;
-    if (scount == 0)
-      scount = 0100;
     switch ((ea >> 14) & 3) {
     case 0:
-      crsl[dr] = lls(crsl[dr], scount);
+      crsl[dr] = lls(crsl[dr], ea);
       if ((crs[KEYS] & 0100400) == 0100400)
 	mathexception('i', FC_INT_OFLOW, 0);
       break;
     case 1:
-      crs[dr*2] = als(crs[dr*2], scount);
+      crs[dr*2] = als(crs[dr*2], ea);
       if ((crs[KEYS] & 0100400) == 0100400)
 	mathexception('i', FC_INT_OFLOW, 0);
       break;
     case 2:
-      crsl[dr] = lrs(crsl[dr], scount);
+      crsl[dr] = lrs(crsl[dr], ea);
       break;
     case 3:
-      crs[dr*2] = ars(crs[dr*2], scount);
+      crs[dr*2] = ars(crs[dr*2], ea);
       break;
     default:
       fatal("SHA?");
@@ -8380,21 +8399,18 @@ imode:
 
   case 024:
     TRACE(T_FLOW, " ROT\n");
-    scount = -ea & 077;
-    if (scount == 0)
-      scount = 0100;
     switch ((ea >> 14) & 3) {
     case 0:
-      crsl[dr] = llr(crsl[dr], scount);
+      crsl[dr] = llr(crsl[dr], ea);
       break;
     case 1:
-      crs[dr*2] = alr(crs[dr*2], scount);
+      crs[dr*2] = alr(crs[dr*2], ea);
       break;
     case 2:
-      crsl[dr] = lrr(crsl[dr], scount);
+      crsl[dr] = lrr(crsl[dr], ea);
       break;
     case 3:
-      crs[dr*2] = arr(crs[dr*2], scount);
+      crs[dr*2] = arr(crs[dr*2], ea);
       break;
     default:
       warn("I-mode ROT switch?");

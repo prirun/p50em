@@ -355,10 +355,63 @@ DIGEN(001306, "MDRS", d_mdxx);
 DIGEN(001307, "MDWC", d_mdxx);
 DIGEN(001324, "MDIW", d_mdxx);
 
-/* initialize class 1 generics (shift group) */
+/* initialize entire class 1 generics (shift group) to "badshift",
+   then initialize each individual shift instruction */
 
 for (i = 02000; i < 04000; i++) {
-  disp_gen[i] = &&d_gen1;
+  disp_gen[i] = &&d_badshift;
+}
+
+for (i = 02000; i < 02100; i++) {
+  disp_gen[i] = &&d_lrl;
+}
+
+for (i = 02100; i < 02200; i++) {
+  disp_gen[i] = &&d_lrs;
+}
+
+for (i = 02200; i < 02300; i++) {
+  disp_gen[i] = &&d_lrr;
+}
+
+for (i = 02300; i < 02400; i++) {
+  disp_gen[i] = &&d_300shift;
+}
+
+for (i = 02400; i < 02500; i++) {
+  disp_gen[i] = &&d_arl;
+}
+
+for (i = 02500; i < 02600; i++) {
+  disp_gen[i] = &&d_ars;
+}
+
+for (i = 02600; i < 02700; i++) {
+  disp_gen[i] = &&d_arr;
+}
+
+for (i = 03000; i < 03100; i++) {
+  disp_gen[i] = &&d_lll;
+}
+
+for (i = 03100; i < 03200; i++) {
+  disp_gen[i] = &&d_lls;
+}
+
+for (i = 03200; i < 03300; i++) {
+  disp_gen[i] = &&d_llr;
+}
+
+for (i = 03400; i < 03500; i++) {
+  disp_gen[i] = &&d_all;
+}
+
+for (i = 03500; i < 03600; i++) {
+  disp_gen[i] = &&d_als;
+}
+
+for (i = 03600; i < 03700; i++) {
+  disp_gen[i] = &&d_alr;
 }
 
 /* initialize class 2 generics (skip group) */

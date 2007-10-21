@@ -32,7 +32,7 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
   ea_s = rph;
 
   /* first check for long, 2-word, V-mode memory references.  About
-     75% of V-mode references are in this form */
+     half of V-mode references are in this form */
 
   if ((inst & 01740) == 01400) {
     a = iget16(RP);
