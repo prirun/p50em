@@ -140,11 +140,10 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 /* set condition codes based on a 16-bit signed value */
 
 #define SETCC_16(val16) \
-  CLEARCC; \
-  if ((val16) == 0) \
-    SETEQ; \
-  else if (*(short *)(&(val16)) < 0) \
-    SETLT;
+  if ((val16) != 0) \
+    crs[KEYS] = (crs[KEYS] & ~0300) | ((unsigned short)((val16) & 0x8000) >> 8); \
+  else \
+    crs[KEYS] = (crs[KEYS] & ~0300) | 0100;
 
 /* set condition codes based on A register (16-bit signed) */
 
@@ -153,11 +152,10 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 /* set condition codes based on a 32-bit signed value */
 
 #define SETCC_32(val32) \
-  CLEARCC; \
-  if ((val32) == 0) \
-    SETEQ; \
-  else if (*(int *)(&(val32)) < 0) \
-    SETLT;
+  if ((val32) != 0) \
+    crs[KEYS] = (crs[KEYS] & ~0300) | ((unsigned int)((val32) & 0x80000000) >> 24); \
+  else \
+    crs[KEYS] = (crs[KEYS] & ~0300) | 0100;
 
 /* set condition codes based on L register (32-bit signed) */
 
@@ -3951,14 +3949,14 @@ static inline tcr(unsigned int *un) {
 
   utempl = - (*(int *)un);
   *un = utempl;
-  SETCC_32(utempl);
-  SETL(utempl == 0);
-  if (utempl != 0x80000000) {
-    CLEARC;
-  } else {
-    CLEARLT;
-    mathexception('i', FC_INT_OFLOW, 0);
-  }
+  if (utempl != 0) {    /* clear C, L, EQ, set LT from bit 1 */
+    crs[KEYS] = (crs[KEYS] & ~0120300) | ((utempl & 0x80000000) >> 24);
+    if (utempl == 0x80000000) {
+      CLEARLT;
+      mathexception('i', FC_INT_OFLOW, 0);
+    }
+  } else
+    crs[KEYS] = (crs[KEYS] & ~0120300) | 020100;  /* set L, EQ */
 }
 
 static inline tch (unsigned short *un) {
@@ -3967,14 +3965,14 @@ static inline tch (unsigned short *un) {
 
   utemp = - (*(short *)un);
   *un = utemp;
-  SETCC_16(utemp);
-  SETL(utemp == 0);
-  if (utemp != 0x8000) {
-    CLEARC;
-  } else {
-    CLEARLT;
-    mathexception('i', FC_INT_OFLOW, 0);
-  }
+  if (utemp != 0) {    /* clear C, L, EQ, set LT from bit 1 */
+    crs[KEYS] = (crs[KEYS] & ~0120300) | ((utemp & 0x8000) >> 8);
+    if (utemp == 0x8000) {
+      CLEARLT;
+      mathexception('i', FC_INT_OFLOW, 0);
+    }
+  } else
+    crs[KEYS] = (crs[KEYS] & ~0120300) | 020100;  /* set L, EQ */
 }
 
 /* NOTE: ea is only used to set faddr should an arithmetic exception occur */

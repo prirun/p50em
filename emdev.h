@@ -2194,23 +2194,57 @@ int devdisk (int class, int func, int device) {
   - emulator stores in a structure
 */
 
+/* this macro closes an AMLC connection - used in several places */
+
+#define AMLC_CLOSE_LINE \
+  /* printf("em: closing AMLC line %d on device '%o\n", lx, device); */ \
+  write(dc[dx].fd[lx], "\r\nPrime session disconnected\r\n", 30); \
+  close(dc[dx].fd[lx]); \
+  dc[dx].fd[lx] = -1; \
+  dc[dx].dss &= ~BITMASK16(lx+1); \
+  dc[dx].connected &= ~BITMASK16(lx+1);
+
+/* macro to setup the next AMLC poll */
+
+#define AMLC_SET_POLL \
+  if ((dc[dx].ctinterrupt || dc[dx].xmitenabled || (dc[dx].recvenabled & dc[dx].connected))) \
+    if (devpoll[device] == 0 || devpoll[device] > AMLCPOLL*gvp->instpermsec) \
+      devpoll[device] = AMLCPOLL*gvp->instpermsec;  /* setup another poll */
+
 int devamlc (int class, int func, int device) {
 
 #define MAXLINES 128
 #define MAXFD MAXLINES+20
 #define MAXBOARDS 8
+#define MAXROOM 1024
 
   /* AMLC poll rate (ms).  Max data rate = queue size*1000/AMLCPOLL
-     The max AMLC queue size is 256 (octal 400), so a poll rate of
-     75 will generate about 3400 chars per second. */
+     The max AMLC output queue size is 1023 (octal 2000), so a poll
+     rate of 75 will generate about 31,000 chars per second. */
 
-#define AMLCPOLL 75
+#define AMLCPOLL 33
+
+  /* DSSCOUNTDOWN is the number of carrier status requests that should
+     occur before polling real serial devices.  Primos does a carrier
+     check 5x per second.  All this is really good for is disconnecting
+     logged-out terminals, so we poll the real status every 5 seconds. */
+
+#define DSSCOUNTDOWN 25
 
 #if 1
   #define QAMLC 020000   /* this is to enable QAMLC/DMQ functionality */
 #else
   #define QAMLC 0
 #endif
+
+  /* connection types for each line.  This _doesn't_ imply the line is
+     actually connected, ie, an AMLC line may be tied to a specific 
+     serial device (like a USB->serial gizmo), but the USB device may
+     not be plugged in.  The connection type would be CT_SERIAL but
+     the line's fd would be zero and the "connected" bit would be 0 */
+     
+#define CT_SOCKET 1
+#define CT_SERIAL 2
 
   /* terminal states needed to process telnet connections */
 
@@ -2220,18 +2254,17 @@ int devamlc (int class, int func, int device) {
 #define TS_OPTION 3    /* inside an option */
 
   static short inited = 0;
+  static int baudtable[16] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200};
   static char ttymsg[1024];
   static int ttymsglen = 0;
-  static short devices[MAXBOARDS];      /* list of AMLC devices initialized */
   static int tsfd;                      /* socket fd for terminal server */
-  static struct {                       /* maps socket fd to device & line */
-    int device;
-    int line;
+  static struct {                       /* maps connection fd to device & line */
+    int dx;
+    int lx;
   } fdtoline[MAXFD];
+
   static struct {
-    char dmqmode;                       /* 0=DMT, 1=DMQ */
-    char bufnum;                        /* 0=1st input buffer, 1=2nd */
-    char eor;                           /* 1=End of Range on input */
+    unsigned short deviceid;            /* this board's device ID */
     unsigned short dmcchan;             /* DMC channel (for input) */
     unsigned short baseaddr;            /* DMT/Q base address (for output) */
     unsigned short intvector;           /* interrupt vector */
@@ -2241,13 +2274,23 @@ int devamlc (int class, int func, int device) {
     unsigned short recvenabled;         /* 1 bit per line */
     unsigned short ctinterrupt;         /* 1 bit per line */
     unsigned short dss;                 /* 1 bit per line */
-    unsigned short fd[16];              /* Unix fd, 1 per line */
-    unsigned short tstate[16];          /* terminal state (telnet) */
+    unsigned short connected;           /* 1 bit per line */
+    unsigned short dedicated;           /* 1 bit per line */
+    unsigned short dsstime;             /* countdown to dss poll */
+             short fd[16];              /* Unix fd, 1 per line */
+    unsigned short tstate[16];          /* telnet state */
     unsigned short room[16];            /* room (chars) left in input buffer */
+    unsigned short lconf[16];           /* line configuration word */
+    unsigned short ctype[16];           /* connection type for each line */
+    unsigned short modemstate[16];      /* Unix modem state bits (serial) */
     unsigned short recvlx;              /* next line to check for recv data */
-  } dc[64];
+    unsigned short pclock;              /* programmable clock */
+    char dmqmode;                       /* 0=DMT, 1=DMQ */
+    char bufnum;                        /* 0=1st input buffer, 1=2nd */
+    char eor;                           /* 1=End of Range on input */
+  } dc[MAXBOARDS];
 
-  int lx, lcount;
+  int dx, dx2, lx, lcount;
   unsigned short utempa;
   unsigned int utempl;
   ea_t qcbea, dmcea, dmcbufbegea, dmcbufendea;
@@ -2259,32 +2302,124 @@ int devamlc (int class, int func, int device) {
   int fd;
   unsigned int addrlen;
   unsigned char buf[1024];      /* max size of DMQ buffer */
-  int i, n, maxn, n2, nw, newdevice;
+  int i, n, maxn, n2, nw;
   fd_set fds;
   struct timeval timeout;
   unsigned char ch;
   int state;
   int msgfd;
-
+  int allbusy;
   unsigned short qtop, qbot, qtemp;
   unsigned short qseg, qmask, qents;
   ea_t qentea;
+  char line[100];
+  int lc;
+  FILE *cfgfile;
+  char devname[32];
+  int baud;
+  struct termios terminfo;
+  int modemstate;
+  int fastpoll;
+
+  /* save this board's device id in the dc[] array so we can tell
+     what order the boards should be in.  This is necessary to find
+     the clock line: the line that controls the AMLC poll rate.  The
+     last line on the last defined board is the clock line.  The
+     emulator also assumes that there are no gaps in the AMLC board
+     configuration, which I think is also a Primos requirement, ie,
+     you can't have board '54 and '52, with '53 missing. */
+
+  switch (device) {
+  case 054: dx = 0; break;
+  case 053: dx = 1; break;
+  case 052: dx = 2; break;
+  case 035: dx = 3; break;
+  case 015: dx = 4; break;
+  case 016: dx = 5; break;
+  case 017: dx = 6; break;
+  case 032: dx = 7; break;
+  default:
+    fprintf(stderr, "devamlc: non-AMLC device id '%o ignored\n", device);
+    return -1;
+  }
 
   switch (class) {
 
   case -1:
 
-    /* this part of initialization only occurs once, no matter how many
-       AMLC boards are configured */
+    /* this part of initialization only occurs once, no matter how
+       many AMLC boards are configured.  Parts of the amlc device
+       context that are emulator-specfic need to be initialized here,
+       only once, because Primos may issue the OCP to initialize an
+       AMLC board more than once.  This would interfere with the
+       dedicated serial line setup. */
 
     if (!inited) {
 
       /* initially, we don't know about any AMLC boards */
 
-      for (i=0; i<MAXBOARDS; i++)
-	devices[i] = 0;
+      for (dx2=0; dx2<MAXBOARDS; dx2++) {
+	dc[dx2].deviceid = 0;
+	for (lx = 0; lx < 16; lx++) {
+	  dc[dx2].connected = 0;
+	  dc[dx2].dedicated = 0;
+	  for (lx = 0; lx < 16; lx++) {
+	    dc[dx2].fd[lx] = -1;
+	    dc[dx2].tstate[lx] = TS_DATA;
+	    dc[dx2].room[lx] = 64;
+	    dc[dx2].lconf[lx] = 0;
+	    dc[dx2].ctype[lx] = CT_SOCKET;
+	    dc[dx2].modemstate[lx] = 0;
+	  }
+	  dc[dx2].recvlx = 0;
+	}
+      }
 
-      /* start listening for connections */
+      /* read the AMLC file, to see if any lines should be connected to
+	 real serial devices.  This file has the format:
+	   <line #> <Unix device name>
+         The entries can be in any order.  If the line number begins with
+	 a zero, it is assumed to be octal.  If no zero, then decimal.
+      */
+
+      if ((cfgfile = fopen("amlc", "r")) == NULL) {
+	if (errno != ENOENT)
+	  perror("Error opening amlc config file");
+      } else {
+	lc = 0;
+	while (fgets(line, sizeof(line), cfgfile) != NULL) {
+	  lc++;
+	  line[sizeof(devname)] = 0;   /* don't let sscanf overwrite anything */
+	  if (line[0] == '0')
+	    n = sscanf(line, "%o %s", &i, devname);
+	  else
+	    n = sscanf(line, "%d %s", &i, devname);
+	  if (n != 2) {
+	    printf("devamlc: Can't parse amlc config file line %d: %s\n", lc, line);
+	    continue;
+	  }
+	  if (i < 0 || i >= MAXLINES) {
+	    printf("devamlc: amlc line # '%o (%d) out of range in amlc config file, line %d: %s\n", i, i, lc, line);
+	    continue;
+	  }
+	  printf("devamlc: lc=%d, line '%o (%d) set to device %s\n", lc, i, i, devname);
+	  dx2 = i/16;
+	  lx = i & 0xF;
+	  if ((fd = open(devname, O_RDWR | O_NONBLOCK | O_EXLOCK)) == -1) {
+	    printf("devamlc: error connecting AMLC line '%o (%d) to device %s:\n", i, i, devname);
+	    perror("devamlc error");
+	    continue;
+	  }
+	  printf("em: connected AMLC line '%o (%d) to device %s on fd %d\n", i, i, devname, fd);
+	  dc[dx2].fd[lx] = fd;
+	  dc[dx2].connected |= BITMASK16(lx+1);
+	  dc[dx2].dedicated |= BITMASK16(lx+1);
+	  dc[dx2].ctype[lx] = CT_SERIAL;
+	}
+	fclose(cfgfile);
+      }
+
+      /* start listening for incoming telnet connections */
 
       if (tport != 0) {
 	tsfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -2327,19 +2462,7 @@ int devamlc (int class, int func, int device) {
     if (!inited || tport == 0)
       return -1;
 
-    /* add this device to the devices array, in the proper slot
-       so we can tell what order the boards should be in */
-
-    switch (device) {
-    case 054: devices[0] = device; break;
-    case 053: devices[1] = device; break;
-    case 052: devices[2] = device; break;
-    case 035: devices[3] = device; break;
-    case 015: devices[4] = device; break;
-    case 016: devices[5] = device; break;
-    case 017: devices[6] = device; break;
-    case 032: devices[7] = device; break;
-    }
+    dc[dx].deviceid = device;
     return 0;
 
   case 0:
@@ -2347,31 +2470,33 @@ int devamlc (int class, int func, int device) {
     //printf(" OCP '%02o%02o\n", func, device);
 
     if (func == 012) {            /* set normal (DMT) mode */
-      dc[device].dmqmode = 0;
+      dc[dx].dmqmode = 0;
 
     } else if (func == 013 && QAMLC) {     /* set diagnostic (DMQ) mode */
-      dc[device].dmqmode = 1;
+      dc[dx].dmqmode = 1;
 
     } else if (func == 015) {     /* enable interrupts */
-      dc[device].intenable = 1;
+      dc[dx].intenable = 1;
 
     } else if (func == 016) {     /* disable interrupts */
-      dc[device].intenable = 0;
+      dc[dx].intenable = 0;
 
     } else if (func == 017) {     /* initialize AMLC */
-      dc[device].dmqmode = 0;
-      dc[device].bufnum = 0;
-      dc[device].dmcchan = 0;
-      dc[device].baseaddr = 0;
-      dc[device].intvector = 0;
-      dc[device].intenable = 0;
-      dc[device].interrupting = 0;
-      dc[device].xmitenabled = 0;
-      dc[device].recvenabled = 0;
-      dc[device].ctinterrupt = 0;
-      dc[device].dss = 0;      /* NOTE: this is stored inverted: 1=connected */
-      dc[device].eor = 0;
-      dc[device].recvlx = 0;
+      //printf("devamlc: Initializing controller '%d\n", device);
+      dc[dx].dmcchan = 0;
+      dc[dx].baseaddr = 0;
+      dc[dx].intvector = 0;
+      dc[dx].intenable = 0;
+      dc[dx].interrupting = 0;
+      dc[dx].xmitenabled = 0;
+      dc[dx].recvenabled = 0;
+      dc[dx].ctinterrupt = 0;
+      dc[dx].dss = 0;      /* NOTE: 1=asserted in emulator, 0=asserted on Prime */
+      dc[dx].dsstime = DSSCOUNTDOWN;
+      dc[dx].pclock = 0;
+      dc[dx].dmqmode = 0;
+      dc[dx].bufnum = 0;
+      dc[dx].eor = 0;
 
     } else {
       printf("Unimplemented OCP device '%02o function '%02o\n", device, func);
@@ -2383,7 +2508,7 @@ int devamlc (int class, int func, int device) {
     TRACE(T_INST, " SKS '%02o%02o\n", func, device);
 
     if (func == 04) {             /* skip if not interrupting */
-      if (!dc[device].interrupting)
+      if (!dc[dx].interrupting)
 	IOSKIP;
 
     } else {
@@ -2395,22 +2520,47 @@ int devamlc (int class, int func, int device) {
   case 2:
     TRACE(T_INST, " INA '%02o%02o\n", func, device);
 
+    /* XXX: this constant is redefined because of a bug in the
+       Prolific USB serial driver at version 1.2.1r2.  They should be
+       turning on bit 0100, but are turning on 0x0100. */
+#define TIOCM_CD 0x0100    
+
     if (func == 00) {              /* input Data Set Sense (carrier) */
-      crs[A] = ~dc[device].dss;    /* to the outside world, 1 = no carrier*/
+      if (dc[dx].dedicated) {      /* any serial connections? */
+	if (--dc[dx].dsstime == 0) {
+	  dc[dx].dsstime = DSSCOUNTDOWN;
+	  for (lx = 0; lx < 16; lx++) {  /* yes, poll them */
+	    if (dc[dx].ctype[lx] == CT_SERIAL) {
+	      if (ioctl(dc[dx].fd[lx], TIOCMGET, &modemstate))
+		perror("devamlc: unable to get modem state");
+	      else if (modemstate & TIOCM_CD)
+		dc[dx].dss |= BITMASK16(lx+1);
+	      else
+		dc[dx].dss &= ~BITMASK16(lx+1);
+	      if (modemstate != dc[dx].modemstate[lx]) {
+		printf("devamlc: line %d modemstate was '%o now '%o\n", lx, dc[dx].modemstate[lx], modemstate);
+		dc[dx].modemstate[lx] = modemstate;
+	      }
+	    }
+	  }
+	}
+      }
+      //printf("devamlc: dss for device '%o = 0x%x\n", device, dc[dx].dss);
+      crs[A] = ~dc[dx].dss;      /* to the outside world, 1 = no carrier */
       IOSKIP;
 
     } else if (func == 07) {       /* input AMLC status */
-      crs[A] = 040000 | (dc[device].bufnum<<8) | (dc[device].intenable<<5) | (dc[device].dmqmode<<4);
-      if (dc[device].eor) {
+      crs[A] = 040000 | (dc[dx].bufnum<<8) | (dc[dx].intenable<<5) | (dc[dx].dmqmode<<4);
+      if (dc[dx].eor) {
 	crs[A] |= 0100000;
-	dc[device].eor = 0;
+	dc[dx].eor = 0;
       }
-      if (dc[device].ctinterrupt)
-	if (dc[device].ctinterrupt & 0xfffe)
+      if (dc[dx].ctinterrupt)
+	if (dc[dx].ctinterrupt & 0xfffe)
 	  crs[A] |= 0xcf;          /* multiple char time interrupt */
 	else
 	  crs[A] |= 0x8f;          /* last line cti */
-      dc[device].interrupting = 0;
+      dc[dx].interrupting = 0;
       //printf("INA '07%02o returns 0x%x\n", device, crs[A]);
       IOSKIP;
 
@@ -2427,52 +2577,183 @@ int devamlc (int class, int func, int device) {
   case 3:
     TRACE(T_INST, " OTA '%02o%02o\n", func, device);
 
+    /* func 00 = Output Line # to read Data Set Status, only implemented
+       on 2-board AMLC sets with full data set control (uncommon) */
+
+    /* func 01 = Set Line Configuration.  Primos issues this on
+       logged-out lines to drop DTR so it can test carrier.  It also
+       drops DTR (configurable) after logout to physically disconnect
+       the line, either telnet or over a modem */
+
     if (func == 01) {              /* set line configuration */
       lx = crs[A] >> 12;
-      //printf("OTA '01%02o: AMLC line %d config = %x\n", device, lx, crs[A]);
-      /* if DTR drops on a connected line, disconnect */
-      if (!(crs[A] & 0x400) && (dc[device].dss & BITMASK16(lx+1))) {
-	/* see similar code below */
-	write(dc[device].fd[lx], "\r\nDisconnecting logged out session\r\n", 36);
-	close(dc[device].fd[lx]);
-	dc[device].fd[lx] = 0;
-	dc[device].dss &= ~BITMASK16(lx+1);
-	//printf("em: closing AMLC line %d on device '%o\n", lx, device);
+      //printf("OTA '01%02o: AMLC line %d new config = '%o, old config = '%o\n", device, lx, crs[A] & 0xFFF, dc[dx].lconf[lx] & 0xFFF);
+
+      switch (dc[dx].ctype[lx]) {
+
+      case CT_SOCKET:
+	if (!(crs[A] & 0x400) && dc[dx].fd[lx] >= 0) {  /* if DTR drops, disconnect */
+	  AMLC_CLOSE_LINE;
+	}
+	break;
+
+	
+      case CT_SERIAL:
+	    
+	/* setup line characteristics if they have changed (check for
+	   something other than DTR changing) */
+
+	fd = dc[dx].fd[lx];
+	if ((crs[A] ^ dc[dx].lconf[lx]) & ~02000) {
+	  //printf("devamlc: serial config changed!\n");
+	  if (tcgetattr(fd, &terminfo) == -1) {
+	    fprintf(stderr, "devamlc: unable to get terminfo for device '%o line %d", device, lx);
+	    break;
+	  }
+	  memset(&terminfo, 0, sizeof(terminfo));
+	  cfmakeraw(&terminfo);
+	  baud = baudtable[(crs[A] >> 6) & 7];
+	  cfsetspeed(&terminfo, baud);
+	  terminfo.c_cflag = CREAD | CLOCAL;		// turn on READ and ignore modem control lines
+	  switch (crs[A] & 3) {              /* data bits */
+	  case 0:
+	    terminfo.c_cflag |= CS5;
+	    break;
+	  case 1:
+	    terminfo.c_cflag |= CS7;    /* this is not a typo! */
+	    break;
+	  case 2:
+	    terminfo.c_cflag |= CS6;    /* this is not a typo! */
+	    break;
+	  case 3:
+	    terminfo.c_cflag |= CS8;
+	    break;
+	  }
+	  if (crs[A] & 020)
+	    terminfo.c_cflag |= CSTOPB;
+	  if (!(crs[A] & 010)) {
+	    terminfo.c_cflag |= PARENB;
+	    if (!(crs[A] & 4))
+	      terminfo.c_cflag |= PARODD;
+	  }
+
+#if 0
+	  /* on the Prime AMLC, flow control is done in software and is
+	     specified with the AMLC "lword" - an AMLDIM (software)
+	     variable.  To enable Unix xon/xoff, RTS/CTS, and DTR flow
+	     control, bits 5 & 7 of the lconf word have been taken over by
+	     the emulator.  Bit 6 is the state of DTR.  The values for
+	     bits 5-7 are:
+
+	     0x0 - no low-level flow control, like the Prime
+	     0x1 - xon/xoff flow control (2413 becomes 3413)
+	     1x0 - cts/rts flow control (2413 becomes 6413)
+	     1x1 - dsr/dtr flow control (2413 becomes 7413)
+
+	     NOTE: bit 11 also appears to be free, but Primos doesn't 
+	     let it flow through to the AMLC controller. :(
+	  */
+
+	  switch ((crs[A] >> 9) & 7) {
+	  case 1: case 3:
+	    terminfo.c_iflag |= IXON | IXOFF;
+	    terminfo.c_cc[VSTART] = 0x11;
+	    terminfo.c_cc[VSTOP] = 0x13;
+	    break;
+	  case 4: case 6:
+	    terminfo.c_cflag |= CCTS_OFLOW | CRTS_IFLOW;
+	    break;
+	  case 5: case 7:
+	    terminfo.c_cflag |= CDSR_OFLOW | CDTR_IFLOW;
+	    break;
+	  }
+#else
+	  /* for now, use bit 7: 2413 -> 3413 to enable Unix
+	     (hardware) xon/xoff.  This is much more responsive than
+	     Primos xon/xoff, but can't be used for user terminals
+	     because software (Emacs) may want to disable xon/xoff,
+	     and since it is really an lword (software) control set
+	     with DUPLX$, the hardware control word we're using won't
+	     get changed.  And xon/xoff will still be enabled.  This
+	     Unix xon/xoff feature is good for serial I/O devices,
+	     where it stays enabled. */
+
+	  if (crs[A] & 01000) {
+	    terminfo.c_iflag |= IXON | IXOFF;
+	    terminfo.c_cc[VSTART] = 0x11;
+	    terminfo.c_cc[VSTOP] = 0x13;
+	  }
+#endif
+
+#if 1
+	  printf("SET terminfo: iFlag %x  oFlag %x  cFlag %x  lFlag %x  speed %d\n",
+		 terminfo.c_iflag,
+		 terminfo.c_oflag,
+		 terminfo.c_cflag,
+		 terminfo.c_lflag,
+		 terminfo.c_ispeed);
+#endif
+	  if (tcsetattr(fd, TCSANOW, &terminfo) == -1) {
+	    fprintf(stderr, "devamlc: unable to set terminal attributes for device %s\n", devname);
+	    perror("devamlc error");
+	  }
+	}
+
+	/* set DTR high (02000) or low if it has changed */
+
+	if ((crs[A] ^ dc[dx].lconf[lx]) & 02000) {
+	  //printf("devamlc: DTR state changed\n");
+	  ioctl(fd, TIOCMGET, &modemstate);
+	  if (crs[A] & 02000)
+	    modemstate |= TIOCM_DTR;
+	  else {
+	    modemstate &= ~TIOCM_DTR;
+	    dc[dx].dsstime = 1;
+	  }
+	  ioctl(fd, TIOCMSET, &modemstate);
+	}
+	break;
+
+      default:
+	fatal("devamlc: unrecognized connection type");
       }
+
+      /* finally, update line config */
+
+      dc[dx].lconf[lx] = crs[A];
       IOSKIP;
 
     } else if (func == 02) {      /* set line control */
-      //printf("OTA '02%02o: AMLC line control = %x\n", device, crs[A]);
       lx = (crs[A]>>12);
+      //printf("OTA '02%02o: AMLC line %d control = %x\n", device, lx, crs[A]);
       if (crs[A] & 040)           /* character time interrupt enable/disable */
-	dc[device].ctinterrupt |= BITMASK16(lx+1);
+	dc[dx].ctinterrupt |= BITMASK16(lx+1);
       else
-	dc[device].ctinterrupt &= ~BITMASK16(lx+1);
+	dc[dx].ctinterrupt &= ~BITMASK16(lx+1);
       if (crs[A] & 010)           /* transmit enable/disable */
-	dc[device].xmitenabled |= BITMASK16(lx+1);
+	dc[dx].xmitenabled |= BITMASK16(lx+1);
       else
-	dc[device].xmitenabled &= ~BITMASK16(lx+1);
+	dc[dx].xmitenabled &= ~BITMASK16(lx+1);
       if (crs[A] & 01)            /* receive enable/disable */
-	dc[device].recvenabled |= BITMASK16(lx+1);
+	dc[dx].recvenabled |= BITMASK16(lx+1);
       else
-	dc[device].recvenabled &= ~BITMASK16(lx+1);
-      if ((dc[device].ctinterrupt || dc[device].xmitenabled || dc[device].recvenabled) && devpoll[device] == 0)
-	devpoll[device] = AMLCPOLL*gvp->instpermsec;  /* setup another poll */
+	dc[dx].recvenabled &= ~BITMASK16(lx+1);
+      AMLC_SET_POLL;
       IOSKIP;
 
     } else if (func == 03) {      /* set room in input buffer */
       lx = (crs[A]>>12);
-      dc[device].room[lx] = crs[A] & 0xFFF;
-      //printf("OTA '03%02o: AMLC line %d, room=%d, A=0x%04x\n", device, lx, dc[device].room[lx], crs[A]);
+      dc[dx].room[lx] = crs[A] & 0xFFF;
+      //printf("OTA '03%02o: AMLC line %d, room=%d, A=0x%04x\n", device, lx, dc[dx].room[lx], crs[A]);
       IOSKIP;
 
     } else if (func == 014) {      /* set DMA/C channel (for input) */
-      dc[device].dmcchan = crs[A] & 0x7ff;
-      //printf("OTA '14%02o: AMLC chan = %o\n", device, dc[device].dmcchan);
+      dc[dx].dmcchan = crs[A] & 0x7ff;
+      //printf("OTA '14%02o: AMLC chan = %o\n", device, dc[dx].dmcchan);
       if (!(crs[A] & 0x800))
 	fatal("Can't run AMLC in DMA mode!");
 #if 0
-	    dmcea = dc[device].dmcchan;
+	    dmcea = dc[dx].dmcchan;
 	  dmcpair = get32io(dmcea);
 	  dmcbufbegea = dmcpair>>16;
 	  dmcbufendea = dmcpair & 0xffff;
@@ -2482,14 +2763,16 @@ int devamlc (int class, int func, int device) {
       IOSKIP;
 
     } else if (func == 015) {      /* set DMT/DMQ base address (for output) */
-      dc[device].baseaddr = crs[A];
+      dc[dx].baseaddr = crs[A];
       IOSKIP;
 
     } else if (func == 016) {      /* set interrupt vector */
-      dc[device].intvector = crs[A];
+      dc[dx].intvector = crs[A];
       IOSKIP;
 
     } else if (func == 017) {      /* set programmable clock constant */
+      dc[dx].pclock = crs[A];
+      /* XXX: reprogram baud rate for lines that use the programmable clock */
       IOSKIP;
 
     } else {
@@ -2499,9 +2782,24 @@ int devamlc (int class, int func, int device) {
     break;
 
   case 4:
-    //printf("poll device '%o, cti=%x, xmit=%x, recv=%x, dss=%x\n", device, dc[device].ctinterrupt, dc[device].xmitenabled, dc[device].recvenabled, dc[device].dss);
+
+    /* fastpoll gets set if the next poll should occur sooner.  This
+       is when:
+
+       a) a line is setup with the maximum queue size and has a full
+          queue to send.  (If the line doesn't have the max queue size,
+	  the best way to improve speed is to increase the queue size.)
+
+       b) an end-of-range occurs on input.  This speeds up input, but
+          also increases the chance that the user input buffer will 
+	  overflow, so it isn't enabled yet.
+    */
     
-    /* check for 1 new terminal connection on each AMLC poll */
+    fastpoll = 0;
+
+    //printf("poll device '%o, cti=%x, xmit=%x, recv=%x, dss=%x\n", device, dc[dx].ctinterrupt, dc[dx].xmitenabled, dc[dx].recvenabled, dc[dx].dss);
+    
+    /* check for 1 new telnet connection on each AMLC poll */
 
     addrlen = sizeof(addr);
     while ((fd = accept(tsfd, (struct sockaddr *)&addr, &addrlen)) == -1 && errno == EINTR)
@@ -2511,29 +2809,31 @@ int devamlc (int class, int func, int device) {
 	perror("accept error for AMLC");
       }
     } else {
-      newdevice = 0;
-      if (fd >= MAXFD)
+      allbusy = 1;
+      if (fd >= MAXFD)   /* Note: closes below */
 	warn("devamlc: new socket fd is too big");
       else {
-	for (i=0; devices[i] && !newdevice && i<MAXBOARDS; i++)
+	for (i=0; dc[i].deviceid && i<MAXBOARDS; i++)
 	  for (lx=0; lx<16; lx++) {
 	    /* NOTE: don't allow connections on clock line */
-	    if (lx == 15 && (i+1 == MAXBOARDS || !devices[i+1]))
+	    if (lx == 15 && (i+1 == MAXBOARDS || !dc[i+1].deviceid))
 		break;
-	    if (dc[devices[i]].fd[lx] == 0) {
-	      newdevice = devices[i];
-	      fdtoline[fd].device = newdevice;
-	      fdtoline[fd].line = lx;
-	      dc[newdevice].dss |= BITMASK16(lx+1);
-	      dc[newdevice].fd[lx] = fd;
-	      dc[newdevice].tstate[lx] = TS_DATA;
-	      dc[newdevice].room[lx] = 64;
-	      //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
+	    if (dc[i].fd[lx] < 0 && dc[i].ctype[lx] == CT_SOCKET) {
+	      allbusy = 0;
+	      fdtoline[fd].dx = i;
+	      fdtoline[fd].lx = lx;
+	      dc[i].dss |= BITMASK16(lx+1);
+	      dc[i].connected |= BITMASK16(lx+1);
+	      dc[i].fd[lx] = fd;
+	      dc[i].tstate[lx] = TS_DATA;
+	      dc[i].room[lx] = MAXROOM;
+	      dc[i].ctype[lx] = CT_SOCKET;
+	      //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, dc[i].deviceid, lx);
 	      break;
 	    }
 	  }
       }
-      if (!newdevice) {
+      if (allbusy) {
 	warn("No free AMLC connection");
 	write(fd, "\rAll AMLC lines are in use!\r\n", 29);
 	close(fd);
@@ -2592,20 +2892,19 @@ int devamlc (int class, int func, int device) {
        output buffer from the previous terminal session will be
        displayed to the new user. */
 
-    if (dc[device].dss || dc[device].xmitenabled) {
+    if (dc[dx].connected || dc[dx].xmitenabled) {
       for (lx = 0; lx < 16; lx++) {
 
-	if (dc[device].xmitenabled & BITMASK16(lx+1)) {
+	if (dc[dx].xmitenabled & BITMASK16(lx+1)) {
 	  n = 0;
-	  if (dc[device].dmqmode) {
-	    qcbea = dc[device].baseaddr + lx*4;
-	    if (dc[device].dss & BITMASK16(lx+1)) {
+	  if (dc[dx].dmqmode) {
+	    qcbea = dc[dx].baseaddr + lx*4;
+	    if (dc[dx].connected & BITMASK16(lx+1)) {
 
 	      /* this line is connected, determine max chars to write
 	         XXX: maxn should scale, depending on the actual line
 		 throughput and AMLC poll rate */
 
-	      maxn = sizeof(buf);
 	      qtop = get16io(qcbea);
 	      qbot = get16io(qcbea+1);
 	      if (qtop == qbot)
@@ -2613,11 +2912,16 @@ int devamlc (int class, int func, int device) {
 	      qseg = get16io(qcbea+2);
 	      qmask = get16io(qcbea+3);
 	      qents = (qbot-qtop) & qmask;
+	      maxn = sizeof(buf);
+	      /* XXX: for FTDI USB->serial chip, optimal request size
+		 is a multiple of 62 bytes, ie, 992 bytes, not 1K */
 	      if (qents < maxn)
 		maxn = qents;
 	      qentea = MAKEVA(qseg & 0xfff, qtop);
 
-	      /* pack DMQ characters into a buffer & fix parity */
+	      /* pack DMQ characters into a buffer & fix parity
+		 XXX: turning off the high bit at this low level
+		 precludes the use of TTY8BIT mode... */
 
 	      n = 0;
 	      for (i=0; i < maxn; i++) {
@@ -2631,9 +2935,9 @@ int devamlc (int class, int func, int device) {
 	      put16io(get16io(qcbea), qcbea+1);
 	    }
 	  } else {  /* DMT */
-	    utempa = get16io(dc[device].baseaddr + lx);
+	    utempa = get16io(dc[dx].baseaddr + lx);
 	    if (utempa != 0) {
-	      if ((utempa & 0x8000) && (dc[device].dss & BITMASK16(lx+1))) {
+	      if ((utempa & 0x8000) && (dc[dx].connected & BITMASK16(lx+1))) {
 		//printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
 		buf[n++] = utempa & 0x7F;
 	      }
@@ -2647,27 +2951,45 @@ int devamlc (int class, int func, int device) {
 	  /* n chars have been packed into buf; see how many we can send */
 
 	  if (n > 0) {
-	    nw = write(dc[device].fd[lx], buf, n);
+	    nw = write(dc[dx].fd[lx], buf, n);
+	    if (nw != n) printf("devamlc: tried %d, wrote %d on line %d\n", n, nw, lx);
+	    //printf("devamlc: XMIT tried %d, wrote %d\n", n, nw);
 	    if (nw > 0) {
 
 	      /* nw chars were sent; for DMQ, update the queue head
 		 top to reflect nw dequeued entries.  For DMT, clear
-		 the dedicated cell (only writes 1 char at a time) */
+		 the dedicated cell (only writes 1 char at a time).
 
-	      if (dc[device].dmqmode) {
+		 XXX: Might be good to keep write stats here, to
+		 decide how many chars to dequeue above and/or how
+		 often to do writes.  There's overhead if large DMQ
+		 buffers are used and Unix buffers get full so writes
+		 can't complete */
+
+	      if (dc[dx].dmqmode) {
 		qtop = (qtop & ~qmask) | ((qtop+nw) & qmask);
 		put16io(qtop, qcbea);
 	      } else
-		put16io(0, dc[device].baseaddr + lx);
+		put16io(0, dc[dx].baseaddr + lx);
+	      if (nw == 1023)
+		fastpoll = 1;
 	    } else if (nw == -1)
 	      if (errno == EAGAIN || errno == EWOULDBLOCK)
 		;
-	      else if (errno == EPIPE || errno == ECONNRESET) {
-		/* see similar code above */
-		close(dc[device].fd[lx]);
-		dc[device].fd[lx] = 0;
-		dc[device].dss &= ~BITMASK16(lx+1);
-		//printf("em: closing AMLC line %d on device '%o\n", lx, device);
+
+	      /* on Mac OSX, USB serial ports (Prolific chip) return
+	         ENXIO - 'Device not configured" when USB is
+	         unplugged.  If it is plugged back in, new device names
+	         are created, so there's not much we can do except close
+	         the fd. :( */
+
+	      else if (errno == ENXIO && dc[dx].ctype[lx] == CT_SERIAL) {
+		warn("USB serial device unplugged!  Reboot host.");
+		AMLC_CLOSE_LINE;
+
+	      } else if (errno == EPIPE || errno == ECONNRESET) {
+		AMLC_CLOSE_LINE;
+
 	      } else {
 		perror("Writing to AMLC");
 		fprintf(stderr," %d bytes written, but %d bytes sent\n", n, nw);
@@ -2694,24 +3016,26 @@ int devamlc (int class, int func, int device) {
        is no room left in the tty input buffer, don't read any more
        characters from the socket for that line.  In case Primos has
        not been modified to use the room left feature, it is
-       initialized to 64 for each line, so that at most 64 characters
-       are read from a line during a poll.  This also makes overflow
-       less likely if the line input buffer is set to '200 or so with
-       AMLBUF. */
+       initialized to MAXROOM for each line, so that at most MAXROOM
+       characters are read from a line during a poll.  If MAXROOM is
+       small, like 64, this also makes overflow less likely if the
+       line input buffer is set to '200 or so with AMLBUF.  To
+       optimize transfers to the Prime over AMLC lines, MAXROOM is set
+       much higher, to 1024 */
 
-    if (!dc[device].eor) {
-      if (dc[device].bufnum)
-	dmcea = dc[device].dmcchan ^ 2;
+    if (!dc[dx].eor) {
+      if (dc[dx].bufnum)
+	dmcea = dc[dx].dmcchan ^ 2;
       else
-	dmcea = dc[device].dmcchan;
+	dmcea = dc[dx].dmcchan;
       dmcpair = get32io(dmcea);
       dmcbufbegea = dmcpair>>16;
       dmcbufendea = dmcpair & 0xffff;
       dmcnw = dmcbufendea - dmcbufbegea + 1;
-      lx = dc[device].recvlx;
+      lx = dc[dx].recvlx;
       for (lcount = 0; lcount < 16 && dmcnw > 0; lcount++) {
-	if ((dc[device].dss & dc[device].recvenabled & BITMASK16(lx+1))
-	    && dc[device].room[lx] >= 8) {
+	if ((dc[dx].connected & dc[dx].recvenabled & BITMASK16(lx+1))
+	    && dc[dx].room[lx] >= 8) {
 
 	  /* dmcnw is the # of characters left in the dmc buffer, but
 	     there may be further size/space restrictions for this line */
@@ -2719,16 +3043,16 @@ int devamlc (int class, int func, int device) {
 	  n2 = dmcnw;
 	  if (n2 > sizeof(buf))
 	    n2 = sizeof(buf);
-	  if (n2 > dc[device].room[lx])
-	    n2 = dc[device].room[lx];
-          if (n2 > 64)        /* don't let 1 line hog the resource */
-	    n2 = 64;
+	  if (n2 > dc[dx].room[lx])
+	    n2 = dc[dx].room[lx];
+          if (n2 > MAXROOM)        /* don't let 1 line hog the resource */
+	    n2 = MAXROOM;
 
-	  while ((n = read(dc[device].fd[lx], buf, n2)) == -1 && errno == EINTR)
+	  while ((n = read(dc[dx].fd[lx], buf, n2)) == -1 && errno == EINTR)
 	    ;
-	  //printf("processing recv on device %o, line %d, b#=%d, n2=%d, n=%d\n", device, lx, dc[device].bufnum, n2, n);
+	  //printf("processing recv on device %o, line %d, b#=%d, n2=%d, n=%d\n", device, lx, dc[dx].bufnum, n2, n);
 
-	  /* zero length read means the socket has been closed */
+	  /* zero length read means the fd has been closed */
 
 	  if (n == 0) {
 	    n = -1;
@@ -2738,13 +3062,8 @@ int devamlc (int class, int func, int device) {
 	    n = 0;
 	    if (errno == EAGAIN || errno == EWOULDBLOCK)
 	      ;
-	    else if (errno == EPIPE || errno == ECONNRESET) {
-
-	      /* see similar code above */
-	      close(dc[device].fd[lx]);
-	      dc[device].fd[lx] = 0;
-	      dc[device].dss &= ~BITMASK16(lx+1);
-	      //printf("em: closing AMLC line %d on device '%o\n", lx, device);
+	    else if (errno == EPIPE || errno == ECONNRESET || errno == ENXIO) {
+	      AMLC_CLOSE_LINE;
 	    } else {
 	      perror("Reading AMLC");
 	    }
@@ -2753,15 +3072,21 @@ int devamlc (int class, int func, int device) {
 	  /* very primitive support here for telnet - only enough to
 	     ignore commands sent by the telnet client.  Telnet
 	     commands could be split across reads and AMLC interrupts,
-	     so a small state machine is used for each line */
+	     so a small state machine is used for each line.
+
+	     XXX: need to respond to remote telnet server commands...
+
+	     For direct serial connections, the line stays in TS_DATA
+	     state so no telnet processing occurs. */
 
 	  if (n > 0) {
-	    state = dc[device].tstate[lx];
+	    //printf("devamlc: RECV, b=%d, tried=%d, read=%d\n", dc[dx].bufnum, n2, n);
+	    state = dc[dx].tstate[lx];
 	    for (i=0; i<n; i++) {
 	      ch = buf[i];
 	      switch (state) {
 	      case TS_DATA:
-		if (ch == 255)
+		if (ch == 255 && dc[dx].ctype[lx] == CT_SOCKET)
 		  state = TS_IAC;
 		else {
     storech:
@@ -2799,27 +3124,27 @@ int devamlc (int class, int func, int device) {
 		state = TS_DATA;
 	      }
 	    }
-	    dc[device].tstate[lx] = state;
+	    dc[dx].tstate[lx] = state;
 	  }
 	}
 	lx = (lx+1) & 0xF;
       }
-      dc[device].recvlx = lx;
+      dc[dx].recvlx = lx;
       if (dmcbufbegea-1 > dmcbufendea)
 	fatal("AMLC tumble table overflowed?");
       put16io(dmcbufbegea, dmcea);
       if (dmcbufbegea > dmcbufendea) {          /* end of range has occurred */
-	dc[device].bufnum = 1-dc[device].bufnum;
-	dc[device].eor = 1;
+	dc[dx].bufnum = 1-dc[dx].bufnum;
+	dc[dx].eor = 1;
       }
     }
 
     /* time to interrupt? */
 
-    if (dc[device].intenable && (dc[device].ctinterrupt || dc[device].eor)) {
+    if (dc[dx].intenable && (dc[dx].ctinterrupt || dc[dx].eor)) {
       if (gvp->intvec == -1) {
-	gvp->intvec = dc[device].intvector;
-	dc[device].interrupting = 1;
+	gvp->intvec = dc[dx].intvector;
+	dc[dx].interrupting = 1;
       } else
 	devpoll[device] = 100;         /* come back soon! */
     }
@@ -2834,8 +3159,12 @@ int devamlc (int class, int func, int device) {
        (the last board), so it will always be polling and checking
        for new incoming connections */
 
-    if ((dc[device].ctinterrupt || dc[device].xmitenabled || (dc[device].recvenabled & dc[device].dss)) && devpoll[device] == 0)
-      devpoll[device] = AMLCPOLL*gvp->instpermsec;  /* setup another poll */
+    AMLC_SET_POLL;
+
+    /* not sure the best way to "poll faster"; this is just a hack */
+
+    if (fastpoll)
+      devpoll[device] = devpoll[device]/4;
     break;
   }
 }
