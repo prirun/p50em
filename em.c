@@ -104,6 +104,8 @@ OK:
 #include <signal.h>
 #include <unistd.h>
 
+#include "mxapi.h"
+
 /* In SR modes, Prime CPU registers are mapped to memory locations
    0-'37, but only 0-7 are user accessible.  In the post-P300
    architecture, these addresses map to the live register file.
@@ -386,7 +388,7 @@ typedef struct {
    the right 10 bits must be zero for the start of a page), in which
    case mapva is called.
 
-   The special cache is also be used for write references.  Bits 2-4
+   The special cache can also be used for write references.  Bits 2-4
    of the cache entry vpn are the access bits from mapva, so bit 4
    being 1 means that writes are allowed.  
 
@@ -456,9 +458,9 @@ typedef struct {
 
   unsigned int instpermsec;     /* instructions executed per millisecond */
 
-  stlbe_t stlb[STLBENTS];
+  stlbe_t stlb[STLBENTS]        /* the STLB: Segmentation Translation Lookaside Buffer */
 
-  iotlbe_t iotlb[IOTLBENTS];
+  iotlbe_t iotlb[IOTLBENTS];    /* the IOTLB: I/O Translation Lookaside Buffer */
 
   unsigned int prevpc;          /* backed program counter */
 
@@ -474,8 +476,8 @@ typedef struct {
 
   int mapvacalls;               /* # of mapva calls */
   int mapvamisses;              /* STLB misses */
-  int supercalls;               /* supercache hits */
-  int supermisses;
+  int supercalls;               /* brp supercache hits */
+  int supermisses;              /* brp supercache misses */
 
   void *disp_rmr[128];           /* R-mode memory ref dispatch table */
   void *disp_vmr[128];           /* V-mode memory ref dispatch table */
@@ -1651,6 +1653,28 @@ static int devpoll[64] = {0};
 
 #include "emdev.h"
 
+#ifdef HOBBY
+
+/* this is the "hobby system" controller configuration:
+   
+   '04 = devasr: system console
+   '07 = devpnc: Primenet Node Controller aka PNC (Ringnet)
+   '14 = devmt: mag tape unit 0
+   '20 = devcp: clock / VCP / SOC
+   '26 = devdisk: 1st disk controller
+*/
+
+static int (*devmap[64])(int, int, int) = {
+  /* '0x */ devnone,devnone,devnone,devnone,devasr,devnone,devnone,devpnc,
+  /* '1x */ devnone,devnone,devnone,devnone,devmt,devnone, devnone, devnone,
+  /* '2x */ devcp,devnone,devnone,devnone,devnone,devnone,devdisk,devnone,
+  /* '3x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '4x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '5x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
+
+#else
 #if 0
 
 /* this is the "full system" controller configuration */
@@ -1660,22 +1684,18 @@ static int (*devmap[64])(int, int, int) = {
   /* '1x */ devnone,devnone,devnone,devnone,devmt,devamlc, devamlc, devamlc,
   /* '2x */ devcp,devnone,devdisk,devdisk,devdisk,devdisk,devdisk,devdisk,
   /* '3x */ devnone,devnone,devamlc,devnone,devnone,devamlc,devnone,devnone,
-  /* '4x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '4x */ devnone,devnone,devnone,devnone,devnone,devdisk,devdisk,devnone,
   /* '5x */ devnone,devnone,devamlc,devamlc,devamlc,devnone,devnone,devnone,
   /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
   /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
 
 #else
 
-/* this is the "minimum system" controller configuration */
+/* this is the "typical system" controller configuration */
 
 static int (*devmap[64])(int, int, int) = {
   /* '0x */ devnone,devnone,devnone,devnone,devasr,devnone,devnone,devpnc,
-#if 1
   /* '1x */ devnone,devnone,devnone,devnone,devmt,devnone, devnone, devnone,
-#else
-  /* '1x */ devnone,devnone,devnone,devnone,devnone,devnone, devnone, devnone,
-#endif
   /* '2x */ devcp,devnone,devnone,devnone,devnone,devnone,devdisk,devnone,
   /* '3x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
   /* '4x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
@@ -1683,7 +1703,7 @@ static int (*devmap[64])(int, int, int) = {
   /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
   /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
 #endif
-
+#endif
 
 
 static void warn(char *msg) {
@@ -4154,7 +4174,6 @@ main (int argc, char **argv) {
      - bits 7-16 are the opcode
      the index into the table is bits 1-2, 7-16, for a 12-bit index */
 
-  int boot;                            /* true if reading a boot record */
   char *bootarg;                       /* argument to -boot, if any */
   char bootfile[16];                   /* boot file to load (optional) */
   int bootfd=-1;                       /* initial boot file fd */
@@ -4209,7 +4228,7 @@ main (int argc, char **argv) {
 
   struct timeval boot_tv;
   struct timezone tz;
-
+  
   /* initialize global variables */
 
   if (sizeof(gv) > 16*1024)
@@ -4292,7 +4311,6 @@ main (int argc, char **argv) {
 
   verbose = 0;
   domemdump = 0;
-  boot = 0;
   bootarg = NULL;
   bootfile[0] = 0;
   gvp->pmap32bits = 0;
@@ -4304,21 +4322,38 @@ main (int argc, char **argv) {
   /* check args */
 
   for (i=1; i<argc; i++) {
+
     if (strcmp(argv[i],"-vv") == 0)
       verbose = 2;
+
     else if (strcmp(argv[i],"-v") == 0)
       verbose = 1;
+
     else if ((strcmp(argv[i],"-map") == 0) || (strcmp(argv[i],"-maps") == 0)) {
       while (i+1 < argc && argv[i+1][0] != '-')
 	readloadmap(argv[++i]);
-    } else if (strcmp(argv[i],"-memdump") == 0)
+
+    } else if (strcmp(argv[i],"-memdump") == 0) {
       domemdump = 1;
-    else if (strcmp(argv[i],"-ss") == 0) {
+
+    } else if (strcmp(argv[i],"-ss") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%o", &templ);
 	sswitch = templ;
       } else
 	sswitch = 0;
+
+    } else if (strcmp(argv[i],"-boot") == 0) {
+      if (i+1 < argc && argv[i+1][0] != '-') {
+	i++;
+	if (strcmp(argv[i],"help") == 0)
+	  sswitch = 0;
+	else if (strlen(argv[i]) <= 6 && sscanf(argv[i],"%o", &templ) == 1)
+	  sswitch = templ;
+	else
+	  bootarg = argv[i];
+      }
+
     } else if (strcmp(argv[i],"-cpuid") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
@@ -4328,6 +4363,7 @@ main (int argc, char **argv) {
 	  fatal("-cpuid arg range is 0 to 44\n");
       } else
 	fatal("-cpuid needs an argument\n");
+
 #ifndef NOMEM
     } else if (strcmp(argv[i],"-mem") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
@@ -4339,19 +4375,23 @@ main (int argc, char **argv) {
       } else
 	fatal("-mem needs an argument\n");
 #endif
-    } else if (strcmp(argv[i],"-tport") == 0) {
-      if (i+1 < argc && argv[i+1][0] != '-') {
-	sscanf(argv[++i],"%d", &templ);
-	tport = templ;
-      } else
-	fatal("-tport needs an argument\n");
+
     } else if (strcmp(argv[i],"-nport") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
 	nport = templ;
       } else
 	fatal("-nport needs an argument\n");
-    } else if (strcmp(argv[i],"-trace") == 0)
+
+#ifndef HOBBY
+    } else if (strcmp(argv[i],"-tport") == 0) {
+      if (i+1 < argc && argv[i+1][0] != '-') {
+	sscanf(argv[++i],"%d", &templ);
+	tport = templ;
+      } else
+	fatal("-tport needs an argument\n");
+
+    } else if (strcmp(argv[i],"-trace") == 0) {
       while (i+1 < argc && argv[i+1][0] != '-') {
 	i++;
 	if (strcmp(argv[i],"ear") == 0)
@@ -4417,15 +4457,7 @@ main (int argc, char **argv) {
 	  printf("Unrecognized trace flag: %s\n", argv[i]);
 	}
       }
-    else if (strcmp(argv[i],"-boot") == 0) {
-      boot = 1;
-      if (i+1 < argc && argv[i+1][0] != '-') {
-	i++;
-	if (strlen(argv[i]) <= 6 && sscanf(argv[i],"%o", &templ) == 1)
-	  sswitch = templ;
-	else
-	  bootarg = argv[i];
-      }
+#endif
 
     } else {
       printf("Unrecognized argument: %s\n", argv[i]);
@@ -4518,7 +4550,7 @@ main (int argc, char **argv) {
       /* setup DMA register '20 (address only) for the next boot record */
       regs.sym.regdmx[041] = 03000;
       if (globdisk(bootfile, sizeof(bootfile), bootctrl, bootunit) != 0) {
-	printf("Can't find disk boot device file %s, or multiple files match this device", bootfile);
+	printf("Can't find disk boot device file %s, or multiple files match this device.\nTo boot from tape (dev14u0), use -boot 10005", bootfile);
 	fatal(NULL);
       }
 
@@ -4537,9 +4569,10 @@ main (int argc, char **argv) {
 The -boot option is used to boot from disk, tape, or to load a Prime\n\
 runfile directly from the Unix file system.  For example:\n\
 \n\
-  -boot 14xx4 to boot from disk (see below)\n\
-  -boot 10005 to boot from tape.\n\
+  -boot  14xx4 to boot from disk (see below)\n\
+  -boot  10005 to boot from tape.\n\
   -boot *DOS64 to load *DOS64 from the Unix file and execute it\n\
+  -boot 1xxxxx to force Primos to prompt for COMDEV, PAGDEV, & NTUSR\n\
 \n\
 For disk boots, the last 3 digits can be:\n\
 \n\
@@ -8559,6 +8592,7 @@ imode:
 
   case 034:
     TRACE(T_FLOW, " EIO\n");
+    CLEAREQ;
     pio(ea & 0xFFFF);
     goto fetch;
 

@@ -28,12 +28,12 @@
    '17 = #7 AMLC or ICS1
    '20 = control panel / real-time clock
    '21 = 1st 4002 (Option B') disk controller
-   '22 = disk #3
+   '22 = disk #3 (0-7)
    '23 = disk #4
-   '24 = disk (was Writable Control Store)
-   '25 = disk (was 4000 disk controller)
-   '26 = #1 disk controller
-   '27 = #2 disk controller
+   '24 = disk #0 (0-7; was Writable Control Store)
+   '25 = disk #2 (0-7; was 4000 disk controller)
+   '26 = disk #1 (0-7)
+   '27 = #7 disk (0-7)
    '30-32 = BPIOC #1-3 (RTOS User Guide, A-1)
    '32 = AMLC #8 or ICS1
    '33 = #1 Versatec
@@ -45,8 +45,8 @@
    '42 = digital input #2
    '43 = digital output type 6040
    '44 = digital output #2
-   '45 = disk (was D/A converter type 6060 (analog output) - obsolete)
-   '46 = disk
+   '45 = disk #4 (0-7; was D/A converter type 6060 (analog output) - obsolete)
+   '46 = disk #6 (0-7)
    '47 = #2 PNC
    '50 = #1 HSSMLC/MDLC (synchronous comm)
    '51 = #2 HSSMLC/MDLC
@@ -64,6 +64,39 @@
      '02 = paper tape punch
      '04 = console
      '20 = control panel lights & sense switches
+
+   Disk controller addresses are indirectly determined from an index
+   0-n embedded in the physical device number (pdev), which has
+   undergone 2 expansions.  Originally, there was only one bit used
+   for the controller index - bit 9.  So the top 2-head partition on
+   controller 0, unit 0 was pdev 460, and for the 2nd controller, it
+   was pdev 660.  Controller 0 was conventionally at address '26, and
+   controller 1 was at address '27.
+
+   To support 4 disk controllers, Prime expanded the controller index
+   to bits 9-10 of pdev, as follows:
+
+           00 = '26     01 = '22     10 = '27     11 = '23
+
+   This assignment meant that existing customers didn't have to change
+   their disk numbering scheme.
+
+   To support 8 disk controllers, Prime expanded the controller index
+   to bits 9-11 of pdev, as follows:
+
+   000='24  001='26  010='25  011='22  100='45  101='27  110='46  111='23
+
+   Again, because of the assignments chosen, customer didn't have to
+   change their numbering schemes.  But it's confusing nonetheless,
+   because a site with one disk controller typically had it at address
+   '26.  The disk controller *installation* convention was:
+
+     '26 = 1st   '27 = 2nd   '22 = 3rd   '23 = 4th
+
+   I don't know if there was a convention after the 4th controller, but
+   I'm guessing there wasn't, because most Prime sites didn't have more
+   than 4 disk controllers, especially considering that each controller
+   would support 4-8 physical drives, depending on the controller type.
 */
 
 #include <errno.h>
@@ -78,6 +111,8 @@
 #include <time.h>
 #include <sys/file.h>
 #include <glob.h>
+
+#include "secure.h"
 
 /* this macro is used when I/O is successful.  In VI modes, it sets
    the EQ condition code bit.  In SR modes, it does a skip */
@@ -272,6 +307,7 @@ int devasr (int class, int func, int device) {
   static short vcptime[8] = {7*0, 1};
   static short vcptimeix;
   static short roomleft = MAXASRBUF;
+  static short xoff = 0;    /* true if currently xoffed */
 
   struct timeval timeout;
   unsigned char ch;
@@ -317,7 +353,7 @@ int devasr (int class, int func, int device) {
        emulator is suspended (VSUSP) then restarted, eg, the VSUSP and
        VINTR characters */
 
-    terminfo.c_iflag &= ~(INLCR | ICRNL);
+    terminfo.c_iflag &= ~(INLCR | ICRNL | IXOFF | IXON);
     terminfo.c_lflag &= ~(ECHOCTL | ICANON);
     terminfo.c_oflag &= ~(TOSTOP);
     terminfo.c_cc[VINTR] = _POSIX_VDISABLE;  /* use ^\ instead */
@@ -335,23 +371,23 @@ int devasr (int class, int func, int device) {
     signal(SIGTTIN, SIG_IGN);
 #endif
 
-    /* open console log file and set to line buffering */
+    /* open console log file */
 
     if ((conslog = fopen("console.log", "w")) == NULL) {
       perror(" unable to open console log file");
       fatal(NULL);
     }
-    setvbuf(conslog, NULL, _IOLBF, 0);
+    //setvbuf(conslog, NULL, _IOLBF, 0);  /* XXX set to line buffering */
     initialized = 1;
     return 0;
 
   case 0:
     TRACE(T_INST, " OCP '%02o%02o\n", func, device);
-    if (func == 010)       /* enable full duplex */
-      terminfo.c_lflag &= ~ECHO;
-    else if (func == 012)  /* enable "echoplex" */
-      terminfo.c_lflag |= ECHO;
-    if (func == 010 | func == 012) {
+    if (func == 010 || func == 012) {
+      if (func == 010)       /* enable full duplex */
+	terminfo.c_lflag &= ~ECHO;
+      else                   /* enable "echoplex" */
+	terminfo.c_lflag |= ECHO;
       if (tcsetattr(ttydev, TCSANOW, &terminfo) == -1) {
 	perror(" unable to set tty attributes");
 	fatal(NULL);
@@ -362,8 +398,9 @@ int devasr (int class, int func, int device) {
 
   case 1:
     TRACE(T_INST, " SKS '%02o%02o\n", func, device);
-
     if (func == 6) {               /* skip if room for a character */
+      if (xoff)                    /* no output if xoff */
+	return;
       if (roomleft <= 0) {         /* shouldn't be negative, but safer */
 	if (crs[MODALS] & 010)     /* PX enabled? */
 	  timeout.tv_sec = 0;      /* yes, can't delay */
@@ -387,9 +424,7 @@ int devasr (int class, int func, int device) {
 	timeout.tv_sec = 0;        /* yes, can't delay */
       else {
 	timeout.tv_sec = 1;        /* single user: okay to delay */
-#if 0
-	fflush(gvp->tracefile);         /* hack to flush for testing */
-#endif
+	fflush(gvp->tracefile);    /* flush for DIAG testing */
       }
       timeout.tv_usec = 0;
       FD_SET(ttydev, &fds);
@@ -407,7 +442,8 @@ int devasr (int class, int func, int device) {
     break;
 
   /* signal SIGTTIN is ignore during initialization, so if the
-     emulator is put in the background, read() will return EIO */
+     emulator is put in the background, read() will return EIO on
+     OSX */
 
   case 2:
     TRACE(T_INST, " INA '%02o%02o\n", func, device);
@@ -422,15 +458,15 @@ int devasr (int class, int func, int device) {
 	fatal(NULL);
       }
       ttyflags = newflags;
-      if (doblock)                      /* doblock = no PX = running diags */
+      if (doblock) {                    /* doblock = no PX = running diags */
 	fflush(gvp->tracefile);         /* flush trace buffer when testing */
-
-      if (doblock && needflush) {
-	if (fflush(stdout) == 0) {
-	  needflush = 0;
-	  devpoll[device] = 0;
+	if (needflush) {
+	  if (fflush(stdout) == 0) {
+	    needflush = 0;
+	    devpoll[device] = 0;
+	  }
+	  fflush(conslog);
 	}
-	fflush(conslog);
       }
 readasr:
       n = read(ttydev, &ch, 1);
@@ -445,14 +481,15 @@ readasr:
 	  fatal(NULL);
 	}
       } else if (n == 1) {
+#ifndef NOTRACE
 	if (ch == '') {
 	  printf("Trace owner = %o/%o\n", crs[OWNER], crs[OWNERL]);
 	  if (gvp->savetraceflags == 0) {
 	    TRACEA("\nTRACE ENABLED:\n\n");
 	    gvp->savetraceflags = ~T_MAP;
-	    gvp->savetraceflags = ~0;
 	    gvp->savetraceflags = T_FLOW|T_FAULT;
 	    gvp->savetraceflags = T_GET;
+	    gvp->savetraceflags = ~0;
 	  } else {
 	    TRACEA("\nTRACE DISABLED:\n\n");
 	    gvp->savetraceflags = 0;
@@ -460,6 +497,23 @@ readasr:
 	  fflush(gvp->tracefile);
 	  goto readasr;
 	}
+#endif
+	
+	/* do xon/xoff processing here, because if Unix does it, the
+	   emulator might block.  It would be nice to pass these onto
+	   Primos so that Emacs could use them, but at older revs, the
+	   system console didn't support xon/xoff.  If they are passed
+	   on, then the next command usually fails because the flow
+	   control characters are stored in the command line. */
+
+	if (ch == '') {
+	  xoff = 1;
+	  goto readasr;
+	} else if (ch == '') {
+	  xoff = 0;
+	  goto readasr;
+	}
+	xoff = 0;                /* enable output if any characters typed */
 	if (func >= 010)
 	  crs[A] = 0;
 	crs[A] = crs[A] | ch;
@@ -498,14 +552,14 @@ readasr:
     if (func == 0) {
       ch = crs[A] & 0x7f;
       TRACE(T_INST, " char to write=%o: %c\n", crs[A], ch);
-      if (ch == 0 || ch == 0x7f) {
+      if (ch == 0 || ch == 0x7f) {  /* ignore null and del (rubout) */
 	IOSKIP;
 	return;
       }
 #if 0
       /* could do this here too, but Primos does it with SKS before
 	 doing the OTA for the console, so it isn't really necessary.
-	 Also, if done here, it might confused a program if SKS said
+	 Also, if done here, it might confuse a program if SKS said
 	 the character could be output, then OTA said it couldn't.
 	 The program might stay in a tight OTA loop and hang the
 	 machine until sys console output clears */
@@ -548,8 +602,8 @@ readasr:
     } else if (func == 017) {
       if (crs[A] == 0) {
 
-	/* setup to read VCP battery backup clock (only on certain models);
-	   all words are 2 BCD digits */
+	/* setup to read VCP battery backup clock, only available on
+	   Prime models with cpuid >= 5.  All words are 2 BCD digits */
 
 #define BCD2(i) ((((i)/10)<<4) | ((i)%10))
 
@@ -577,9 +631,8 @@ readasr:
   case 4:
 
     /* tty output is blocking, even under Primos, which means that
-       writes and fflush can hang the entire system, eg, if XOFF
-       happens while writing to the console).  Console output should
-       be changed to non-blocking one of these days... */
+       writes and fflush can hang the entire system.  Console output
+       should be changed to non-blocking one of these days... */
 
     if (needflush) {
       if (fflush(stdout) == 0)
@@ -706,7 +759,7 @@ fmterr:
     }
     if (reclen & 0x80000000) {     /* record marked in error */
       /* XXX: can .tap have non-zero record length here? */
-      fprintf(stderr,"tape read error at position %ulld\n", lseek(fd, 0, SEEK_CUR));
+      fprintf(stderr,"tape read error at position %lld\n", lseek(fd, 0, SEEK_CUR));
       *mtstat |= 0xB600;           /* set all error bits */;
       return 0;
     }
@@ -1009,11 +1062,14 @@ int devmt (int class, int func, int device) {
 	TRACE(T_TIO, " filename for tape dev '%o unit %d is %s\n", device, u, devfile);
 	/* XXX: add code for read-protected tapes */
 	if ((unit[u].fd = open(devfile, O_RDWR, 0770)) == -1) {
-	  fprintf(stderr,"em: unable to open tape device file %s for device '%o unit %d for read/write\n", devfile, device, u);
-	  IOSKIP;
-	  break;
-	}
-	unit[u].mtstat = 0x00C8;   /* Ready, Online, BOT */
+	  if ((unit[u].fd = open(devfile, O_RDONLY)) == -1) {
+	    fprintf(stderr,"em: unable to open tape device file %s for device '%o unit %d for read/write\n", devfile, device, u);
+	    IOSKIP;
+	    break;
+	  } else
+	    unit[u].mtstat = 0x00CC;   /* Ready, Online, BOT, WP */
+	} else
+	  unit[u].mtstat = 0x00C8;   /* Ready, Online, BOT */
       }
       
       /* "select only" is ignored.  On a real tape controller, this
@@ -1495,7 +1551,7 @@ int devcp (int class, int func, int device) {
 #if 0
 	absticks++;
 	if (absticks%1000 == 0 || abs(ticks-targetticks) > 5)
-	  printf("\nClock check: target=%d, ticks=%d\n", targetticks, ticks);
+	  printf("\nClock: target=%d, ticks=%d, offset=%d\n", targetticks, ticks, ticks-targetticks);
 #endif
 
 	/* if the clock gets way out of whack (eg, because of a host
@@ -1503,13 +1559,23 @@ int devcp (int class, int func, int device) {
 	   immediate jump to the correct time.  If datnowea is not
 	   available (no Primos maps), then we have to tick our way to
 	   the correct time.  In addition to lowering overhead, slower
-	   clock tick rates make catching up much faster. */
+	   clock tick rates make catching up much faster.
+	   
+	   When ticking faster, we need to be careful not to tick too
+	   fast, because that will cause timed events like disk I/O to
+	   timeout prematurely.  With rev 20 Primos, setting the
+	   faster poll time to 500 instructions will cause a failure
+	   if the disk is active, 750 instructions works, so I set it
+	   to a minimum of 1000 instructions for a safety margin. */
 
 #ifndef FIXEDCLOCK
 	if (abs(ticks-targetticks) > 5000 && datnowea != 0)
 	  ticks = -1;
-	else if (ticks < targetticks)
-	  devpoll[device] = 100;                /* behind, so catch-up */
+	else if (ticks < targetticks)           /* behind, so catch up */
+	  if (targetticks-ticks < 100)
+	    devpoll[device] = devpoll[device]/2;  /* slow catch up */
+	  else
+	    devpoll[device] = 1000;               /* fast catch up */
 	else if (ticks > targetticks)
 	  devpoll[device] = devpoll[device]*2;  /* ahead, so slow down */
 	else {                                  /* just right! */
@@ -1523,7 +1589,8 @@ int devcp (int class, int func, int device) {
 	/* update instpermsec every 5 seconds.  Check for instcount
 	   overflow and reset when it occurs.
 
-	   XXX: this code should probably be done whether or not the clock is running */
+	   XXX: this code should probably be done whether or not the
+	   clock is running */
 
 	if ((gvp->instcount < previnstcount) || (gvp->instcount-previnstcount > gvp->instpermsec*1000*5)) {
 	  if (gvp->instcount-previnstcount > gvp->instpermsec*1000*5) {
@@ -1533,6 +1600,10 @@ int devcp (int class, int func, int device) {
 #ifdef NOIDLE
 	    //printf("\ninstpermsec=%d\n", gvp->instpermsec);
 #endif
+
+	    /* call the security check code every 5 seconds */
+
+	    secure(tv);
 	  }
 	  previnstcount = gvp->instcount;
 	  prev_tv = tv;
@@ -1599,50 +1670,16 @@ int globdisk (char *devfile, int size, int device, int unit) {
 
  */
 
+#include "geomhash.h"
+
 int devdisk (int class, int func, int device) {
 
-  /* static structure for disk file suffixes and config data */
-
-#define NUMGEOM 24
-
-  static struct {
-    short model;
-    char suffix[5];
-    short heads;
-    short spt;
-    short maxtrack;
-  } geom[NUMGEOM] = {
-     1,  "80M",  5,   9,  823,
-     1, "300M", 19,   9,  823,
-     0,  "CMD", 20,   9,  823,
-     4,  "68M",  3,   9, 1119,
-     5, "158M",  7,   9, 1119,
-     6, "160M", 10,   9,  821,
-     7, "675M", 40,   9,  841,
-     7, "600M", 40,   9,  841,
-     9, "315M", 19,   9,  823,   /* MODEL_4475 */
-    10,  "84M",  5,   8, 1015,   /* MODEL_4714 */
-    11,  "60M",  4,   7, 1020,   /* MODEL_4711 */
-    12, "120M",  8,   7, 1020,   /* MODEL_4715 */
-    13, "496M", 24,  14,  711,   /* MODEL_4735 */
-    14, "258M", 17,   6, 1220,   /* MODEL_4719 */
-    15, "770M", 23,  19,  848,   /* MODEL_4845 */
-    17, "328A", 12,   8, 1641,   /* MODEL_4721 */
-    17, "328B", 31, 254,   20,   /* MODEL_4721 (7210 SCSI controller) */
-    18, "817M", 15,  19, 1379,   /* MODEL_4860 */
-    19, "673M", 31, 254,   42,   /* MODEL_4729 */
-    20, "213M", 31, 254,   14,   /* MODEL_4730 */
-    22, "421M", 31, 254,   26,   /* MODEL_4731 */
-    23, "1.3G", 31, 254,   82,   /* MODEL_4732 */
-    24, "1G",   31, 254,   65,   /* MODEL_4734 */
-    25, "2G",   31, 254,  122,   /* MODEL_4736 */
-};
+#include "geom.h"
 
 #define S_HALT 0
 #define S_RUN 1
 #define S_INT 2
 
-#define MAXDRIVES 8
 #define HASHMAX 4451
 
 #if 1
@@ -1653,6 +1690,7 @@ int devdisk (int class, int func, int device) {
 
 
   static struct {
+    unsigned short device;                 /* controller device address */
     unsigned short oar;
     unsigned short state;                  /* channel program state: S_XXXX */
     unsigned short status;                 /* controller status */
@@ -1670,9 +1708,10 @@ int devdisk (int class, int func, int device) {
       int readnum;                         /* increments on each read */
       unsigned char** modrecs;             /* hash table of modified records */
     } unit[MAXDRIVES];
-  } dc[64];
+  } dc[MAXCTRL];
 
   short i,u;
+  int dx;
 
   /* temps for running channel programs */
 
@@ -1696,6 +1735,29 @@ int devdisk (int class, int func, int device) {
   char rtfile[16];          /* read trace file name */
   int rtnw;                 /* total number of words read (all channels) */
 
+  /* map device id to device context index
+
+     NOTE: the dc table is indexed the way a typical Prime installation
+     was setup, and is not related to the pdev bits!  See notes above. */
+
+
+  switch (device) {
+  case 026: dx = 0; break;
+#ifndef HOBBY
+  case 027: dx = 1; break;
+  case 022: dx = 2; break;
+  case 023: dx = 3; break;
+  case 024: dx = 4; break;
+  case 025: dx = 5; break;
+  case 045: dx = 6; break;
+  case 046: dx = 7; break;
+#endif
+  default:
+    fprintf(stderr, "devdisk: non-disk device id '%o ignored\n", device);
+    return -1;
+  }
+
+
   //gvp->traceflags |= T_DIO;
 
   switch (class) {
@@ -1704,35 +1766,36 @@ int devdisk (int class, int func, int device) {
 #ifdef DISKSAFE
     printf("em: Running in DISKSAFE mode; no changes will be permanent\n");
 #endif
-    for (i=0; i<64; i++) {
-      dc[i].state = S_HALT;
-      dc[i].status = 0100000;
-      dc[i].usel = -1;
-      for (u=0; u<MAXDRIVES; u++) {
-	dc[i].unit[u].rtfd = -1;
-	dc[i].unit[u].heads = -1;
-	dc[i].unit[u].spt = -1;
-	dc[i].unit[u].maxtrack = -1;
-	dc[i].unit[u].curtrack = -1;
-	dc[i].unit[u].wp = -1;
-	dc[i].unit[u].devfd = -1;
-	dc[i].unit[u].readnum = -1;
-	dc[i].unit[u].modrecs = NULL;
-      }
+    dc[dx].device = device;
+    dc[dx].state = S_HALT;
+    dc[dx].status = 0100000;
+    dc[dx].usel = -1;
+    if (geomcksum != geomhash((char *)geom, sizeof(geom)))
+      RP=MAKEVA(01000,0);
+    for (u=0; u<MAXDRIVES; u++) {
+      dc[dx].unit[u].rtfd = -1;
+      dc[dx].unit[u].heads = -1;
+      dc[dx].unit[u].spt = -1;
+      dc[dx].unit[u].maxtrack = -1;
+      dc[dx].unit[u].curtrack = -1;
+      dc[dx].unit[u].wp = -1;
+      dc[dx].unit[u].devfd = -1;
+      dc[dx].unit[u].readnum = -1;
+      dc[dx].unit[u].modrecs = NULL;
     }
     return 0;
       
   case 0:
     TRACE(T_INST|T_DIO, " OCP '%2o%2o\n", func, device);
     if (func == 016) {                /* reset interrupt */
-      if (dc[device].state == S_INT) {
-	dc[device].state = S_RUN;
+      if (dc[dx].state == S_INT) {
+	dc[dx].state = S_RUN;
 	devpoll[device] = 1;
       }
     } else if (func == 017) {         /* reset controller */
-      dc[device].state = S_HALT;
-      dc[device].status = 0100000;
-      dc[device].usel = -1;
+      dc[dx].state = S_HALT;
+      dc[dx].status = 0100000;
+      dc[dx].usel = -1;
     } else {
       printf(" Unrecognized OCP '%2o%2o\n", func, device);
       fatal(NULL);
@@ -1742,7 +1805,7 @@ int devdisk (int class, int func, int device) {
   case 1:
     TRACE(T_INST|T_DIO, " SKS '%2o%2o\n", func, device);
     if (func == 04) {                  /* skip if not interrupting */
-      if (dc[device].state != S_INT)
+      if (dc[dx].state != S_INT)
 	IOSKIP;
     } else {
       printf(" Unrecognized SKS '%2o%2o\n", func, device);
@@ -1758,7 +1821,7 @@ int devdisk (int class, int func, int device) {
 
     /* INA's are only accepted when the controller is not busy */
 
-    if (dc[device].state != S_HALT)
+    if (dc[dx].state != S_HALT)
       return;
 
     if (func == 01)          /* read device id, clear A first */
@@ -1766,7 +1829,7 @@ int devdisk (int class, int func, int device) {
     else if (func == 011)    /* read device id, don't clear A */
       crs[A] |= (CID4005 + device);
     else if (func == 017) {  /* read OAR */
-      crs[A] = dc[device].oar;
+      crs[A] = dc[dx].oar;
     } else {
       printf("Unimplemented INA device '%02o function '%02o\n", device, func);
       fatal(NULL);
@@ -1777,8 +1840,8 @@ int devdisk (int class, int func, int device) {
   case 3:
     TRACE(T_INST|T_DIO, " OTA '%02o%02o\n", func, device);
     if (func == 017) {        /* set OAR (order address register) */
-      dc[device].state = S_RUN;
-      dc[device].oar = crs[A];
+      dc[dx].state = S_RUN;
+      dc[dx].oar = crs[A];
       devpoll[device] = 1;
     } else {
       printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
@@ -1789,39 +1852,39 @@ int devdisk (int class, int func, int device) {
 
   case 4:   /* poll (run channel program) */
 
-    while (dc[device].state == S_RUN) {
-      m = get16io(dc[device].oar);
-      m1 = get16io(dc[device].oar+1);
-      TRACE(T_INST|T_DIO, "\nDIOC %o: %o %o %o\n", dc[device].oar, m, m1, get16io(dc[device].oar+2));
-      dc[device].oar += 2;
+    while (dc[dx].state == S_RUN) {
+      m = get16io(dc[dx].oar);
+      m1 = get16io(dc[dx].oar+1);
+      TRACE(T_INST|T_DIO, "\nDIOC %o: %o %o %o\n", dc[dx].oar, m, m1, get16io(dc[dx].oar+2));
+      dc[dx].oar += 2;
       order = m>>12;
 
       /* this is for conditional execution, and needs some work... */
 
       if (m & 04000) {   /* "execute if ..." */
 	if (order == 2 || order == 5 || order == 6)
-	  dc[device].oar++;
+	  dc[dx].oar++;
 	continue;
       }
 
       switch (order) {
 
       case 0: /* DHLT = Halt */
-	dc[device].state = S_HALT;
+	dc[dx].state = S_HALT;
 	devpoll[device] = 0;
-	TRACE(T_INST|T_DIO, " channel halted at '%o\n", dc[device].oar);
+	TRACE(T_INST|T_DIO, " channel halted at '%o\n", dc[dx].oar);
 	break;
 
       case 2: /* SFORM = Format */
       case 5: /* SREAD = Read */
       case 6: /* SWRITE = Write */
-	dc[device].status &= ~076000;             /* clear bits 2-6 */
-	m2 = get16io(dc[device].oar++);
+	dc[dx].status &= ~076000;             /* clear bits 2-6 */
+	m2 = get16io(dc[dx].oar++);
 	recsize = m & 017;
 	track = m1 & 03777;
 	rec = m2 >> 8;   /* # records for format, rec # for R/W */
 	head = m2 & 077;
-	u = dc[device].usel;
+	u = dc[dx].usel;
 	if (order == 2)
 	  strcpy(ordertext,"Format");
 	else if (order == 5)
@@ -1831,33 +1894,38 @@ int devdisk (int class, int func, int device) {
 	TRACE(T_INST|T_DIO, "%s, head=%d, track=%d, rec=%d, recsize=%d\n", ordertext, head, track, rec, recsize);
 	if (u == -1) {
 	  fprintf(stderr," Device '%o, order %d with no unit selected\n", device, order);
-	  dc[device].status |= 2;      /* select error (right?)... */
+	  dc[dx].status |= 2;      /* select error (right?)... */
 	  break;
 	}
 	if (recsize != 0) {
 	  fprintf(stderr," Device '%o, order %d, recsize=%d\n", device, order, recsize);
-	  dc[device].status |= 02000;  /* header check (right error?) */
+	  dc[dx].status |= 02000;  /* header check (right error?) */
 	  break;
 	}
 #if 0
 	/* this has been disabled because preseeks in the disk driver sometimes
 	   goof up, depending on timings in the emulator */
 
-	if (track != dc[device].unit[u].curtrack) {
-	  fprintf(stderr," Device '%o, order %d at track %d, but positioned to track %d\n", device, order, track, dc[device].unit[u].curtrack);
-	  dc[device].status |= 4;      /* illegal seek */
+	if (track != dc[dx].unit[u].curtrack) {
+	  fprintf(stderr," Device '%o, order %d at track %d, but positioned to track %d\n", device, order, track, dc[dx].unit[u].curtrack);
+	  dc[dx].status |= 4;      /* illegal seek */
 	  break;
 	}
 #endif
-	if (track > dc[device].unit[u].maxtrack) {
-	  fprintf(stderr," Device '%o, unit %d, seek to track %d > cylinder limit of %d\n", device, u, track, dc[device].unit[u].maxtrack);
+	if (track > dc[dx].unit[u].maxtrack) {
+	  fprintf(stderr," Device '%o, unit %d, seek to track %d > cylinder limit of %d\n", device, u, track, dc[dx].unit[u].maxtrack);
 	  fatal("Invalid seek");
 	}
 
-	/* XXX: could check for head > max head on drive here... */
-	if (dc[device].unit[u].devfd == -1) {
+	if (head > dc[dx].unit[u].heads) {
+	  fprintf(stderr," Device '%o, unit %d, head %d > head limit of %d\n", device, u, head, dc[dx].unit[u].heads);
+	  dc[dx].status |= 2;      /* select error (right?)... */
+	  break;
+	}
+
+	if (dc[dx].unit[u].devfd < 0) {
 	  TRACE(T_INST|T_DIO, " Device '%o unit %d not ready\n", device, u);
-	  dc[device].status = 0100001;
+	  dc[dx].status = 0100001;
 	} else if (order == 2) {
 	  TRACE(T_INST|T_DIO, " Format order\n");
 	  //fatal("DFORMAT channel order not implemented");
@@ -1865,7 +1933,7 @@ int devdisk (int class, int func, int device) {
 
 	  /* translate head/track/sector to drive record address */
 
-	  phyra = (track*dc[device].unit[u].heads*dc[device].unit[u].spt) + head*dc[device].unit[u].spt + rec;
+	  phyra = (track*dc[dx].unit[u].heads*dc[dx].unit[u].spt) + head*dc[dx].unit[u].spt + rec;
 	  TRACE(T_INST|T_DIO,  " Unix ra=%d, byte offset=%d\n", phyra, phyra*2080);
 	  /* XXX: check for phyra > 1032444, which is > 2GB max file size */
 
@@ -1876,8 +1944,8 @@ int devdisk (int class, int func, int device) {
 	  hashp = NULL;
 
 #ifdef DISKSAFE
-	  //fprintf(stderr," R/W, modrecs=%p\n", dc[device].unit[u].modrecs);
-	  for (hashp = dc[device].unit[u].modrecs[phyra%HASHMAX]; hashp != NULL; hashp = *((unsigned char **)hashp)) {
+	  //fprintf(stderr," R/W, modrecs=%p\n", dc[dx].unit[u].modrecs);
+	  for (hashp = dc[dx].unit[u].modrecs[phyra%HASHMAX]; hashp != NULL; hashp = *((unsigned char **)hashp)) {
 	    //fprintf(stderr," lookup, hashp=%p\n", hashp);
 	    if (phyra == *((int *)(hashp+sizeof(void *))))
 	      break;
@@ -1887,7 +1955,7 @@ int devdisk (int class, int func, int device) {
 	  if (hashp == NULL)
 	    if (order == 5) {        /* read */
 #endif
-	      if (lseek(dc[device].unit[u].devfd, phyra*2080, SEEK_SET) == -1) {
+	      if (lseek(dc[dx].unit[u].devfd, phyra*2080, SEEK_SET) == -1) {
 		fprintf(stderr,"devdisk: seek error, phyra=%d\n", phyra);
 		perror("Unable to seek drive file");
 		fatal(NULL);
@@ -1895,10 +1963,10 @@ int devdisk (int class, int func, int device) {
 #ifdef DISKSAFE
 	    } else {                 /* write */
 	      hashp = malloc(1040*2 + sizeof(void*) + sizeof(int));
-	      *(unsigned char **)hashp = dc[device].unit[u].modrecs[phyra%HASHMAX];
+	      *(unsigned char **)hashp = dc[dx].unit[u].modrecs[phyra%HASHMAX];
 	      *((int *)(hashp+sizeof(void *))) = phyra;
 	      //fprintf(stderr," Write, new hashp = %p, old bucket head = %p\n", hashp, *(unsigned char **)hashp);
-	      dc[device].unit[u].modrecs[phyra%HASHMAX] = hashp;
+	      dc[dx].unit[u].modrecs[phyra%HASHMAX] = hashp;
 	      hashp = hashp + sizeof(void*) + sizeof(int);
 	    }
 	  else
@@ -1906,8 +1974,8 @@ int devdisk (int class, int func, int device) {
 	  //fprintf(stderr," Before disk op %d, hashp=%p\n", order, hashp);
 #endif
 
-	  while (dc[device].dmanch >= 0) {
-	    dmareg = dc[device].dmachan << 1;
+	  while (dc[dx].dmanch >= 0) {
+	    dmareg = dc[dx].dmachan << 1;
 	    dmanw = regs.sym.regdmx[dmareg];
 	    dmanw = -(dmanw>>4);
 	    if (dmanw > 1040) {
@@ -1919,7 +1987,7 @@ int devdisk (int class, int func, int device) {
 	      dmanw = 0;
 	    }
 	    dmaaddr = ((regs.sym.regdmx[dmareg] & 3)<<16) | regs.sym.regdmx[dmareg+1];
-	    TRACE(T_INST|T_DIO,  " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dc[device].dmanch, dc[device].dmachan, regs.sym.regdmx[dmareg], dc[device].dmachan+1, dmaaddr, dmanw);
+	    TRACE(T_INST|T_DIO,  " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dc[dx].dmanch, dc[dx].dmachan, regs.sym.regdmx[dmareg], dc[dx].dmachan+1, dmaaddr, dmanw);
 	    
 	    if (order == 5) {
 	      if (crs[MODALS] & 020)
@@ -1932,8 +2000,8 @@ int devdisk (int class, int func, int device) {
 	      if (hashp != NULL) {
 		memcpy((char *)iobufp, hashp, dmanw*2);
 		hashp += dmanw*2;
-	      } else if ((nb=read(dc[device].unit[u].devfd, (char *)iobufp, dmanw*2)) != dmanw*2) {
-		fprintf(stderr, "Disk read error: device='%o, u=%d, fd=%d, nb=%d\n", device, u, dc[device].unit[u].devfd, nb);
+	      } else if ((nb=read(dc[dx].unit[u].devfd, (char *)iobufp, dmanw*2)) != dmanw*2) {
+		fprintf(stderr, "Disk read error: device='%o, u=%d, fd=%d, nb=%d\n", device, u, dc[dx].unit[u].devfd, nb);
 		if (nb == -1) perror("Unable to read drive file");
 		memset((char *)iobufp, 0, dmanw*2);
 	      }
@@ -1950,27 +2018,27 @@ int devdisk (int class, int func, int device) {
 	      if (hashp != NULL) {
 		memcpy(hashp, (char *)iobufp, dmanw*2);
 		hashp += dmanw*2;
-	      } else if (write(dc[device].unit[u].devfd, (char *)iobufp, dmanw*2) != dmanw*2) {
+	      } else if (write(dc[dx].unit[u].devfd, (char *)iobufp, dmanw*2) != dmanw*2) {
 		perror("Unable to write drive file");
 		fatal(NULL);
 	      }
 	    }
 	    regs.sym.regdmx[dmareg] = 0;
 	    regs.sym.regdmx[dmareg+1] += dmanw;
-	    dc[device].dmachan += 2;
-	    dc[device].dmanch--;
+	    dc[dx].dmachan += 2;
+	    dc[dx].dmanch--;
 	  }
 	}
 	break;
 
       case 3: /* SSEEK = Seek */
-	u = dc[device].usel;
+	u = dc[dx].usel;
 	if (u == -1) {
 	  fprintf(stderr," Device '%o, order %d with no unit selected\n", device, order);
-	  dc[device].status |= 2;      /* select error (right?)... */
+	  dc[dx].status |= 2;      /* select error (right?)... */
 	  break;
 	}
-	dc[device].status &= ~4;   /* clear bit 14: seek error */
+	dc[dx].status &= ~4;   /* clear bit 14: seek error */
 	if (m1 & 0100000) {
 	  track = 0;
 	} else {
@@ -1981,24 +2049,25 @@ int devdisk (int class, int func, int device) {
 	/* this has been disabled because SCSI drives sometimes seek to 
 	   track 512 (special meaning in controller?) */
 
-	if (track > dc[device].unit[u].maxtrack) {
-	  fprintf(stderr," Device '%o, unit %d, seek to track %d > cylinder limit of %d\n", device, u, track, dc[device].unit[u].maxtrack);
-	  dc[device].status |= 4;    /* set bit 14: seek error */
+	if (track > dc[dx].unit[u].maxtrack) {
+	  fprintf(stderr," Device '%o, unit %d, seek to track %d > cylinder limit of %d\n", device, u, track, dc[dx].unit[u].maxtrack);
+	  dc[dx].status |= 4;    /* set bit 14: seek error */
 	  track = -1;
 	}
 #endif
-	dc[device].unit[u].curtrack = track;
+	dc[dx].unit[u].curtrack = track;
 	break;
 
       case 4: /* DSEL = Select unit */
 	u = (m1 & 0377);            /* get unit bits */
-	dc[device].usel = -1;      /* de-select */
+	dc[dx].status &= ~3;  /* clear 15-16: select err + unavailable */
+	dc[dx].usel = -1;      /* de-select */
 	if (u == 0) {
 	  TRACE(T_INST|T_DIO, " de-select\n");
 	  break;
 	}
-	dc[device].status &= ~3;  /* clear 15-16: select err + unavailable */
 	if (u == 1) u = 0;
+#ifndef HOBBY
 	else if (u == 2) u = 1;
 	else if (u == 4) u = 2;
 	else if (u == 8) u = 3;
@@ -2006,56 +2075,60 @@ int devdisk (int class, int func, int device) {
 	else if (u == 32) u = 5;
 	else if (u == 64) u = 6;
 	else if (u == 128) u = 7;
-	else {
+#endif
+	else u = 99;
+	if (u >= MAXDRIVES) {
 	  fprintf(stderr," Device '%o, bad select '%o\n", device, u);
-	  dc[device].status |= 0100002;  /* set bit 15: select error */
+	  dc[dx].status |= 0100002;  /* set bit 15: select error */
 	  break;
 	}
 	TRACE(T_INST|T_DIO, " select unit %d\n", u);
-	dc[device].usel = u;
-	if (dc[device].unit[u].devfd == -1) {
-	  if (globdisk(devfile, sizeof(devfile), device, u) != 0) {
-	    dc[device].status |= 0100001;  /* set bit 16: not ready */
+	if (dc[dx].unit[u].devfd < 0) {
+	  if (dc[dx].unit[u].devfd == -2 || globdisk(devfile, sizeof(devfile), device, u) != 0) {
+	    dc[dx].unit[u].devfd = -2;
+	    dc[dx].status |= 0100001;  /* set bit 16: not ready */
 	    break;
 	  }
-	  if ((dc[device].unit[u].devfd = open(devfile, O_RDWR)) == -1) {
-	    if ((dc[device].unit[u].devfd = open(devfile, O_RDONLY)) == -1) {
-	      fprintf(stderr, "em: unable to open disk device file %s for device '%o unit %d; flagging \n", devfile, device, u);
-	      dc[device].status = 0100001;    /* not ready */
+	  if ((dc[dx].unit[u].devfd = open(devfile, O_RDWR)) == -1) {
+	    if ((dc[dx].unit[u].devfd = open(devfile, O_RDONLY)) == -1) {
+	      fprintf(stderr, "em: unable to open disk device file %s for device '%o unit %d\n", devfile, device, u);
+	      dc[dx].unit[u].devfd = -2;
+	      dc[dx].status = 0100001;    /* not ready */
 	      break;
 	    } else {
 	      lockkey = LOCK_SH;
-	      dc[device].unit[u].wp = 1;
+	      dc[dx].unit[u].wp = 1;
 	    }
 	  } else {
 	    lockkey = LOCK_EX;
-	    dc[device].unit[u].wp = 0;
+	    dc[dx].unit[u].wp = 0;
 	  }
 	  /* determine geometry from disk file suffix */
 	  for (i=0; i < NUMGEOM; i++)
 	    if (strcasestr(devfile, geom[i].suffix)) {
-	      dc[device].unit[u].heads = geom[i].heads;
-	      dc[device].unit[u].spt = geom[i].spt;
-	      dc[device].unit[u].maxtrack = geom[i].maxtrack;
+	      dc[dx].unit[u].heads = geom[i].heads;
+	      dc[dx].unit[u].spt = geom[i].spt;
+	      dc[dx].unit[u].maxtrack = geom[i].maxtrack;
 	      break;
 	    }
 	  if (i == NUMGEOM) {
 	    fprintf(stderr, "em: unknown geometry for %s\n", devfile);
-	    close(dc[device].unit[u].devfd);
-	    dc[device].unit[u].devfd = -1;
-	    dc[device].status = 0100001;    /* not ready */
+	    close(dc[dx].unit[u].devfd);
+	    dc[dx].unit[u].devfd = -2;
+	    dc[dx].status = 0100001;    /* not ready */
 	    break;
 	  }
 #ifdef DISKSAFE
-	  if (flock(dc[device].unit[u].devfd, LOCK_SH+LOCK_NB) == -1)
+	  if (flock(dc[dx].unit[u].devfd, LOCK_SH+LOCK_NB) == -1)
 	    fatal("Disk drive file is in use");
-	  dc[device].unit[u].modrecs = calloc(HASHMAX, sizeof(void *));
-	  //fprintf(stderr," Device '%o, unit %d, modrecs=%p\n", device, u, dc[device].unit[u].modrecs);
+	  dc[dx].unit[u].modrecs = calloc(HASHMAX, sizeof(void *));
+	  //fprintf(stderr," Device '%o, unit %d, modrecs=%p\n", device, u, dc[dx].unit[u].modrecs);
 #else
-	  if (flock(dc[device].unit[u].devfd, lockkey+LOCK_NB) == -1)
+	  if (flock(dc[dx].unit[u].devfd, lockkey+LOCK_NB) == -1)
 	    fatal("Disk drive file is in use");
 #endif
 	}
+	dc[dx].usel = u;
 	break;
 
       case 7: /* DSTALL = Stall */
@@ -2075,35 +2148,35 @@ int devdisk (int class, int func, int device) {
 	return;
 
       case 9: /* DSTAT = Store status to memory */
-	TRACE(T_INST|T_DIO,  " store status='%o to '%o\n", dc[device].status, m1);
-	put16io(dc[device].status,m1);
+	TRACE(T_INST|T_DIO,  " store status='%o to '%o\n", dc[dx].status, m1);
+	put16io(dc[dx].status,m1);
 	break;
 
       case 11: /* DOAR = Store OAR to memory (2 words) */
-	TRACE(T_INST|T_DIO,  " store OAR='%o to '%o\n", dc[device].oar, m1);
-	put16io(dc[device].oar,m1);
+	TRACE(T_INST|T_DIO,  " store OAR='%o to '%o\n", dc[dx].oar, m1);
+	put16io(dc[dx].oar,m1);
 	break;
 
       case 13: /* SDMA = select DMA channel(s) to use */
-	dc[device].dmanch = m & 017;
-	dc[device].dmachan = m1;
-	TRACE(T_INST|T_DIO,  " set DMA channels, nch-1=%d, channel='%o\n", dc[device].dmanch, dc[device].dmachan);
+	dc[dx].dmanch = m & 017;
+	dc[dx].dmachan = m1;
+	TRACE(T_INST|T_DIO,  " set DMA channels, nch-1=%d, channel='%o\n", dc[dx].dmanch, dc[dx].dmachan);
 	break;
 
       case 14: /* DINT = generate interrupt through vector address */
 	TRACE(T_INST|T_DIO,  " interrupt through '%o\n", m1);
 	if (gvp->intvec >= 0 || !(crs[MODALS] & 0100000))
-	  dc[device].oar -= 2;     /* can't take interrupt right now */
+	  dc[dx].oar -= 2;     /* can't take interrupt right now */
 	else {
 	  gvp->intvec = m1;
-	  dc[device].state = S_INT;
+	  dc[dx].state = S_INT;
 	}
 	//gvp->traceflags = ~T_MAP;
 	devpoll[device] = 10;
 	return;
 
       case 15: /* DTRAN = channel program jump */
-	dc[device].oar = m1;
+	dc[dx].oar = m1;
 	TRACE(T_INST|T_DIO,  " jump to '%o\n", m1);
 	break;
 
@@ -2117,6 +2190,8 @@ int devdisk (int class, int func, int device) {
     }
   }
 }
+
+#ifndef HOBBY
 
 /* 
   AMLC I/O operations:
@@ -2220,7 +2295,10 @@ int devamlc (int class, int func, int device) {
 
   /* AMLC poll rate (ms).  Max data rate = queue size*1000/AMLCPOLL
      The max AMLC output queue size is 1023 (octal 2000), so a poll
-     rate of 75 will generate about 31,000 chars per second. */
+     rate of 33 (1000/33 = 30 times per second) will generate about
+     31,000 chars per second.  This rate may be further boosted by
+     fastpoll getting set in the poll section, for lines with full
+     DMQ buffers. */
 
 #define AMLCPOLL 33
 
@@ -3168,7 +3246,7 @@ int devamlc (int class, int func, int device) {
     break;
   }
 }
-
+#endif
 
 
 /* PNC (ring net) device handler
