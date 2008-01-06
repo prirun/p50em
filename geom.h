@@ -25,7 +25,7 @@
   static int geomcksum = 358767254;
 #else
 
-#define NUMGEOM 24
+#define NUMGEOM 25
 #define MAXDRIVES 8
 #define MAXCTRL 8
 
@@ -38,7 +38,7 @@
   } geom[NUMGEOM] = {
      1,  "80M",  5,   9,  823,
      1, "300M", 19,   9,  823,
-     0,  "CMD", 20,   9,  823,
+     2,  "CMD", 21,   9,  823,
      4,  "68M",  3,   9, 1119,
      5, "158M",  7,   9, 1119,
      6, "160M", 10,   9,  821,
@@ -51,6 +51,7 @@
     13, "496M", 24,  14,  711,   /* MODEL_4735 */
     14, "258M", 17,   6, 1220,   /* MODEL_4719 */
     15, "770M", 23,  19,  848,   /* MODEL_4845 */
+    16, "1.1G", 27,  19, 1022,   /* MODEL_4935 */
     17, "328A", 12,   8, 1641,   /* MODEL_4721 */
     17, "328B", 31, 254,   20,   /* MODEL_4721 (7210 SCSI controller) */
     18, "817M", 15,  19, 1379,   /* MODEL_4860 */
@@ -62,5 +63,5 @@
     25, "2G",   31, 254,  122,   /* MODEL_4736 */
 };
 
-  static int geomcksum = 17176324;
+static int geomcksum = -698140431;
 #endif

@@ -99,19 +99,6 @@
    would support 4-8 physical drives, depending on the controller type.
 */
 
-#include <errno.h>
-#include <fcntl.h>
-#include <sys/time.h>
-#include <sys/select.h>
-#include <unistd.h>
-#include <termios.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <time.h>
-#include <sys/file.h>
-#include <glob.h>
-
 #include "secure.h"
 
 /* this macro is used when I/O is successful.  In VI modes, it sets
@@ -220,7 +207,7 @@ int devnone (int class, int func, int device) {
     break;
   }
   if (!seen[device])
-    fprintf(stderr, " pio to unimplemented device '%o, class '%o, func '%o\n", device, class, func);
+    TRACEA("pio to unimplemented device '%o, class '%o, func '%o\n", device, class, func);
   seen[device] = 1;
 }
 
@@ -1015,6 +1002,10 @@ int devmt (int class, int func, int device) {
       ready = 0;
       IOSKIP;
 
+    } else if (func == 011) {
+      crs[A] = (1 << 8) | 0214;   /* backplane slot + device ID */
+      IOSKIP;
+
     } else {
       printf("Unimplemented INA device '%02o function '%02o\n", device, func);
       fatal(NULL);
@@ -1058,12 +1049,11 @@ int devmt (int class, int func, int device) {
       if (unit[u].fd == -1) {
 	unit[u].mtstat = 0;
 	unit[u].firstwrite = 1;
-	snprintf(devfile,sizeof(devfile),"dev%ou%d", device, u);
+	snprintf(devfile,sizeof(devfile),"mt%d", u);
 	TRACE(T_TIO, " filename for tape dev '%o unit %d is %s\n", device, u, devfile);
-	/* XXX: add code for read-protected tapes */
-	if ((unit[u].fd = open(devfile, O_RDWR, 0770)) == -1) {
+	if ((unit[u].fd = open(devfile, O_RDWR+O_CREAT, 0660)) == -1) {
 	  if ((unit[u].fd = open(devfile, O_RDONLY)) == -1) {
-	    fprintf(stderr,"em: unable to open tape device file %s for device '%o unit %d for read/write\n", devfile, device, u);
+	    fprintf(stderr,"em: unable to open tape device file %s for device '%o unit %d\n", devfile, device, u);
 	    IOSKIP;
 	    break;
 	  } else
@@ -1145,7 +1135,7 @@ int devmt (int class, int func, int device) {
       /* read/write backward aren't supported */
 
       if (((crs[A] & 0x00E0) == 0x0040) && ((crs[A] & 0x2000) == 0)) {
-	warn("em: read/write reverse not supported for tapes");
+	warn("devtape: read/write reverse not supported");
 	unit[u].mtstat = 0;
 	IOSKIP;
 	break;
@@ -1460,10 +1450,10 @@ int devcp (int class, int func, int device) {
       crs[A] = 020;                /* this is the Option-A board */
       crs[A] = 0120;               /* this is the SOC board */
       //gvp->traceflags = ~T_MAP;
-    } else if (func == 016) {
+    } else if (func == 016) {      /* read switches that are up */
       crs[A] = sswitch;
     } else if (func == 017) {      /* read switches pushed down */
-      crs[A] = 0;
+      crs[A] = dswitch;
     } else {
       printf("Unimplemented INA device '%02o function '%02o\n", device, func);
       fatal(NULL);
@@ -1623,7 +1613,7 @@ int globdisk (char *devfile, int size, int device, int unit) {
   glob_t g;
   int globerr;
 
-  snprintf(devfile, size, "dev%ou%d.*", device, unit);
+  snprintf(devfile, size, "disk%ou%d.*", device, unit);
   if ((globerr=glob(devfile, GLOB_ERR|GLOB_NOSORT, NULL, &g)) != 0) {
     fprintf(stderr,"globdisk: glob returned %d opening %s\n", globerr, devfile);
     return -1;
@@ -1914,7 +1904,8 @@ int devdisk (int class, int func, int device) {
 #endif
 	if (track > dc[dx].unit[u].maxtrack) {
 	  fprintf(stderr," Device '%o, unit %d, seek to track %d > cylinder limit of %d\n", device, u, track, dc[dx].unit[u].maxtrack);
-	  fatal("Invalid seek");
+	  dc[dx].status |= 4;      /* illegal seek */
+	  break;
 	}
 
 	if (head > dc[dx].unit[u].heads) {
@@ -2001,8 +1992,11 @@ int devdisk (int class, int func, int device) {
 		memcpy((char *)iobufp, hashp, dmanw*2);
 		hashp += dmanw*2;
 	      } else if ((nb=read(dc[dx].unit[u].devfd, (char *)iobufp, dmanw*2)) != dmanw*2) {
-		fprintf(stderr, "Disk read error: device='%o, u=%d, fd=%d, nb=%d\n", device, u, dc[dx].unit[u].devfd, nb);
-		if (nb == -1) perror("Unable to read drive file");
+		if (nb != 0) fprintf(stderr, "Disk read error: device='%o, u=%d, fd=%d, nb=%d\n", device, u, dc[dx].unit[u].devfd, nb);
+		if (nb == -1) {
+		  perror("Unable to read drive file");
+		  dc[dx].status |= 010000;  /* read check */
+		}
 		memset((char *)iobufp, 0, dmanw*2);
 	      }
 	      if (iobufp == iobuf)
@@ -2283,24 +2277,22 @@ int devdisk (int class, int func, int device) {
 
 #define AMLC_SET_POLL \
   if ((dc[dx].ctinterrupt || dc[dx].xmitenabled || (dc[dx].recvenabled & dc[dx].connected))) \
-    if (devpoll[device] == 0 || devpoll[device] > AMLCPOLL*gvp->instpermsec) \
-      devpoll[device] = AMLCPOLL*gvp->instpermsec;  /* setup another poll */
+    if (devpoll[device] == 0 || devpoll[device] > AMLCPOLL*gvp->instpermsec/pollspeedup) \
+      devpoll[device] = AMLCPOLL*gvp->instpermsec/pollspeedup;  /* setup another poll */
 
 int devamlc (int class, int func, int device) {
 
 #define MAXLINES 128
-#define MAXFD MAXLINES+20
 #define MAXBOARDS 8
 #define MAXROOM 1024
 
   /* AMLC poll rate (ms).  Max data rate = queue size*1000/AMLCPOLL
      The max AMLC output queue size is 1023 (octal 2000), so a poll
      rate of 33 (1000/33 = 30 times per second) will generate about
-     31,000 chars per second.  This rate may be further boosted by
-     fastpoll getting set in the poll section, for lines with full
-     DMQ buffers. */
+     31,000 chars per second.  This rate may be further boosted if
+     there are lines DMQ buffers with 255 or more characters. */
 
-#define AMLCPOLL 33
+#define AMLCPOLL 50
 
   /* DSSCOUNTDOWN is the number of carrier status requests that should
      occur before polling real serial devices.  Primos does a carrier
@@ -2332,14 +2324,11 @@ int devamlc (int class, int func, int device) {
 #define TS_OPTION 3    /* inside an option */
 
   static short inited = 0;
+  static int pollspeedup = 1;
   static int baudtable[16] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200};
   static char ttymsg[1024];
   static int ttymsglen = 0;
   static int tsfd;                      /* socket fd for terminal server */
-  static struct {                       /* maps connection fd to device & line */
-    int dx;
-    int lx;
-  } fdtoline[MAXFD];
 
   static struct {
     unsigned short deviceid;            /* this board's device ID */
@@ -2397,7 +2386,8 @@ int devamlc (int class, int func, int device) {
   int baud;
   struct termios terminfo;
   int modemstate;
-  int fastpoll;
+  int maxxmit;
+  int tcpoptval;
 
   /* save this board's device id in the dc[] array so we can tell
      what order the boards should be in.  This is necessary to find
@@ -2462,7 +2452,7 @@ int devamlc (int class, int func, int device) {
 
       if ((cfgfile = fopen("amlc", "r")) == NULL) {
 	if (errno != ENOENT)
-	  perror("Error opening amlc config file");
+	  printf("em: error opening amlc config file: %s", strerror(errno));
       } else {
 	lc = 0;
 	while (fgets(line, sizeof(line), cfgfile) != NULL) {
@@ -2473,22 +2463,25 @@ int devamlc (int class, int func, int device) {
 	  else
 	    n = sscanf(line, "%d %s", &i, devname);
 	  if (n != 2) {
-	    printf("devamlc: Can't parse amlc config file line %d: %s\n", lc, line);
+	    printf("em: Can't parse amlc config file line #%d: %s\n", lc, line);
 	    continue;
 	  }
 	  if (i < 0 || i >= MAXLINES) {
-	    printf("devamlc: amlc line # '%o (%d) out of range in amlc config file, line %d: %s\n", i, i, lc, line);
+	    printf("em: amlc line # '%o (%d) out of range in amlc config file at line #%d: %s\n", i, i, lc, line);
 	    continue;
 	  }
-	  printf("devamlc: lc=%d, line '%o (%d) set to device %s\n", lc, i, i, devname);
+	  //printf("devamlc: lc=%d, line '%o (%d) set to device %s\n", lc, i, i, devname);
 	  dx2 = i/16;
 	  lx = i & 0xF;
+#if 1
 	  if ((fd = open(devname, O_RDWR | O_NONBLOCK | O_EXLOCK)) == -1) {
-	    printf("devamlc: error connecting AMLC line '%o (%d) to device %s:\n", i, i, devname);
-	    perror("devamlc error");
+#else
+	  if ((fd = open(devname, O_RDWR | O_NONBLOCK)) == -1) {
+#endif
+	    printf("em: error connecting AMLC line '%o (%d) to device %s: %s\n", i, i, devname, strerror(errno));
 	    continue;
 	  }
-	  printf("em: connected AMLC line '%o (%d) to device %s on fd %d\n", i, i, devname, fd);
+	  printf("em: connected AMLC line '%o (%d) to device %s\n", i, i, devname);
 	  dc[dx2].fd[lx] = fd;
 	  dc[dx2].connected |= BITMASK16(lx+1);
 	  dc[dx2].dedicated |= BITMASK16(lx+1);
@@ -2560,7 +2553,7 @@ int devamlc (int class, int func, int device) {
       dc[dx].intenable = 0;
 
     } else if (func == 017) {     /* initialize AMLC */
-      //printf("devamlc: Initializing controller '%d\n", device);
+      //printf("devamlc: Initializing controller '%d, dx=%d\n", device, dx);
       dc[dx].dmcchan = 0;
       dc[dx].baseaddr = 0;
       dc[dx].intvector = 0;
@@ -2616,7 +2609,7 @@ int devamlc (int class, int func, int device) {
 	      else
 		dc[dx].dss &= ~BITMASK16(lx+1);
 	      if (modemstate != dc[dx].modemstate[lx]) {
-		printf("devamlc: line %d modemstate was '%o now '%o\n", lx, dc[dx].modemstate[lx], modemstate);
+		//printf("devamlc: line %d modemstate was '%o now '%o\n", lx, dc[dx].modemstate[lx], modemstate);
 		dc[dx].modemstate[lx] = modemstate;
 	      }
 	    }
@@ -2763,8 +2756,8 @@ int devamlc (int class, int func, int device) {
 	  }
 #endif
 
-#if 1
-	  printf("SET terminfo: iFlag %x  oFlag %x  cFlag %x  lFlag %x  speed %d\n",
+#if 0
+	  printf("em: set terminfo: iFlag %x  oFlag %x  cFlag %x  lFlag %x  speed %d\n",
 		 terminfo.c_iflag,
 		 terminfo.c_oflag,
 		 terminfo.c_cflag,
@@ -2861,19 +2854,7 @@ int devamlc (int class, int func, int device) {
 
   case 4:
 
-    /* fastpoll gets set if the next poll should occur sooner.  This
-       is when:
-
-       a) a line is setup with the maximum queue size and has a full
-          queue to send.  (If the line doesn't have the max queue size,
-	  the best way to improve speed is to increase the queue size.)
-
-       b) an end-of-range occurs on input.  This speeds up input, but
-          also increases the chance that the user input buffer will 
-	  overflow, so it isn't enabled yet.
-    */
-    
-    fastpoll = 0;
+    maxxmit = 0;
 
     //printf("poll device '%o, cti=%x, xmit=%x, recv=%x, dss=%x\n", device, dc[dx].ctinterrupt, dc[dx].xmitenabled, dc[dx].recvenabled, dc[dx].dss);
     
@@ -2888,29 +2869,24 @@ int devamlc (int class, int func, int device) {
       }
     } else {
       allbusy = 1;
-      if (fd >= MAXFD)   /* Note: closes below */
-	warn("devamlc: new socket fd is too big");
-      else {
-	for (i=0; dc[i].deviceid && i<MAXBOARDS; i++)
-	  for (lx=0; lx<16; lx++) {
-	    /* NOTE: don't allow connections on clock line */
-	    if (lx == 15 && (i+1 == MAXBOARDS || !dc[i+1].deviceid))
-		break;
-	    if (dc[i].fd[lx] < 0 && dc[i].ctype[lx] == CT_SOCKET) {
-	      allbusy = 0;
-	      fdtoline[fd].dx = i;
-	      fdtoline[fd].lx = lx;
-	      dc[i].dss |= BITMASK16(lx+1);
-	      dc[i].connected |= BITMASK16(lx+1);
-	      dc[i].fd[lx] = fd;
-	      dc[i].tstate[lx] = TS_DATA;
-	      dc[i].room[lx] = MAXROOM;
-	      dc[i].ctype[lx] = CT_SOCKET;
-	      //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, dc[i].deviceid, lx);
+      for (i=0; dc[i].deviceid && i<MAXBOARDS; i++)
+	for (lx=0; lx<16; lx++) {
+	  /* NOTE: don't allow connections on clock line */
+	  if (lx == 15 && (i+1 == MAXBOARDS || !dc[i+1].deviceid))
 	      break;
-	    }
+	  if (dc[i].fd[lx] < 0 && dc[i].ctype[lx] == CT_SOCKET) {
+	    allbusy = 0;
+	    dc[i].dss |= BITMASK16(lx+1);
+	    dc[i].connected |= BITMASK16(lx+1);
+	    dc[i].fd[lx] = fd;
+	    dc[i].tstate[lx] = TS_DATA;
+	    dc[i].room[lx] = MAXROOM;
+	    dc[i].ctype[lx] = CT_SOCKET;
+	    //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, dc[i].deviceid, lx);
+	    goto endconnect;
 	  }
-      }
+	}
+endconnect:
       if (allbusy) {
 	warn("No free AMLC connection");
 	write(fd, "\rAll AMLC lines are in use!\r\n", 29);
@@ -2919,13 +2895,14 @@ int devamlc (int class, int func, int device) {
 
 	if ((tsflags = fcntl(fd, F_GETFL)) == -1) {
 	  perror("unable to get ts flags for AMLC line");
-	  fatal(NULL);
 	}
 	tsflags |= O_NONBLOCK;
 	if (fcntl(fd, F_SETFL, tsflags) == -1) {
 	  perror("unable to set ts flags for AMLC line");
-	  fatal(NULL);
 	}
+	tcpoptval = 1;
+	if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &tcpoptval, sizeof(tcpoptval)) == -1)
+	  perror("unable to set TCP_NODELAY");
 
 	/* these Telnet commands put the connecting telnet client
 	   into character-at-a-time mode and binary mode.  Since
@@ -3049,8 +3026,8 @@ int devamlc (int class, int func, int device) {
 		put16io(qtop, qcbea);
 	      } else
 		put16io(0, dc[dx].baseaddr + lx);
-	      if (nw == 1023)
-		fastpoll = 1;
+	      if (nw > maxxmit)
+		maxxmit = nw;
 	    } else if (nw == -1)
 	      if (errno == EAGAIN || errno == EWOULDBLOCK)
 		;
@@ -3158,7 +3135,7 @@ int devamlc (int class, int func, int device) {
 	     state so no telnet processing occurs. */
 
 	  if (n > 0) {
-	    //printf("devamlc: RECV, b=%d, tried=%d, read=%d\n", dc[dx].bufnum, n2, n);
+	    //printf("devamlc: RECV dx=%d, lx=%d, b=%d, tried=%d, read=%d\n", dx, lx, dc[dx].bufnum, n2, n);
 	    state = dc[dx].tstate[lx];
 	    for (i=0; i<n; i++) {
 	      ch = buf[i];
@@ -3217,7 +3194,17 @@ int devamlc (int class, int func, int device) {
       }
     }
 
-    /* time to interrupt? */
+    /* time to interrupt?
+
+       XXX: might be a bug here: with multiple controllers, maybe only
+       the last controller (with ctinterrupt set) will get high
+       performance (higher poll rates) while others will get the
+       standard poll rate.  If a non-clock-line controller wants
+       faster polling, we probably need to generate an interrupt on
+       the clock line controller to cause AMLDIM to refill the
+       buffers, or force the ctinterrupt status bit to be returned
+       on the next status request.
+    */
 
     if (dc[dx].intenable && (dc[dx].ctinterrupt || dc[dx].eor)) {
       if (gvp->intvec == -1) {
@@ -3237,12 +3224,32 @@ int devamlc (int class, int func, int device) {
        (the last board), so it will always be polling and checking
        for new incoming connections */
 
+
+    /* the largest DMQ buffer size is 1023 chars.  If any line's DMQ
+       buffer is getting filled completely, then we need to poll
+       faster to increase throughput.  If the max queue size falls
+       below 256, then decrease the interrupt rate.  Anywhere between
+       256-1022, leave the poll rate alone.
+
+       XXX NOTE: polling faster only causes AMLDIM to fill buffers
+       faster for the last AMLC board (with ctinterrupt set).
+    */
+
+#if 1
+    if (maxxmit >= 1023) {
+      if (pollspeedup < 8) {
+	pollspeedup++;
+	//printf("%d ", pollspeedup);
+	//fflush(stdout);
+      }
+    } else if (pollspeedup > 1 && maxxmit < 256) {
+      pollspeedup--;
+      //printf("%d ", pollspeedup);
+      //fflush(stdout);
+    }
+
+#endif
     AMLC_SET_POLL;
-
-    /* not sure the best way to "poll faster"; this is just a hack */
-
-    if (fastpoll)
-      devpoll[device] = devpoll[device]/4;
     break;
   }
 }
@@ -3982,8 +3989,6 @@ xmitdone:
 	for (lx=0; lx<16; lx++)
 	  if (!(dc[devices[i]].dss & BITMASK16(lx+1))) {
 	    newdevice = devices[i];
-	    fdtoline[fd].device = newdevice;
-	    fdtoline[fd].line = lx;
 	    dc[newdevice].dss |= BITMASK16(lx+1);
 	    dc[newdevice].sockfd[lx] = fd;
 	    //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);

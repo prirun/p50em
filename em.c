@@ -1,3 +1,5 @@
+#define EMULATOR_VERSION 102
+
 /* Pr1me Computer emulator, Jim Wilcoxson (prirun@gmail.com), April 4, 2005
    Copyright (C) 2005-2007, Jim Wilcoxson.  All Rights Reserved.
 
@@ -53,7 +55,7 @@ SAM>
    Usage:  to load initial boot from tape, then prompt for disk pdev
 
 $ time ./em -boot 1005 -tport 8000 -cpuid 5
-Boot file is dev14u0             <--- note tape drive boot
+Boot file is mt0                 <--- note tape drive boot
 Sense switches set to 1005       <--- these cause pdev prompt
 [BOOT Rev. 20.2.3 Copyright (c) 1987, Prime Computer, Inc.]
 
@@ -103,8 +105,16 @@ OK:
 #include <sys/time.h>
 #include <signal.h>
 #include <unistd.h>
-
-#include "mxapi.h"
+#include <sys/select.h>
+#include <termios.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <netinet/tcp.h>
+#include <time.h>
+#include <sys/file.h>
+#include <glob.h>
 
 /* In SR modes, Prime CPU registers are mapped to memory locations
    0-'37, but only 0-7 are user accessible.  In the post-P300
@@ -257,6 +267,7 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
    T_PCL        PCL instructions
    T_FAULT      Faults
    T_PX         Process exchange
+   T_LM         License manager
 */
 
 #define T_EAR   0x00000001
@@ -274,11 +285,26 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 #define T_TIO   0x00001000
 #define T_TERM  0x00002000
 #define T_RIO   0x00004000
-#define T_GET   0x00002000
-#define T_PUT   0x00001000
+#define T_LM    0x00008000
+#define T_PUT   0x00010000
+#define T_GET   0x00020000
 
 #define BITMASK16(b) (0x8000 >> ((b)-1))
 #define BITMASK32(b) ((unsigned int)(0x80000000) >> ((b)-1))
+
+/* license data structure.  Part is read from file "license" file:
+   - field 1: license id
+   - field 2: license server Internet name
+   - field 3: license server port (TCP)
+*/
+
+struct {
+  int  id;
+  char server[65];
+  int  sport;
+  int  sockfd;
+  struct hostent *rserver;
+} license;
 
 #ifdef NOTRACE
   #define TRACE(flags, formatargs...)
@@ -288,10 +314,10 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
   #define TRACEA(formatargs...) fprintf(gvp->tracefile,formatargs)
 #endif
 
-  /* traceprocs is an array of (operating system) procedure names we're
-     tracing, with flags and associated data
+/* traceprocs is an array of (operating system) procedure names we're
+   tracing, with flags and associated data
 
-     numtraceprocs is the number of entries in traceprocs, 0=none */
+   numtraceprocs is the number of entries in traceprocs, 0=none */
 
 #define MAXTRACEPROCS 2
 static struct {
@@ -307,6 +333,7 @@ static struct {
    switches are set to 014114.  But DIAGS like this setting. :( */
 
 static unsigned short sswitch = 014114;     /* sense switches, set with -ss & -boot */
+static unsigned short dswitch = 0;          /* data (down) switches, set with -sd */
 
 /* NOTE: the default cpuid is a P750: 1 MIPS, 8MB of memory
 
@@ -375,9 +402,10 @@ typedef struct {
    references the same page as the cache entry pointed to by eap, then
    the mapva call can be bypassed and the physical memory address
    calculated using the cache.  If the cache can't be used, either
-   because the entry is invalid or the access isn't allowed (only for
-   writes), mapva is called to do the mapping and (assuming it doesn't
-   fault) the eap cache entry is updated.
+   because the entry is invalid, points to a different virtual page,
+   or the access isn't allowed (only for writes), mapva is called to
+   do the mapping and (assuming it doesn't fault) the eap cache entry
+   is updated.
 
    This special cache is invalidated whenever the STLB is changed,
    whenever a ring change occurs, and whenever a process exchange
@@ -435,6 +463,12 @@ typedef struct {
   ea_t vpn;                   /* corresponding virtual page address */
 } brp_t;
 
+/* the dispatch table for generic instructions:
+   - bits 1-2 are the class (0-3)
+   - bits 3-6 are always zero
+   - bits 7-16 are the opcode
+   the index into the table is bits 1-2_7-16, for a 12-bit index */
+
 void *disp_gen[4096];         /* generic dispatch table */
 
 /* "gv" is a static structure used to hold "hot" global variables.  These
@@ -458,7 +492,7 @@ typedef struct {
 
   unsigned int instpermsec;     /* instructions executed per millisecond */
 
-  stlbe_t stlb[STLBENTS]        /* the STLB: Segmentation Translation Lookaside Buffer */
+  stlbe_t stlb[STLBENTS];       /* the STLB: Segmentation Translation Lookaside Buffer */
 
   iotlbe_t iotlb[IOTLBENTS];    /* the IOTLB: I/O Translation Lookaside Buffer */
 
@@ -523,13 +557,9 @@ static  jmp_buf jmpbuf;               /* for longjumps to the fetch loop */
    "memlimit" is set with the -mem argument, taking an argument which is
    the desired memory limit in MB.  Setting a memory limit is useful to
    speed up system boots and diagnostics during emulator testing.
- */
+*/
 
-#ifdef OSX
-  #define MAXMB   512
-#else
-  #define MAXMB   32
-#endif
+#define MAXMB   512
 #define MEMSIZE MAXMB/2*1024*1024
 #define MEM physmem
 
@@ -598,7 +628,6 @@ static unsigned short physmem[MEMSIZE]; /* system's physical memory */
 #define LASTFAULT     077
 
 static ea_t tnoua_ea=0, tnou_ea=0, tsrc_ea=0;
-static int verbose;                         /* -v (not used anymore) */
 static int domemdump;                       /* -memdump arg */
 
 static int tport;                           /* -tport option (incoming terminals) */
@@ -652,6 +681,75 @@ char *brp_name() {
 /* nanosecond timer stuff (thanks Jeff!) */
 
 #include "stopwatch.h"
+
+/* reads and parses the license file and sets the license global
+   variable structure.  The license file is not used in the hobby
+   version.  This routine also sets up the socket and client
+   listening port, so that errors can be detected early.
+*/
+
+readlicense() {
+
+  struct sockaddr_in raddr;
+  int  raddrlen;  
+
+  FILE *licensefile;
+  char line[100];
+
+  license.id = 0;
+  license.server[0] = 0;
+  license.sport = 0;
+  license.sockfd = -1;
+
+#ifndef HOBBY
+
+  if ((licensefile = fopen("license", "r")) == NULL) {
+    printf("No license file.\n");
+    exit(1);
+  }
+
+  if (fgets(line, sizeof(line), licensefile) == NULL 
+      || sscanf(line, "%x %s %d", &license.id, license.server, &license.sport) != 3) {
+    printf("Unable to read license file.  Format is: id server port\n");
+    exit(1);
+  }
+  fclose(licensefile);
+
+#if 0
+  /* setup a port on the client for responses */
+
+  if (license.lport > 0) {
+    bzero(&license.laddr,sizeof(license.laddr));
+    license.laddr.sin_family = AF_INET;
+    license.laddr.sin_addr.s_addr = INADDR_ANY;
+    license.laddr.sin_port = htons(license.lport);
+    if (bind(license.sockfd, (struct sockaddr *)&license.laddr, sizeof(license.laddr)) < 0) {
+      perror("License bind");
+      fatal("Unable to bind local license port.  Check license file.");
+      exit(1);
+    }
+  } else {
+    printf("Local license port must be > zero\n");
+    exit(1);
+  }
+#endif
+
+  /* lookup the license server's address.
+
+     XXX: this might need repeating periodically, like daily, in case
+     an IP address changes */
+
+  license.rserver = gethostbyname(license.server);
+  if (license.rserver == NULL) {
+    printf("Can't lookup IP address for license server %s.  Check license file or DNS.\n", license.server);
+    exit(1);
+  }
+  bcopy((char *)license.rserver->h_addr, (char *)&raddr.sin_addr.s_addr, license.rserver->h_length);
+  printf("License id: %08x server %s [%s:%d]\n", license.id, license.server, inet_ntoa(raddr.sin_addr.s_addr), license.sport);
+
+#endif
+  return;
+}
 
 
 /* returns an index to a symbol, based on an address and type
@@ -707,7 +805,7 @@ addsym(char *sym, unsigned short seg, unsigned short word, char type) {
 }
 
 
-readloadmap(char *filename) {
+readloadmap(char *filename, int showerr) {
   FILE *mapf;
   char line[100];
   int lc,ix;
@@ -716,10 +814,13 @@ readloadmap(char *filename) {
   ea_t lastaddr;
 
   TRACEA("Reading load map from %s... ", filename);
-  if ((mapf = fopen(filename, "r")) == NULL) {
-    perror("Map file open");
-    fatal("Error reading map file");
-  }
+  if ((mapf = fopen(filename, "r")) == NULL)
+    if (showerr) {
+      perror("Map file open");
+      fatal("Error reading map file");
+    } else
+      return;
+
   lc = 0;
   while (fgets(line, sizeof(line), mapf) != NULL) {
     lc++;
@@ -828,10 +929,13 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
 
   stopwatch_push(&sw_mapva);
 
-  /* map virtual address if segmentation is enabled */
+  /* fault bit set on EA means an address trap, which should be
+     handled at a higher lever and never make it this far */
 
   if (ea & 0x80000000)
     fatal("mapva: fault bit set on EA");
+
+  /* map virtual address if segmentation is enabled */
 
   if (crs[MODALS] & 4) {
 #ifndef NOTRACE
@@ -948,45 +1052,6 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
   fatal("Return from macheck");
 }
 
-#if 0
-/* NOTE: this is ifdef'd out because it slowed things down (it was a
-   precursor to the brp cache, which worked much better */
-
-/* Use fastmap only when intacc = RACC or WACC, ie, get/put, not PACC!): 
-
-  (pa_t) pa = fastmap(ea, intacc, rp);
-
-*/
-
-static pa_t fastmap (ea_t ea, ea_t rp, short intacc) {
-  short seg, ring;
-  stlbe_t *stlbp;
-  unsigned short access;
-
-  if (crs[MODALS] & 4) {
-    seg = SEGNO32(ea);
-    stlbp = gvp->stlb+STLBIX(ea);
-
-    /* if the STLB segments match, and the segment is common to all or
-       the process id matches, then the STLB cache can be used for
-       this access  */
-
-    if ((stlbp->seg == seg) && ((seg < 04000) || (stlbp->procid == crs[OWNERL]))) {
-      ring = ((rp | ea) >> 29) & 3;  /* current ring | ea ring = access ring */
-      access = stlbp->access[ring];
-      if ((intacc & access) == intacc) {
-	if (stlbp->unmodified && intacc == WACC) {
-	  stlbp->unmodified = 0;
-	  *(stlbp->pmep) &= ~020000;    /* reset unmodified bit in memory */
-	}
-	return (stlbp->ppa | (ea & 0x3FF));
-      }
-    }
-    return mapva(ea, rp, intacc, &access);
-  }
-  return ea;
-}
-#endif
 
 /* for I/O, ea is either an 18-bit physical address (which is just
    returned if not in mapped I/O mode), or a 2-bit segment number and
@@ -1659,7 +1724,7 @@ static int devpoll[64] = {0};
    
    '04 = devasr: system console
    '07 = devpnc: Primenet Node Controller aka PNC (Ringnet)
-   '14 = devmt: mag tape unit 0
+   '14 = devmt: mag tape controller (4 drives)
    '20 = devcp: clock / VCP / SOC
    '26 = devdisk: 1st disk controller
 */
@@ -1691,15 +1756,24 @@ static int (*devmap[64])(int, int, int) = {
 
 #else
 
-/* this is the "typical system" controller configuration */
+/* this is the "typical system" controller configuration:
+
+   '04 = devasr: system console
+   '14 = devmt: mag tape controller (4 drives)
+   '20 = devcp: clock / VCP / SOC
+   '26 = devdisk: 1st disk controller (4/8 drives)
+   '27 = devdisk: 2nd disk controller (4/8 drives)
+   '54 = 1st amlc (terminal) controller (16 lines)
+   '53 = 2nd amlc (terminal) controller (16 lines)
+*/
 
 static int (*devmap[64])(int, int, int) = {
-  /* '0x */ devnone,devnone,devnone,devnone,devasr,devnone,devnone,devpnc,
+  /* '0x */ devnone,devnone,devnone,devnone,devasr,devnone,devnone,devnone,
   /* '1x */ devnone,devnone,devnone,devnone,devmt,devnone, devnone, devnone,
-  /* '2x */ devcp,devnone,devnone,devnone,devnone,devnone,devdisk,devnone,
+  /* '2x */ devcp,devnone,devnone,devnone,devnone,devnone,devdisk,devdisk,
   /* '3x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
   /* '4x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
-  /* '5x */ devnone,devnone,devnone,devnone,devamlc,devnone,devnone,devnone,
+  /* '5x */ devnone,devnone,devnone,devamlc,devamlc,devnone,devnone,devnone,
   /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
   /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
 #endif
@@ -4168,17 +4242,12 @@ main (int argc, char **argv) {
 
   static short bootdiskctrl[4] = {026, 027, 022, 023};
 
-  /* the dispatch table for generic instructions:
-     - bits 1-2 are the class (0-3)
-     - bits 3-6 are always zero
-     - bits 7-16 are the opcode
-     the index into the table is bits 1-2, 7-16, for a 12-bit index */
-
   char *bootarg;                       /* argument to -boot, if any */
   char bootfile[16];                   /* boot file to load (optional) */
   int bootfd=-1;                       /* initial boot file fd */
   int bootctrl, bootunit;              /* boot device controller and unit */
   int bootskip=0;                      /* skip this many bytes on boot dev */
+  unsigned char boottaphdr[4];
 
   short tempa,tempa1,tempa2;
   unsigned short utempa,utempa1,utempa2;
@@ -4228,7 +4297,20 @@ main (int argc, char **argv) {
 
   struct timeval boot_tv;
   struct timezone tz;
-  
+
+  printf("[Prime Emulator ver %d %s]\n", EMULATOR_VERSION, __DATE__);
+
+  /* re-open stderr as error.log */
+
+  close(2);
+  if ((templ = open("error.log", O_WRONLY+O_CREAT+O_TRUNC, 0644)) != 2) {
+    if (templ == -1)
+      printf("Error redirecting stderr to error.log: %s\n", strerror(errno));
+    else
+      printf("Open returned %d redirecting stderr\n", templ);
+    exit(1);
+  }
+
   /* initialize global variables */
 
   if (sizeof(gv) > 16*1024)
@@ -4309,7 +4391,6 @@ main (int argc, char **argv) {
     gvp->iotlb[i].valid = 0;
   bzero(MEM, 64*1024*2);              /* zero first 64K words */
 
-  verbose = 0;
   domemdump = 0;
   bootarg = NULL;
   bootfile[0] = 0;
@@ -4319,19 +4400,17 @@ main (int argc, char **argv) {
   tport = 0;
   nport = 0;
 
+  /* read license file: id, server name, port */
+
+  readlicense();
+
   /* check args */
 
   for (i=1; i<argc; i++) {
 
-    if (strcmp(argv[i],"-vv") == 0)
-      verbose = 2;
-
-    else if (strcmp(argv[i],"-v") == 0)
-      verbose = 1;
-
-    else if ((strcmp(argv[i],"-map") == 0) || (strcmp(argv[i],"-maps") == 0)) {
+    if ((strcmp(argv[i],"-map") == 0) || (strcmp(argv[i],"-maps") == 0)) {
       while (i+1 < argc && argv[i+1][0] != '-')
-	readloadmap(argv[++i]);
+	readloadmap(argv[++i], 1);
 
     } else if (strcmp(argv[i],"-memdump") == 0) {
       domemdump = 1;
@@ -4341,17 +4420,31 @@ main (int argc, char **argv) {
 	sscanf(argv[++i],"%o", &templ);
 	sswitch = templ;
       } else
-	sswitch = 0;
+	fatal("-ss needs an argument\n");
+
+    } else if (strcmp(argv[i],"-sd") == 0) {
+      if (i+1 < argc && argv[i+1][0] != '-') {
+	sscanf(argv[++i],"%o", &templ);
+	dswitch = templ;
+      }
 
     } else if (strcmp(argv[i],"-boot") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
-	i++;
-	if (strcmp(argv[i],"help") == 0)
+	if (strcmp(argv[i+1],"help") == 0) {
 	  sswitch = 0;
-	else if (strlen(argv[i]) <= 6 && sscanf(argv[i],"%o", &templ) == 1)
-	  sswitch = templ;
-	else
-	  bootarg = argv[i];
+	  i++;
+	} else {
+	  if (sscanf(argv[i+1],"%o", &templ) == 0)
+	    bootarg = argv[++i];
+	  if (i+1 < argc && argv[i+1][0] != '-' && sscanf(argv[i+1],"%o", &templ) == 1) {
+	    i++;
+	    sswitch = templ;
+	  }
+	  if (i+1 < argc && argv[i+1][0] != '-' && sscanf(argv[i+1],"%o", &templ) == 1) {
+	    i++;
+	    dswitch = templ;
+	  }
+	}
       }
 
     } else if (strcmp(argv[i],"-cpuid") == 0) {
@@ -4424,6 +4517,8 @@ main (int argc, char **argv) {
 	  gvp->traceflags |= T_TERM;
 	else if (strcmp(argv[i],"rio") == 0)
 	  gvp->traceflags |= T_RIO;
+	else if (strcmp(argv[i],"lm") == 0)
+	  gvp->traceflags |= T_LM;
 	else if (strcmp(argv[i],"put") == 0)
 	  gvp->traceflags |= T_PUT;
 	else if (strcmp(argv[i],"get") == 0)
@@ -4463,6 +4558,16 @@ main (int argc, char **argv) {
       printf("Unrecognized argument: %s\n", argv[i]);
       fatal(NULL);
     }
+  }
+
+  TRACEA("Boot sense switches=%06o, data switches=%06o\n", sswitch, dswitch);
+
+  /* if no maps were specified on the command line, look for ring0.map and 
+     ring3.map in the current directory and read them */
+
+  if (numsyms == 0) {
+    readloadmap("ring0.map", 0);
+    readloadmap("ring3.map", 0);
   }
 
   /* finish setting up tracing after all options are read, ie, maps */
@@ -4550,18 +4655,15 @@ main (int argc, char **argv) {
       /* setup DMA register '20 (address only) for the next boot record */
       regs.sym.regdmx[041] = 03000;
       if (globdisk(bootfile, sizeof(bootfile), bootctrl, bootunit) != 0) {
-	printf("Can't find disk boot device file %s, or multiple files match this device.\nTo boot from tape (dev14u0), use -boot 10005", bootfile);
+	printf("Can't find disk boot device file %s, or multiple files match this device.\nTo boot from tape (mt0), use -boot 10005", bootfile);
 	fatal(NULL);
       }
 
     } else if ((sswitch & 0x7) == 5) {  /* tape boot */
       bootctrl = 014;
       rvec[0] = 0200;                   /* tape load starts at '200 */
-      rvec[1] = rvec[0]+2355-1;         /* read in at most 3 pages (6K) */
-      bootskip = 4;                     /* to skip .TAP header */
-      /* setup DMA register '20 (address only) for the next boot record */
-      regs.sym.regdmx[041] = 0200+2355;;
-      snprintf(bootfile, sizeof(bootfile), "dev%ou%d", bootctrl, bootunit);
+      bootskip = 4;                     /* to skip trailing .TAP header */
+      snprintf(bootfile, sizeof(bootfile), "mt%d", bootunit);
 
     } else {
       printf("\
@@ -4576,17 +4678,17 @@ runfile directly from the Unix file system.  For example:\n\
 \n\
 For disk boots, the last 3 digits can be:\n\
 \n\
-  114 = dev26u0 ctrl '26 unit 0       154 = dev22u0 ctrl '22 unit 0\n\
-  314 = dev26u1 ctrl '26 unit 1       354 = dev22u1 ctrl '22 unit 1\n\
-  514 = dev26u2 ctrl '26 unit 2       554 = dev22u2 ctrl '22 unit 2\n\
-  714 = dev26u3 ctrl '26 unit 3       754 = dev22u3 ctrl '22 unit 3\n\
+  114 = disk26u0 ctrl '26 unit 0       154 = disk22u0 ctrl '22 unit 0\n\
+  314 = disk26u1 ctrl '26 unit 1       354 = disk22u1 ctrl '22 unit 1\n\
+  514 = disk26u2 ctrl '26 unit 2       554 = disk22u2 ctrl '22 unit 2\n\
+  714 = disk26u3 ctrl '26 unit 3       754 = disk22u3 ctrl '22 unit 3\n\
 \n\
-  134 = dev27u0 ctrl '27 unit 0       174 = dev23u0 ctrl '23 unit 0\n\
-  334 = dev27u1 ctrl '27 unit 1       374 = dev23u1 ctrl '23 unit 1\n\
-  534 = dev27u2 ctrl '27 unit 2       574 = dev23u2 ctrl '23 unit 2\n\
-  734 = dev27u3 ctrl '27 unit 3       774 = dev23u3 ctrl '23 unit 3\n\
+  134 = disk27u0 ctrl '27 unit 0       174 = disk23u0 ctrl '23 unit 0\n\
+  334 = disk27u1 ctrl '27 unit 1       374 = disk23u1 ctrl '23 unit 1\n\
+  534 = disk27u2 ctrl '27 unit 2       574 = disk23u2 ctrl '23 unit 2\n\
+  734 = disk27u3 ctrl '27 unit 3       774 = disk23u3 ctrl '23 unit 3\n\
 \n\
-  The default option is -boot 14114, to boot from disk dev26u0\n");
+  The default option is -boot 14114, to boot from disk disk26u0\n");
       exit(1);
     }
 
@@ -4595,9 +4697,19 @@ For disk boots, the last 3 digits can be:\n\
       perror("Error opening boot device file");
       fatal(NULL);
     }
-    if (lseek(bootfd, bootskip, SEEK_CUR) == -1) {
-      perror("Error skipping on boot device");
-      fatal(NULL);
+
+    /* for tape boots, read the .tap header and setup the DMA registers
+       as they would be following a tape device read */
+
+    if ((sswitch & 0x7) == 5) {  /* tape boot */
+      if ((read(bootfd, boottaphdr, 4)) != 4) {
+	perror("Error reading boot tape header");
+	fatal(NULL);
+      }
+      nw = (boottaphdr[0] | boottaphdr[1]<<8 | boottaphdr[2]<<16 | boottaphdr[3]<<24)/2;
+      rvec[1] = rvec[0]+nw-1;
+      /* setup DMA register '20 (address only) for the next boot record */
+      regs.sym.regdmx[041] = 0200+nw;
     }
   }
   TRACEA("Sense switches set to %o\n", sswitch);
@@ -4612,12 +4724,15 @@ For disk boots, the last 3 digits can be:\n\
     perror("Error reading memory image");
     fatal(NULL);
   }
+  if (lseek(bootfd, bootskip, SEEK_CUR) == -1) {
+    perror("Error skipping on boot device");
+    fatal(NULL);
+  }
   close(bootfd);
 
-  /* check we got it all, except for tape boots; the boot program size
-     is unpredictable on tape */
+  /* check we got it all */
   
-  if (nw2 != nw*2 && ((sswitch & 0x7) == 4 || bootarg)) {
+  if (nw2 != nw*2) {
     printf("rvec[0]=%d, rvec[1]=%d, nw2=%d, nw=%d, nw*2=%d\n", rvec[0], rvec[1], nw2, nw, nw*2);
     fatal("Didn't read entire boot program");
   }
@@ -4680,8 +4795,8 @@ fetch:
 #endif
 
 #if 0
-  /* NOTE: doing something like this causes Primos to do a controlled
-	 shutdown, flushing disk buffers, etc. */
+  /* NOTE: doing something like this sometimes causes Primos to do a
+	 controlled shutdown, flushing disk buffers, etc. */
   RPH = 07777;
 #endif
 
@@ -5405,7 +5520,7 @@ d_zmvd:  /* 001115 */
 
      It may be worthwhile to special case a 2048-byte fill that is
      page-aligned, since ZFIL is often used this way by Primos, but
-     it isn't a significant overall performance issue. */
+     this isn't a significant overall emulator performance issue. */
 
 d_zfil:  /* 001116 */
   stopwatch_push(&sw_zfil);
