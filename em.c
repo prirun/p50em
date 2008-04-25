@@ -1,4 +1,4 @@
-#define EMULATOR_VERSION 102
+#define EMULATOR_VERSION 104
 
 /* Pr1me Computer emulator, Jim Wilcoxson (prirun@gmail.com), April 4, 2005
    Copyright (C) 2005-2007, Jim Wilcoxson.  All Rights Reserved.
@@ -298,13 +298,15 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
    - field 3: license server port (TCP)
 */
 
-struct {
+typedef struct {
   int  id;
   char server[65];
   int  sport;
   int  sockfd;
   struct hostent *rserver;
-} license;
+} license_t;
+
+license_t license;
 
 #ifdef NOTRACE
   #define TRACE(flags, formatargs...)
@@ -545,6 +547,7 @@ brp_t *eap;
 #endif
 
 static  jmp_buf jmpbuf;               /* for longjumps to the fetch loop */
+static  jmp_buf bootjmp;               /* for longjumps to the fetch loop */
 
 /* The standard Prime physical memory limit on early machines is 8MB.
    Later machines have higher memory capacities, up to 1024MB, using 
@@ -684,71 +687,63 @@ char *brp_name() {
 
 /* reads and parses the license file and sets the license global
    variable structure.  The license file is not used in the hobby
-   version.  This routine also sets up the socket and client
-   listening port, so that errors can be detected early.
+   version.  This routine also does the name->IP DNS lookup so that
+   errors can be detected early.
+
+   The first arg is non-zero for startup, meaning to print messages and
+   exit.  If zero, no messages are printed and the return code is set.
+
+   Returns 1 if everything is okay, 0 if not (or exits if first is non-zero).
 */
 
-readlicense() {
+int readlicense(int first) {
 
   struct sockaddr_in raddr;
   int  raddrlen;  
+  license_t newlicense;
 
   FILE *licensefile;
   char line[100];
 
-  license.id = 0;
-  license.server[0] = 0;
-  license.sport = 0;
-  license.sockfd = -1;
+  newlicense.id = 0;
+  newlicense.server[0] = 0;
+  newlicense.sport = 0;
+  newlicense.sockfd = -1;
+  newlicense.rserver = NULL;
+  if (first)
+    license = newlicense;
 
 #ifndef HOBBY
 
   if ((licensefile = fopen("license", "r")) == NULL) {
-    printf("No license file.\n");
-    exit(1);
+    printf("em: no license file.\n");
+    return 0;
   }
 
   if (fgets(line, sizeof(line), licensefile) == NULL 
-      || sscanf(line, "%x %s %d", &license.id, license.server, &license.sport) != 3) {
-    printf("Unable to read license file.  Format is: id server port\n");
-    exit(1);
+      || sscanf(line, "%x %s %d", &newlicense.id, newlicense.server, &newlicense.sport) != 3) {
+    printf("em: unable to read license file.  Format is: id server port\n");
+    fclose(licensefile);
+    return 0;
   }
   fclose(licensefile);
 
-#if 0
-  /* setup a port on the client for responses */
+  /* lookup the license server's address */
 
-  if (license.lport > 0) {
-    bzero(&license.laddr,sizeof(license.laddr));
-    license.laddr.sin_family = AF_INET;
-    license.laddr.sin_addr.s_addr = INADDR_ANY;
-    license.laddr.sin_port = htons(license.lport);
-    if (bind(license.sockfd, (struct sockaddr *)&license.laddr, sizeof(license.laddr)) < 0) {
-      perror("License bind");
-      fatal("Unable to bind local license port.  Check license file.");
-      exit(1);
-    }
-  } else {
-    printf("Local license port must be > zero\n");
-    exit(1);
+  newlicense.rserver = gethostbyname(newlicense.server);
+  if (newlicense.rserver == NULL) {
+    printf("em: can't lookup IP address for license server %s.  Check license file or DNS.\n", newlicense.server);
+    newlicense.rserver = gethostbyname("localhost");
+    if (newlicense.rserver == NULL)
+      return 0;
   }
-#endif
-
-  /* lookup the license server's address.
-
-     XXX: this might need repeating periodically, like daily, in case
-     an IP address changes */
-
-  license.rserver = gethostbyname(license.server);
-  if (license.rserver == NULL) {
-    printf("Can't lookup IP address for license server %s.  Check license file or DNS.\n", license.server);
-    exit(1);
-  }
-  bcopy((char *)license.rserver->h_addr, (char *)&raddr.sin_addr.s_addr, license.rserver->h_length);
-  printf("License id: %08x server %s [%s:%d]\n", license.id, license.server, inet_ntoa(raddr.sin_addr.s_addr), license.sport);
+  bcopy((char *)newlicense.rserver->h_addr, (char *)&raddr.sin_addr.s_addr, newlicense.rserver->h_length);
+  license = newlicense;
+  if (first)
+    printf("License id: %08x server %s [%s:%d]\n", license.id, license.server, inet_ntoa(raddr.sin_addr.s_addr), license.sport);
 
 #endif
-  return;
+  return 1;
 }
 
 
@@ -1818,7 +1813,7 @@ static void fatal(char *msg) {
   printf("Fatal error");
   if (msg)
     printf(": %s", msg);
-  printf("\ninstruction #%d at %o/%o %s: %o %o\nowner=%o %s, keys=%o, modals=%o\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), get16t(gvp->prevpc), get16t(gvp->prevpc+1), crs[OWNERL], searchloadmap(*(unsigned int *)(crs+OWNER),' '), crs[KEYS], crs[MODALS]);
+  printf("\ninstruction #%d at %o/%o %s: %o %o\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d\nowner=%o %s, keys=%o, modals=%o\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), get16t(gvp->prevpc), get16t(gvp->prevpc+1), crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), *(unsigned int *)(crs+A), *(int *)(crs+A), crs[X], *(short *)(crs+X), crs[OWNERL], searchloadmap(*(unsigned int *)(crs+OWNER),' '), crs[KEYS], crs[MODALS]);
   
   /* dump concealed stack entries */
 
@@ -1850,6 +1845,8 @@ static void fatal(char *msg) {
     devmap[i](-2, 0, i);
 
   fclose(gvp->tracefile);
+  if (lseek(2, 0, SEEK_END) > 0)
+    printf("Check error.log for more information\n");
   exit(1);
 }
 
@@ -2273,18 +2270,11 @@ static ea_t apea(unsigned short *bitarg) {
   unsigned int utempl;
   ea_t ea, ip;
 
-#if 0
-  ibr = iget16(RP);
-  RPL++;
-  a = iget16(RP);
-  RPL++;
-#else
   eap = &gvp->brp[RPBR];
   utempl = get32(RP);
   INCRP; INCRP;
   ibr = utempl >> 16;
   a = utempl & 0xffff;
-#endif
   bit = (ibr >> 12) & 0xF;
   br = (ibr >> 8) & 3;
   TRACE(T_EAAP, " AP ibr=%o, br=%d, i=%d, bit=%d, a=%o\n", ibr, br, (ibr & 004000) != 0, bit, a);
@@ -3626,7 +3616,7 @@ static nfy(unsigned short inst) {
   bol = utempl & 0xFFFF;      /* beginning of wait list */
   TRACE(T_PX, "%o/%o: opcode %o %s, ea=%o/%o, count=%d, bol=%o, I am %o\n", RPH, RPL, inst, nfyname[inst-01210], ea>>16, ea&0xFFFF, scount, bol, crs[OWNERL]);
 
-  /* on later models, semaphore overflow should cause a fault */
+  /* XXX: on later models, semaphore overflow should cause a fault */
 
   if (scount == -32768) {
     printf("NFY: semaphore overflow at ea %o/%o %s\n", ea>>16, ea&0xFFFF, searchloadmap(ea, 'x'));
@@ -4400,9 +4390,9 @@ main (int argc, char **argv) {
   tport = 0;
   nport = 0;
 
-  /* read license file: id, server name, port */
+  /* read license file: id, server name, port; print error if it fails */
 
-  readlicense();
+  readlicense(1);
 
   /* check args */
 
@@ -4623,6 +4613,8 @@ main (int argc, char **argv) {
      SECURITY: check that boot filename isn't a pathname?
   */
 
+  setjmp(bootjmp);
+
   if (bootarg) {
     if ((bootfd=open(bootarg, O_RDONLY)) == -1) {
       perror("Error opening boot file");
@@ -4645,7 +4637,7 @@ main (int argc, char **argv) {
     */
 
     bootunit = (sswitch>>7) & 3;
-    rvec[2] = 01000;                  /* starting address */
+    rvec[2] = 01000;                  /* program start address */
     rvec[3] = rvec[4] = rvec[5] = rvec[6] = 0;
 
     if ((sswitch & 0x7) == 4) {         /* disk boot */
@@ -4738,6 +4730,17 @@ For disk boots, the last 3 digits can be:\n\
   }
 
   /* setup execution (registers, keys, address mask, etc.) from rvec */
+
+#if 1
+  /* do a partial sysclr... move it here later if it fixes rev 19
+     reboot from tape (ctrl-b) */
+  
+  crs[MODALS] = 0;                    /* interrupts inhibited */
+  for (i=0; i < STLBENTS; i++)
+    gvp->stlb[i].seg = 0xFFFF;        /* marker for invalid STLB entry */
+  for (i=0; i < IOTLBENTS; i++)
+    gvp->iotlb[i].valid = 0;
+#endif
 
   crs[A] = rvec[3];
   crs[B] = rvec[4];
@@ -5936,6 +5939,7 @@ d_ptlb:  /* 000064 */
   for (utempa = 0; utempa < STLBENTS; utempa++)
     if ((utempl & 0x80000000) || gvp->stlb[utempa].ppa == (utempl << 10))
       gvp->stlb[utempa].seg = 0xFFFF;
+  invalidate_brp();
   goto fetch;
 
 d_itlb:  /* 000615 */
@@ -6454,7 +6458,7 @@ d_bdx:  /* 0140734 */
       */
 
       stopwatch_start(&sw_idle);
-      utempl = gvp->instpermsec*100;         /* limit delay to 100 msecs */
+      utempl = gvp->instpermsec*100;    /* limit delay to 100 msecs */
       for (i=0; i<64; i++)              /* check device timers */
 	if (devpoll[i])                 /* poll set? */
 	  if (devpoll[i] <= 100) {      /* too fast! */

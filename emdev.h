@@ -20,7 +20,7 @@
    '07 = #1 PNC
    '10 = ICS2 #1 or ICS1
    '11 = ICS2 #2 or ICS1
-   '12 = floppy disk/diskette (magtape controller #3 at rev 22.1?)
+   '12 = floppy disk/diskette (magtape controller #3 at rev 22)
    '13 = #2 magtape controller
    '14 = #1 magtape controller
    '15 = #5 AMLC or ICS1
@@ -343,8 +343,11 @@ int devasr (int class, int func, int device) {
     terminfo.c_iflag &= ~(INLCR | ICRNL | IXOFF | IXON);
     terminfo.c_lflag &= ~(ECHOCTL | ICANON);
     terminfo.c_oflag &= ~(TOSTOP);
-    terminfo.c_cc[VINTR] = _POSIX_VDISABLE;  /* use ^\ instead */
-    terminfo.c_cc[VSUSP] = '';
+    terminfo.c_cc[VINTR] = _POSIX_VDISABLE;  /* disable ^C interrupt; use ^\ */
+    terminfo.c_cc[VDSUSP] = _POSIX_VDISABLE; /* disable ^Y dsuspend */
+    terminfo.c_cc[VLNEXT] = _POSIX_VDISABLE; /* disable ^V lnext */
+    terminfo.c_cc[VDISCARD] = _POSIX_VDISABLE; /* disable ^O discard */
+    terminfo.c_cc[VSUSP] = '';  /* change ^Z to ^]
     terminfo.c_cc[VMIN] = 0;
     terminfo.c_cc[VTIME] = 0;
     if (tcsetattr(ttydev, TCSANOW, &terminfo) == -1) {
@@ -468,6 +471,11 @@ readasr:
 	  fatal(NULL);
 	}
       } else if (n == 1) {
+	if (!(crs[MODALS] & 010) && (ch == '')) {
+	  printf("\nRebooting at instruction #%d\n", gvp->instcount);
+	  // gvp->savetraceflags = ~T_MAP;  /****/
+	  longjmp(bootjmp, 1);
+	}
 #ifndef NOTRACE
 	if (ch == '') {
 	  printf("Trace owner = %o/%o\n", crs[OWNER], crs[OWNERL]);
@@ -1577,15 +1585,19 @@ int devcp (int class, int func, int device) {
 #endif
 
 	/* update instpermsec every 5 seconds.  Check for instcount
-	   overflow and reset when it occurs.
+	   overflow and reset when it occurs.  Also, suspend can cause
+	   instpermsec to be zero.  That causes hangs in the BDX idle
+	   code, so don't update instpermsec in that case.
 
 	   XXX: this code should probably be done whether or not the
 	   clock is running */
 
 	if ((gvp->instcount < previnstcount) || (gvp->instcount-previnstcount > gvp->instpermsec*1000*5)) {
 	  if (gvp->instcount-previnstcount > gvp->instpermsec*1000*5) {
-	    gvp->instpermsec = (gvp->instcount-previnstcount) /
+	    i = (gvp->instcount-previnstcount) /
 	      ((tv.tv_sec-prev_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-prev_tv.tv_usec)/1000);
+	    if (i > 0)
+	      gvp->instpermsec = i;
 	    //printf("gvp->instcount = %u, previnstcount = %u, diff=%u, instpermsec=%d\n", gvp->instcount, previnstcount, gvp->instcount-previnstcount, gvp->instpermsec);
 #ifdef NOIDLE
 	    //printf("\ninstpermsec=%d\n", gvp->instpermsec);
@@ -1868,7 +1880,7 @@ int devdisk (int class, int func, int device) {
       case 2: /* SFORM = Format */
       case 5: /* SREAD = Read */
       case 6: /* SWRITE = Write */
-	dc[dx].status &= ~076000;             /* clear bits 2-6 */
+	dc[dx].status &= ~076007;             /* clear bits 2-6, 14-16 */
 	m2 = get16io(dc[dx].oar++);
 	recsize = m & 017;
 	track = m1 & 03777;
@@ -2293,6 +2305,7 @@ int devamlc (int class, int func, int device) {
      there are lines DMQ buffers with 255 or more characters. */
 
 #define AMLCPOLL 50
+#define AMLCPOLL 100
 
   /* DSSCOUNTDOWN is the number of carrier status requests that should
      occur before polling real serial devices.  Primos does a carrier
@@ -2592,7 +2605,7 @@ int devamlc (int class, int func, int device) {
     TRACE(T_INST, " INA '%02o%02o\n", func, device);
 
     /* XXX: this constant is redefined because of a bug in the
-       Prolific USB serial driver at version 1.2.1r2.  They should be
+       OSX Prolific USB serial driver at version 1.2.1r2.  They should be
        turning on bit 0100, but are turning on 0x0100. */
 #define TIOCM_CD 0x0100    
 
@@ -2900,9 +2913,12 @@ endconnect:
 	if (fcntl(fd, F_SETFL, tsflags) == -1) {
 	  perror("unable to set ts flags for AMLC line");
 	}
+
+#if 0
 	tcpoptval = 1;
 	if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &tcpoptval, sizeof(tcpoptval)) == -1)
 	  perror("unable to set TCP_NODELAY");
+#endif
 
 	/* these Telnet commands put the connecting telnet client
 	   into character-at-a-time mode and binary mode.  Since
@@ -3260,15 +3276,18 @@ endconnect:
 
   On a real Prime ring network, each node has a unique node id from 1
   to 254.  The node id is configured with software and stored into the
-  PNC during network initialization.  In practice, CONFIG_NET limits
-  the node id to 247.  When a node starts, it sends a message to
-  itself.  If any system acknowledges this packet, it means the node
-  id is already in use.  If this occcurs, the new node will disconnect
-  from the ring.  Since all systems in a ring have to be physically
-  cabled together, there was usually a common network administration
-  to ensure that no two nodes had the same node id.
+  PNC during network initialization.  Before being set, the node id of
+  a master-cleared PNC is zero.  The broadcast node id is 255 (all
+  PNC's accept packets with this "to" id).  In practice, CONFIG_NET
+  limits the node id to 247.  When a node starts, it sends a message
+  to itself.  If any system acks this packet, it means the node id is
+  already in use, and the new node will disconnect from the ring.
+  Since all systems in a ring have to be physically cabled together,
+  there was usually a common network administration to ensure that no
+  two nodes had the same node id.
 
-  Node id 255 is the broadcast id - all nodes receive these messages.
+  Prior to rev 19.3, each node sends periodic "timer" messages to all
+  nodes it knows about.  This is obviously very inefficient.
   Beginning with 19.3, An "I'm alive" broadcast message is sent every
   10 seconds to let all nodes know that a machine is still up.
 
@@ -3281,11 +3300,10 @@ endconnect:
   ensure uniqueness.  To get around this, the emulator has a config
   file RING.CFG that lets you say "Here are the guys in *my* ring
   (with all unique node ids), here is each one's IP address and port,
-  my node id on their ring is *blah*, their node id on their ring is
-  *blah2*"".  This allows the node id to be a per-host number that
-  only needs to be coordinated with two people that want to talk to
-  each other, and effectively allows one emulator to be in multiple
-  rings simulataneously.  Cool, eh?
+  my node id on their ring is *blah* (optional).  This allows the node
+  id to be a per-host number that only needs to be coordinated with
+  two people that want to talk to each other, and effectively allows
+  one emulator to be in multiple rings simulataneously.  Cool, eh?
 
   PNC ring buffers are 256 words, with later versions of Primos also
   supporting 512, and 1024 word packets.  "nbkini" (rev 18) allocates
@@ -3333,28 +3351,29 @@ endconnect:
 
 
   INA '1707
-  - read PNC status word
+  - read network status word
   - does this in a loop until "connected" bit is clear after disconnect above
   - PNC status word:
       bit 1 set if receive interrupt (rcv complete)
       bit 2 set if xmit interrupt (xmit complete)
-      bit 3 set if "PNC booster" (repeater?)
-      bit 4-5 not used
+      bit 3 set if "PNC booster" (PNC II)
+      bit 4 set if PNC II is in PNC II mode
+      bit 5 set if u-verify failed or bad command issued
       bit 6 set if connected to ring
-      bit 7 set if multiple tokens detected (only after xmit EOR)
+      bit 7 set if multiple tokens detected (only after xmit EOR) (*)
       bit 8 set if token detected (only after xmit EOR)
       bits 9-16 controller node ID
 
   INA '1207
-  - read receive status word (byte?)
-      bit 1 set for previous ACK
-      bit 2 set for multiple previous ACK
-      bit 3 set for previous WACK
-      bit 4 set for previous NACK
+  - read receive status word
+      bit 1 set for previous ACK (*)
+      bit 2 set for multiple previous ACK (*)
+      bit 3 set for previous WACK (receiving node not ready to receive)
+      bit 4 set for previous NACK (packet received incorrectly)
       bits 5-6 unused
-      bit 7 ACK byte parity error
-      bit 8 ACK byte check error (parity on bits 1-6)
-      bit 9 recv buffer parity error
+      bit 7 ACK byte parity error (*)
+      bit 8 ACK byte check error (parity on bits 1-6) (*)
+      bit 9 recv buffer parity error (*)
       bit 10 recv busy
       bit 11 end of range before end of message (received msg was too big
              for the receive buffer)
@@ -3363,18 +3382,21 @@ endconnect:
   INA '1307
   - read xmit status word
       bit 1 set for ACK
-      bit 2 set for multiple ACK (more than 1 node accepted packet)
+      bit 2 set for multiple ACK (more than 1 node accepted packet) (*)
       bit 3 set for WACK
-      bit 4 set for NACK (bad CRC)
+      bit 4 set for NACK (bad CRC) (*)
       bit 5 unused
-      bit 6 parity bit of ACK (PNC only)
-      bit 7 ACK byte parity error
-      bit 8 ACK byte check error (parity on bits 1-6)
-      bit 9 xmit buffer parity error
+      bit 6 parity bit of ACK (PNC only) (*)
+      bit 7 ACK byte parity error (*)
+      bit 8 ACK byte check error (parity on bits 1-6) (*)
+      bit 9 xmit buffer parity error (*)
       bit 10 xmit busy
       bit 11 packet did not return
-      bit 12 packet returned with bits 6-8 nonzero
-      bits 13-16 retry count (booster only, zero on PNC)
+      bit 12 packet returned with bits 6-8 nonzero (*)
+      bit 13 retry not successful (PNC II)
+      bits 14-16 retry count (PNC II; zero on PNC)
+
+  (*) = unused in the emulator
 
   OCP '1707
   - initialize
@@ -3394,7 +3416,7 @@ endconnect:
 
   OCP '0107
   - connect to the ring
-  - (Primos follows this with INA '1707 until "connected" bit is set)
+  - (Primos follows this with INA '1707 loop until "connected" bit is set)
 
   OCP '1407
   - ack receive (clears recv interrupt request)
@@ -3406,7 +3428,7 @@ endconnect:
   - set interrupt mask (enable interrupts)
 
   OCP '1107
-  - rev 20 does this, not sure what it does
+  - stop receive in progress
 
 */
 
@@ -3452,7 +3474,6 @@ int devpnc (int class, int func, int device) {
     char  ip[16];          /* IP address of the remote node */
     short port;            /* emulator network port on the remote node */
     short myremid;         /* my node ID on the remote node's ring network */
-    short yourremid;       /* remote node's id on its own network */
     time_t conntime;       /* time of last connect request */
   } ni[256];
 
@@ -3510,25 +3531,22 @@ int devpnc (int class, int func, int device) {
       strcpy(ni[i].ip, "               ");
       ni[i].port = 0;
       ni[i].myremid = 0;
-      ni[i].yourremid = 0;
     }
     xmit.state = XR_IDLE;
     recv.state = XR_IDLE;
-    myid = 0;                 /* set an invalid node id */
+    myid = 0;                 /* set initial node id */
 
     /* read the ring.cfg config file.  Each line contains:
-          localid  ip:port  [myremoteid yourremoteid]
+          localid  ip:port  [myremoteid]
        where:
           localid = the remote node's id (1-247) on my ring
           ip = the remote emulator's TCP/IP address (or later, name)
 	  port = the remote emulator's TCP/IP PNC port
           myremoteid = my node's id (1-247) on the remote ring
-	  yourremoteid = the remote node's id on its own ring
 
-       The two remote id fields are optional, and allow the emulator
+       The remote id field is optional, and allows the emulator
        to be in multiple rings with different administration.  If
-       these are not specified, myremoteid = my local id, and
-       yourremoteid = localid (the remote host's local id).
+       not specified, myremoteid = my local id.
 
        There cannot be duplicates among the localid field, but there
        can be duplicates in the remoteid fields */
@@ -3569,19 +3587,9 @@ int devpnc (int class, int func, int device) {
 	  }
 	} else 
 	  tempmyremid = -1;
-	if ((p=strtok(NULL, DELIM)) != NULL) {
-	  tempyourremid = atoi(p);
-	  if (tempyourremid < 1 || tempyourremid > 247) {
-	    fprintf(stderr,"Line %d of ring.cfg: your remote node id out of range 1-247\n", linenum);
-	    continue;
-	  }
-	} else 
-	  tempyourremid = tempid;
-	if (tempyourremid == tempmyremid) {
-	    fprintf(stderr,"Line %d of ring.cfg: my remote node id and your remote node id can't be equal\n", linenum);
-	    continue;
-	  }
+
 	/* parse the port number from the IP address */
+
 	tempport = -1;
 	if ((p=strtok(tempip, PDELIM)) != NULL) {
 	  strcpy(ni[tempid].ip, p);
@@ -3597,9 +3605,8 @@ int devpnc (int class, int func, int device) {
 	}
 	ni[tempid].cfg = 1;
 	ni[tempid].myremid = tempmyremid;
-	ni[tempid].yourremid = tempyourremid;
 	ni[tempid].port = tempport;
-	TRACE(T_RIO, "Line %d: id=%d, ip=\"%s\", port=%d, myremid=%d, yourremid=%d\n", linenum, tempid, tempip, tempport, tempmyremid, tempyourremid);
+	TRACE(T_RIO, "Line %d: id=%d, ip=\"%s\", port=%d, myremid=%d\n", linenum, tempid, tempip, tempport, tempmyremid);
 	configured = 1;
       }
       if (!feof(ringfile)) {
@@ -3698,17 +3705,14 @@ int devpnc (int class, int func, int device) {
       xmitstat = 0;
       xmit.state = XR_IDLE;
 
-    } else if (func == 011) {   /* dunno what this is - rev 20 startup */
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - unknown\n", func, device);
-      ;
+    } else if (func == 011) {   /* stop recv in progress */
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - stop recv\n", func, device);
 
     } else if (func == 012) {   /* set normal mode */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - set normal mode\n", func, device);
-      ;
 
     } else if (func == 013) {   /* set diagnostic mode */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - set diag mode\n", func, device);
-      ;
 
     } else if (func == 014) {   /* ack receive (clear rcv int) */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - ack recv int\n", func, device);
@@ -3717,16 +3721,17 @@ int devpnc (int class, int func, int device) {
       recv.active = 0;
 
     } else if (func == 015) {   /* set interrupt mask (enable int) */
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - enable interrupts\n", func, device);
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - enable int\n", func, device);
       enabled = 1;
 
     } else if (func == 016) {   /* clear interrupt mask (disable int) */
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - disable interrupts\n", func, device);
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - disable int\n", func, device);
       enabled = 0;
 
     } else if (func == 017) {   /* initialize */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - initialize\n", func, device);
-      pncstat = 0;
+      /* XXX: this needs to disconnect from ring! */
+      pncstat = pncstat & 0xff;    /* keep node id across inits */
       recvstat = 0;
       xmitstat = 0;
       pncvec = 0;
@@ -3828,9 +3833,9 @@ int devpnc (int class, int func, int device) {
       xmit.fromid = dmaword & 0xFF;
       TRACE(T_INST|T_RIO, " xmit: toid=%d, fromid=%d\n", xmit.toid, xmit.fromid);
 
-      /* broadcast packets are "I am up" msgs and are simply discarded
-	 here, with a succesful transmit status.  Node up/down is
-	 handled in the devpnc poll code.  
+      /* broadcast packets are "I am up" timer msgs and are simply
+	 discarded here, with a succesful transmit status.  Node
+	 up/down is handled in the devpnc poll code.
 
 	XXX: should check that this really is the "I am up" msg */
       
@@ -3878,11 +3883,10 @@ xmitdone1:
 
       /* map local to and from node id to remote to and from node id */
 
-      if (ni[xmit.fromid].myremid > 0)
-	xmit.remfromid = ni[xmit.fromid].myremid;
-      else
+      if (ni[xmit.fromid].myremid < 0)
 	xmit.remfromid = myid;
-      xmit.remtoid = ni[xmit.toid].yourremid;
+      else
+	xmit.remfromid = ni[xmit.fromid].myremid;
       xmit.state = XR_READY;      /* xmit pending */
       xmit.offset = -1;           /* initialize for new xmit */
       devpoll[device] = 10;
@@ -3909,7 +3913,6 @@ xmitdone:
       strcpy(ni[myid].ip, "127.0.0.1");
       ni[myid].port = nport;
       ni[myid].myremid = myid;
-      ni[myid].yourremid = myid;
       IOSKIP;
 
     } else {
@@ -3981,7 +3984,6 @@ xmitdone:
       /*
 - new connect request came in
 - scan host table to find matching IP
-- how to figure out when one IP has multiple emulators?  port?
 - if already connected, display warning error and ignore
 
       newdevice = 0;
