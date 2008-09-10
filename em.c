@@ -336,6 +336,7 @@ static struct {
 
 static unsigned short sswitch = 014114;     /* sense switches, set with -ss & -boot */
 static unsigned short dswitch = 0;          /* data (down) switches, set with -sd */
+static unsigned short sensorabort = 0;      /* if 1, causes a sensor check */
 
 /* NOTE: the default cpuid is a P750: 1 MIPS, 8MB of memory
 
@@ -1555,6 +1556,25 @@ static put64r(long long value, ea_t ea, ea_t rpring) {
     put16r(m[2], INCVA(ea,2), rpring);
     put16r(m[3], INCVA(ea,3), rpring);
   }
+}
+
+/* flag a sensor check when SIGTERM signal is generated.  This is
+   checked when a new process is dispatched, sets the process abort
+   flags for the sensor check if the new process is user 1, causing
+   Primos to flush all disk buffers and shutdown gracefully.
+
+   NOTE: it may take up to 1 minute for Primos to see the sensor
+   check.  User 1 will usually be at the OK, prompt, waiting on 
+   input, and the check will occur when the 1-minute abort occurs.
+
+   A flag is used here instead of just setting the abort flag directly,
+   because signals mess up the registers, so if RP is being stored in
+   a register, it gets trashed and it's not possible to reset it.
+ */
+
+void sensorcheck () {
+
+  sensorabort = 1;
 }
 
 /* machine check handler, called with check vector locations
@@ -3391,6 +3411,10 @@ static dispatcher() {
   /* if this process' abort flags are set, clear them and take process fault */
 
   utempa = get16r0(pcbp+PCBABT);
+  if (pcbw == 0100100 && sensorabort) {
+    utempa |= 01000;    /* set user 1's sensor check abort flag */
+    sensorabort = 0;
+  }
   if (utempa != 0) {
     TRACE(T_PX, "dispatch: abort flags for %o are %o\n", crs[OWNERL], utempa);
     put16r0(0, pcbp+PCBABT);
@@ -4328,6 +4352,10 @@ main (int argc, char **argv) {
   /* ignore SIGPIPE signals (sockets) or they'll kill the emulator */
 
   signal (SIGPIPE, SIG_IGN);
+
+  /* on SIGTERM, shutdown the emulator with a Prime sensor check */
+
+  signal (SIGTERM, sensorcheck);
 
   /* open trace log */
 
