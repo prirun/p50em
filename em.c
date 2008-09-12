@@ -4313,6 +4313,9 @@ main (int argc, char **argv) {
   struct timezone tz;
 
   printf("[Prime Emulator ver %d %s]\n", EMULATOR_VERSION, __DATE__);
+  if (argc > 1 && (strcmp(argv[1],"--version") == 0)) {
+    exit(0);
+  }
 
   /* re-open stderr as error.log */
 
