@@ -2,13 +2,13 @@
 # Targets:  em  debug  hobby  dongle  lmserver
 
 em:
-	cc -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -I./mx/ppc/api;g++ -o ../run/em em.o ./mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -o ../run/em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	strip ../run/em
 	rm em.o
 
 
 debug:
-	cc -DNOREGS -g -O0 -DNOTRACE -DFAST -DNOMEM -c em.c -fobey-inline -mdynamic-no-pic -I./mx/ppc/api;g++ -o ../run/em em.o ./mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -DNOREGS -g -O0 -DNOTRACE -DFAST -DNOMEM -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -o ../run/em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 
@@ -18,10 +18,10 @@ hobby:
 
 
 dongle:
-	cc -c dongle.c -I./mx/ppc/api;g++ -o ../run/dongle dongle.o ./mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -c dongle.c -I../dongle/mx/ppc/api;g++ -o ../run/dongle dongle.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm dongle.o
 
 
 lmserver:
-	cc -c lmserver.c -I./mx/ppc/api;g++ lmserver.o -o ../run/lmserver ./mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -c lmserver.c -I../dongle/mx/ppc/api;g++ lmserver.o -o ../run/lmserver ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm lmserver.o
