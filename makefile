@@ -18,10 +18,10 @@ hobby:
 
 
 dongle:
-	cc -c dongle.c -I../dongle/mx/ppc/api;g++ -o ../run/dongle dongle.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -c dongle.c -I../dongle/mx/ppc/api;g++ -o ../bin/dongle dongle.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm dongle.o
 
 
 lmserver:
-	cc -c lmserver.c -I../dongle/mx/ppc/api;g++ lmserver.o -o ../run/lmserver ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -c lmserver.c -I../dongle/mx/ppc/api;g++ lmserver.o -o ../bin/lmserver ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm lmserver.o
