@@ -58,7 +58,7 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
     if (xok)
       if (ixy == 2 || ixy == 6)
 	ea_w += crs[X];
-    else if (ixy == 1 || ixy == 4)
+      else if (ixy == 1 || ixy == 4)
 	ea_w += crs[Y];
 
 #if 0
