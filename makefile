@@ -25,3 +25,6 @@ dongle:
 lmserver:
 	cc -c lmserver.c -I../dongle/mx/ppc/api;g++ lmserver.o -o lmserver ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm lmserver.o
+
+magrst:
+	cc -o magrst magrst.c istext.c

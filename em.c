@@ -1788,7 +1788,7 @@ static int (*devmap[64])(int, int, int) = {
   /* '2x */ devcp,devnone,devnone,devnone,devnone,devnone,devdisk,devdisk,
   /* '3x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
   /* '4x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
-  /* '5x */ devnone,devnone,devnone,devamlc,devamlc,devnone,devnone,devnone,
+  /* '5x */ devnone,devnone,devnone,devnone,devamlc,devnone,devnone,devnone,
   /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
   /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
 #endif
