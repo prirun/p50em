@@ -1,5 +1,15 @@
 #include <stdint.h>
 
+/*** Another swap option:
+#include <stdint.h>
+inline uint32_t bswap2(uint32_t val)
+{
+__asm__("bswap %0" : "+r" (val));
+return val;
+}
+See: http://objectmix.com/asm-x86-asm-370/69484-x86-inline-assembly-bswap.html
+***/
+
 #if !defined(__BIG_ENDIAN__) && !defined(__LITTLE_ENDIAN__)
 #  error Either __BIG_ENDIAN__ or __LITTLE_ENDIAN__ must be defined.
 #endif
