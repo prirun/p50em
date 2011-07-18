@@ -741,7 +741,7 @@ int readlicense(int first) {
   bcopy((char *)newlicense.rserver->h_addr, (char *)&raddr.sin_addr.s_addr, newlicense.rserver->h_length);
   license = newlicense;
   if (first)
-    printf("License id: %08x server %s [%s:%d]\n", license.id, license.server, inet_ntoa(raddr.sin_addr.s_addr), license.sport);
+    printf("License id: %08x server %s [%s:%d]\n", license.id, license.server, (char *) inet_ntoa(raddr.sin_addr.s_addr), license.sport);
 
 #endif
   return 1;
@@ -1027,7 +1027,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       *(stlbp->pmep) &= ~020000;    /* reset unmodified bit in memory */
     }
     pa = stlbp->ppa | (ea & 0x3FF);
-    TRACE(T_MAP,"        for ea %o/%o, iacc=%d, stlbix=%d, pa=%o	loaded at #%d\n", ea>>16, ea&0xffff, intacc, stlbix, pa, stlbp->load_ic);
+    TRACE(T_MAP,"        for ea %o/%o, iacc=%d, stlbix=%d, pa=%o	loaded at #%lu\n", ea>>16, ea&0xffff, intacc, stlbix, pa, stlbp->load_ic);
   } else {
     pa = ea;
   }
@@ -1796,7 +1796,7 @@ static int (*devmap[64])(int, int, int) = {
 
 
 static void warn(char *msg) {
-  printf("emulator warning:\n  instruction #%d at %o/%o: %o %o keys=%o, modals=%o\n  %s\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, get16t(gvp->prevpc), get16t(gvp->prevpc+1),crs[KEYS], crs[MODALS], msg);
+  printf("emulator warning:\n  instruction #%lu at %o/%o: %o %o keys=%o, modals=%o\n  %s\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, get16t(gvp->prevpc), get16t(gvp->prevpc+1),crs[KEYS], crs[MODALS], msg);
 }
     
 
@@ -1833,7 +1833,7 @@ static void fatal(char *msg) {
   printf("Fatal error");
   if (msg)
     printf(": %s", msg);
-  printf("\ninstruction #%d at %o/%o %s: %o %o\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d\nowner=%o %s, keys=%o, modals=%o\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), get16t(gvp->prevpc), get16t(gvp->prevpc+1), crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), *(unsigned int *)(crs+A), *(int *)(crs+A), crs[X], *(short *)(crs+X), crs[OWNERL], searchloadmap(*(unsigned int *)(crs+OWNER),' '), crs[KEYS], crs[MODALS]);
+  printf("\ninstruction #%lu at %o/%o %s: %o %o\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d\nowner=%o %s, keys=%o, modals=%o\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), get16t(gvp->prevpc), get16t(gvp->prevpc+1), crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), *(unsigned int *)(crs+A), *(int *)(crs+A), crs[X], *(short *)(crs+X), crs[OWNERL], searchloadmap(*(unsigned int *)(crs+OWNER),' '), crs[KEYS], crs[MODALS]);
   
   /* dump concealed stack entries */
 
@@ -1948,7 +1948,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
     faultnamep = faultname[fvec-FIRSTFAULT];
   else
     faultnamep = faultname[LASTFAULT-FIRSTFAULT+1];
-  TRACE(T_FAULT, "#%d: fault '%o (%s), fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", gvp->instcount, fvec, faultnamep, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
+  TRACE(T_FAULT, "#%lu: fault '%o (%s), fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", gvp->instcount, fvec, faultnamep, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
 
   if (crs[MODALS] & 010) {   /* process exchange is enabled */
     ring = (RPH>>13) & 3;                     /* save current ring */
@@ -2020,7 +2020,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
       RP = m;                /* NOTE: changes RP(segno) to segment 0 */
       INCRP;
     } else {
-      printf("#%d: fault '%o, fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", gvp->instcount, fvec, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
+      printf("#%lu: fault '%o, fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", gvp->instcount, fvec, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
       fatal("Fault vector is zero, process exchange is disabled.");
     }
   }
@@ -2186,7 +2186,7 @@ special:
 
   opcode = ((inst & 036000) != 032000) ? ((inst & 036000) >> 4) : ((inst & 076000) >> 4);
   opcode |= ((inst >> 2) & 3);         /* opcode extension */
-  TRACE(T_EAR, " special, new opcode=%5#0o, class=%d\n", opcode, class);
+  TRACE(T_EAR, " special, new opcode=%#05o, class=%d\n", opcode, class);
 #endif
 
   if (class < 2) {                               /* class 0/1 */
@@ -3655,7 +3655,7 @@ static nfy(unsigned short inst) {
     pcbp = MAKEVA(crs[OWNERH], bol);
     utempl = get32r0(pcbp+PCBWAIT);
     if (utempl != ea) {
-      printf("NFY: bol=%o, pcb waiting on %o/%o != ea %o/%o\n", utempl>>16, utempl&0xFFFF, ea>>16, ea&0xFFFF);
+      printf("NFY: bol=%o, pcb waiting on %o/%o != ea %o/%o\n", bol, utempl>>16, utempl&0xFFFF, ea>>16, ea&0xFFFF);
       fatal(NULL);
     }
     bol = get16r0(pcbp+PCBLINK);     /* get new beginning of wait list */
@@ -4331,14 +4331,14 @@ main (int argc, char **argv) {
   /* initialize global variables */
 
   if (sizeof(gv) > 16*1024)
-    printf("em: size of global vars = %d\n", sizeof(gv));
+    printf("em: size of global vars = %lu\n", sizeof(gv));
 
   gvp = &gv;
   gvp->physmem = physmem;
   gvp->intvec = -1;
   gvp->instcount = 0;
   gvp->inhcount = 0;
-  gvp->instpermsec = 2000;
+  gvp->instpermsec = 15000;
   gvp->livereglim = 040;
   gvp->mapvacalls = 0;
   gvp->mapvamisses = 0;
@@ -4945,7 +4945,7 @@ fetch:
 
 	crs[TIMER]++;
 	if (crs[TIMER] == 0) {
-	  TRACE(T_PX,  "#%d: pcb %o timer overflow\n", gvp->instcount, crs[OWNERL]);
+	  TRACE(T_PX,  "#%lu: pcb %o timer overflow\n", gvp->instcount, crs[OWNERL]);
 	  ea = *(ea_t *)(crs+OWNER);
 	  m = get16r0(ea+4) | 1;       /* set process abort flag */
 	  put16r0(m, ea+4);
@@ -5068,7 +5068,7 @@ xec:
     gvp->traceflags = 0;
 #endif
 
-  TRACE(T_FLOW, "\n			#%u [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%:0d B='%o/%d L='%o/%d E='%o/%d X=%o/%d Y=%o/%d%s%s%s%s K=%o M=%o\n", gvp->instcount, searchloadmap(*(unsigned int *)(crs+OWNER),'x'), crs[OWNERL], *(short *)(crs+TIMER), crs[SBH], crs[SBL], crs[LBH], crs[LBL], searchloadmap(*(unsigned int *)(crs+LBH),'l'), crs[XBH], crs[XBL], RPH, RPL-1, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), *(unsigned int *)(crs+L), *(int *)(crs+L), *(unsigned int *)(crs+E), *(int *)(crs+E), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000)?" C":"", (crs[KEYS]&020000)?" L":"", (crs[KEYS]&0200)?" LT":"", (crs[KEYS]&0100)?" EQ":"", crs[KEYS], crs[MODALS]);
+  TRACE(T_FLOW, "\n			#%lu [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X=%o/%d Y=%o/%d%s%s%s%s K=%o M=%o\n", gvp->instcount, searchloadmap(*(unsigned int *)(crs+OWNER),'x'), crs[OWNERL], *(short *)(crs+TIMER), crs[SBH], crs[SBL], crs[LBH], crs[LBL], searchloadmap(*(unsigned int *)(crs+LBH),'l'), crs[XBH], crs[XBL], RPH, RPL-1, inst, crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), *(unsigned int *)(crs+L), *(int *)(crs+L), *(unsigned int *)(crs+E), *(int *)(crs+E), crs[X], *(short *)(crs+X), crs[Y], *(short *)(crs+Y), (crs[KEYS]&0100000)?" C":"", (crs[KEYS]&020000)?" L":"", (crs[KEYS]&0200)?" LT":"", (crs[KEYS]&0100)?" EQ":"", crs[KEYS], crs[MODALS]);
 
   /* begin instruction decode: generic? */
 
@@ -5101,7 +5101,7 @@ xec:
        x=1, opcode='15 03 -> jsx (RV) (aka '35 03)
   */
 
-  TRACE(T_EAR|T_EAV, " opcode=%5#0o, i=%o, x=%o\n", ((inst & 036000) != 032000) ? ((inst & 036000) >> 4) : ((inst & 076000) >> 4), inst & 0100000, ((inst & 036000) != 032000) ? (inst & 040000) : 0);
+  TRACE(T_EAR|T_EAV, " opcode=%#05o, i=%o, x=%o\n", ((inst & 036000) != 032000) ? ((inst & 036000) >> 4) : ((inst & 076000) >> 4), inst & 0100000, ((inst & 036000) != 032000) ? (inst & 040000) : 0);
 
   if ((crs[KEYS] & 016000) == 014000) {   /* 64V mode */
     ea = ea64v(inst, earp);
@@ -7390,7 +7390,7 @@ d_smcs:  /* 0101200 */
 
 d_badgen:
   TRACEA(" unrecognized generic instruction!\n");
-  printf("em: #%d %o/%o: Unrecognized generic instruction '%o!\n", gvp->instcount, RPH, RPL, inst);
+  printf("em: #%lu %o/%o: Unrecognized generic instruction '%o!\n", gvp->instcount, RPH, RPL, inst);
   //gvp->traceflags = ~T_MAP;
   fault(UIIFAULT, RPL, RP);
   fatal(NULL);
@@ -8404,7 +8404,7 @@ imode:
   case 011:
     TRACE(T_FLOW, " LH\n");
     if (*(int *)&ea < 0) {
-      TRACE(T_FLOW, " ea=%x, immu32=%x, crsl[%d]=%x\n", ea, immu32, dr, crsl[dr]);
+      TRACE(T_FLOW, " ea=%x, immu32=%lx, crsl[%d]=%x\n", ea, immu32, dr, crsl[dr]);
       crs[dr*2] = immu32 >> 16;
     } else
       crs[dr*2] = get16(ea);
@@ -8902,7 +8902,7 @@ imode:
     case 1:
 imodepcl:
       stopwatch_push(&sw_pcl);
-      TRACE(T_FLOW|T_PCL, "#%d %o/%:0o: PCL %o/%o %s\n", gvp->instcount, RPH, RPL-2, ea>>16, ea&0xFFFF, searchloadmap(ea, 'e'));
+      TRACE(T_FLOW|T_PCL, "#%lu %o/%0o: PCL %o/%o %s\n", gvp->instcount, RPH, RPL-2, ea>>16, ea&0xFFFF, searchloadmap(ea, 'e'));
       if (gvp->numtraceprocs > 0 && TRACEUSER)
 	for (i=0; i<gvp->numtraceprocs; i++)
 	  if (traceprocs[i].ecb == (ea & 0xFFFFFFF) && traceprocs[i].sb == -1) {
@@ -9002,7 +9002,7 @@ imodepcl:
   case 055:
     if (*(int *)&ea < 0) {
       TRACE(T_FLOW, " ACP\n");
-      TRACE(T_INST, " before acp, crsl[%d]=%o/%o, immu32=%d, CP(dr)=%d\n", dr, crsl[dr]>>16, crsl[dr]&0xFFFF, immu32, EACP(crsl[dr]));
+      TRACE(T_INST, " before acp, crsl[%d]=%o/%o, immu32=%lu, CP(dr)=%d\n", dr, crsl[dr]>>16, crsl[dr]&0xFFFF, immu32, EACP(crsl[dr]));
       utempl = EACP(crsl[dr]);
       utempl += *(int *)&immu32;
       crsl[dr] = CPEA(crsl[dr], utempl);

@@ -472,7 +472,7 @@ readasr:
 	}
       } else if (n == 1) {
 	if (!(crs[MODALS] & 010) && (ch == '')) {
-	  printf("\nRebooting at instruction #%d\n", gvp->instcount);
+	  printf("\nRebooting at instruction #%lu\n", gvp->instcount);
 	  // gvp->savetraceflags = ~T_MAP;  /****/
 	  longjmp(bootjmp, 1);
 	}
@@ -482,9 +482,9 @@ readasr:
 	  if (gvp->savetraceflags == 0) {
 	    TRACEA("\nTRACE ENABLED:\n\n");
 	    gvp->savetraceflags = ~T_MAP;
-	    gvp->savetraceflags = T_FLOW|T_FAULT;
 	    gvp->savetraceflags = T_GET;
 	    gvp->savetraceflags = ~0;
+	    gvp->savetraceflags = T_FLOW|T_FAULT;
 	  } else {
 	    TRACEA("\nTRACE DISABLED:\n\n");
 	    gvp->savetraceflags = 0;
@@ -731,7 +731,7 @@ readerr:
     if (n < 4) {
       fprintf(stderr," only read %d bytes for reclen\n", n);
 fmterr:
-      fprintf(stderr," TAP format error at position %d\n", lseek(fd, 0, SEEK_CUR));
+      fprintf(stderr," TAP format error at position %u\n", (unsigned int) lseek(fd, 0, SEEK_CUR));
       *mtstat |= 0x200;              /* raw error */
       return 0;
     }
@@ -1175,7 +1175,7 @@ int devmt (int class, int func, int device) {
 	  dmcpair = get32io(dmxreg);    /* fetch begin/end pair */
 	  dmxaddr = dmcpair>>16;
 	  dmxnw = (dmcpair & 0xffff) - dmxaddr + 1;
-	  TRACE(T_INST|T_TIO,  " DMC channels: ['%o]='%o, ['%o]='%o, nwords=%d", dmxreg, dmxaddr, dmxreg+1, (dmcpair & 0xffff), dmxnw);
+	  TRACE(T_INST|T_TIO,  " DMC channels: ['%o]='%o, ['%o]='%o, nwords=%d", dmxreg, dmxaddr, dmxreg+1, (unsigned int) (dmcpair & 0xffff), dmxnw);
 	} else {                        /* DMA */
 	  dmxreg = dmxreg << 1;
 	  dmxnw = regs.sym.regdmx[dmxreg];
@@ -1631,7 +1631,7 @@ int globdisk (char *devfile, int size, int device, int unit) {
     return -1;
   }
   if (g.gl_pathc != 1) {
-    fprintf(stderr,"globdisk: %d matches for %s\n", g.gl_pathc, devfile);
+    fprintf(stderr,"globdisk: %d matches for %s\n", (int) g.gl_pathc, devfile);
     return -1;
   }
   strncpy(devfile, g.gl_pathv[0], size);
@@ -2304,7 +2304,6 @@ int devamlc (int class, int func, int device) {
      31,000 chars per second.  This rate may be further boosted if
      there are lines DMQ buffers with 255 or more characters. */
 
-#define AMLCPOLL 50
 #define AMLCPOLL 100
 
   /* DSSCOUNTDOWN is the number of carrier status requests that should

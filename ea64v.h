@@ -49,7 +49,7 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
 
     opcode = ((inst & 036000) != 032000) ? ((inst & 036000) >> 4) : ((inst & 076000) >> 4);
     opcode |= ((inst >> 2) & 3);         /* opcode extension */
-    TRACE(T_EAV, " new opcode=%5#0o, y=%d, br=%d, ixy=%d, xok=%d\n", opcode, (y != 0), br, ixy, xok);
+    TRACE(T_EAV, " new opcode=%#05o, y=%d, br=%d, ixy=%d, xok=%d\n", opcode, (y != 0), br, ixy, xok);
 #endif
 
     ea_s = crs[PBH+br*2] | (ea_s & RINGMASK16);
