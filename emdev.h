@@ -755,8 +755,13 @@ fmterr:
     if (reclen & 0x80000000) {     /* record marked in error */
       /* XXX: can .tap have non-zero record length here? */
       fprintf(stderr,"tape read error at position %lld\n", lseek(fd, 0, SEEK_CUR));
+#if 1
       *mtstat |= 0xB600;           /* set all error bits */;
       return 0;
+#else
+      *(int *)iobuf = 0;           /* return a 2-word zero record on errors */
+      return 2;
+#endif
     }
     if (reclen & 1)
       warn("odd-length record in tape file!");
