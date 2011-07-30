@@ -13,51 +13,51 @@
    '01 = paper tape reader
    '02 = paper tape punch
    '03 = #1 MPC/URC (line printer/card reader/card punch)
-   '04 = SOC/Option A/VCP board (system console/user terminal)
+*  '04 = SOC/Option A/VCP board (system console/user terminal)
    '05 = #2 MPC/URC (line printer/card reader/card punch)
    '06 = card punch? (RTOS User Guide, A-1) / IPC (Engr Handbook p.101)
    '06 = Interproc. Channel (IPC) (R20 Hacker's Guide)
-   '07 = #1 PNC
+*  '07 = #1 PNC
    '10 = ICS2 #1 or ICS1
    '11 = ICS2 #2 or ICS1
    '12 = floppy disk/diskette (magtape controller #3 at rev 22)
    '13 = #2 magtape controller
-   '14 = #1 magtape controller
-   '15 = #5 AMLC or ICS1
-   '16 = #6 AMLC or ICS1
-   '17 = #7 AMLC or ICS1
-   '20 = control panel / real-time clock
+*  '14 = #1 magtape controller (emulator only supports this one)
+*  '15 = #5 AMLC or ICS1
+*  '16 = #6 AMLC or ICS1
+*  '17 = #7 AMLC or ICS1
+*  '20 = control panel / real-time clock
    '21 = 1st 4002 (Option B') disk controller
-   '22 = disk #3 (0-7)
-   '23 = disk #4
-   '24 = disk #0 (0-7; was Writable Control Store)
-   '25 = disk #2 (0-7; was 4000 disk controller)
-   '26 = disk #1 (0-7)
-   '27 = #7 disk (0-7)
+*  '22 = disk #3 (0-7)
+*  '23 = disk #4
+*  '24 = disk #0 (0-7; was Writable Control Store)
+*  '25 = disk #2 (0-7; was 4000 disk controller)
+*  '26 = disk #1 (0-7)
+*  '27 = #7 disk (0-7)
    '30-32 = BPIOC #1-3 (RTOS User Guide, A-1)
-   '32 = AMLC #8 or ICS1
+*  '32 = AMLC #8 or ICS1
    '33 = #1 Versatec
    '34 = #2 Versatec
-   '35 = #4 AMLC or ICS1
+*  '35 = #4 AMLC or ICS1
    '36-37 = ELFBUS #1 & 2 (ICS1 #1, ICS1 #2)
    '40 = A/D converter type 6000
    '41 = digital input type 6020
    '42 = digital input #2
    '43 = digital output type 6040
    '44 = digital output #2
-   '45 = disk #4 (0-7; was D/A converter type 6060 (analog output) - obsolete)
-   '46 = disk #6 (0-7)
+*  '45 = disk #4 (0-7; was D/A converter type 6060 (analog output) - obsolete)
+*  '46 = disk #6 (0-7)
    '47 = #2 PNC
    '50 = #1 HSSMLC/MDLC (synchronous comm)
    '51 = #2 HSSMLC/MDLC
-   '52 = #3 AMLC or ICS1
-   '53 = #2 AMLC 
-   '54 = #1 AMLC
+*  '52 = #3 AMLC or ICS1
+*  '53 = #2 AMLC 
+*  '54 = #1 AMLC
    '55 = MACI autocall unit
    '56 = old SMLC (RTOS User Guide, A-1 & Hacker's Guide)
    '60-67 = reserved for user devices (GPIB)
    '70-'73 = Megatek graphics terminals
-   '75-'76 = T$GPPI
+   '75-'76 = MPC4 / T$GPPI programmable controller
 
    Devices emulated by Primos in ks/ptrap.ftn for I/O instructions in Ring 3:
      '01 = paper tape reader
@@ -414,7 +414,9 @@ int devasr (int class, int func, int device) {
 	timeout.tv_sec = 0;        /* yes, can't delay */
       else {
 	timeout.tv_sec = 1;        /* single user: okay to delay */
+#ifndef NOTRACE
 	fflush(gvp->tracefile);    /* flush for DIAG testing */
+#endif
       }
       timeout.tv_usec = 0;
       FD_SET(ttydev, &fds);
@@ -449,7 +451,9 @@ int devasr (int class, int func, int device) {
       }
       ttyflags = newflags;
       if (doblock) {                    /* doblock = no PX = running diags */
+#ifndef NOTRACE
 	fflush(gvp->tracefile);         /* flush trace buffer when testing */
+#endif
 	if (needflush) {
 	  if (fflush(stdout) == 0) {
 	    needflush = 0;
@@ -516,7 +520,9 @@ readasr:
 	if (!(terminfo.c_lflag & ECHO) && ch != 015) /* log all except CR */
 	  fputc(ch, conslog);
 	fflush(conslog);         /* immediately flush when typing */
+#ifndef NOTRACE
 	fflush(gvp->tracefile);
+#endif
 	IOSKIP;
       } else {
 	printf("Unexpected error reading from tty, n=%d\n", n);
@@ -2541,7 +2547,7 @@ int devamlc (int class, int func, int device) {
 	  fatal(NULL);
 	}
       } else
-	fprintf(stderr, "-tport is zero, can't start AMLC devices\n");
+	fprintf(stderr, "-tport is zero, AMLC devices not started\n");
       inited = 1;
     }
 
@@ -3275,749 +3281,6 @@ endconnect:
 }
 #endif
 
+#include "devpnc.h"
 
-/* PNC (ring net) device handler
-
-  On a real Prime ring network, each node has a unique node id from 1
-  to 254.  The node id is configured with software and stored into the
-  PNC during network initialization.  Before being set, the node id of
-  a master-cleared PNC is zero.  The broadcast node id is 255 (all
-  PNC's accept packets with this "to" id).  In practice, CONFIG_NET
-  limits the node id to 247.  When a node starts, it sends a message
-  to itself.  If any system acks this packet, it means the node id is
-  already in use, and the new node will disconnect from the ring.
-  Since all systems in a ring have to be physically cabled together,
-  there was usually a common network administration to ensure that no
-  two nodes had the same node id.
-
-  Prior to rev 19.3, each node sends periodic "timer" messages to all
-  nodes it knows about.  This is obviously very inefficient.
-  Beginning with 19.3, An "I'm alive" broadcast message is sent every
-  10 seconds to let all nodes know that a machine is still up.
-
-  For use with the emulator, the unique node id concept doesn't make a
-  lot of sense.  If a couple of guys running the emulator wanted to
-  have a 2-node network with nodes 1 and 2 (network A), and another
-  couple of guys had a 2-node network with nodes 1 and 2 (network B),
-  then it wouldn't be possible for a node in one network to add a node
-  in the other network without other people redoing their node ids to
-  ensure uniqueness.  To get around this, the emulator has a config
-  file RING.CFG that lets you say "Here are the guys in *my* ring
-  (with all unique node ids), here is each one's IP address and port,
-  my node id on their ring is *blah* (optional).  This allows the node
-  id to be a per-host number that only needs to be coordinated with
-  two people that want to talk to each other, and effectively allows
-  one emulator to be in multiple rings simulataneously.  Cool, eh?
-
-  PNC ring buffers are 256 words, with later versions of Primos also
-  supporting 512, and 1024 word packets.  "nbkini" (rev 18) allocates
-  12 ring buffers + 1 for every 2 nodes in the ring.  Both the 1-to-2
-  queue for received packets, and 2-to-1 queue for xmit packets have
-  63 entries.  PNC ring buffers are wired and never cross page
-  boundaries.
-
-  The actual xmit/recv buffers for PNC are 256-1024 words, and each
-  buffer has an associated "block header", stored in a different
-  location in system memory, that is 8 words.
-
-  The BH fields are (16-bit words):
-       0: type field (1)
-       1: free pool id (3 for ring buffers)
-       2-3: pointer to data block
-
-       4-7 are available for use by the drivers.  For PNC:
-       4: number of words received (calculated by pncdim based on DMA regs)
-       5: receive status word
-       6: data 1
-       7: data 2
-
-  The PNC data buffer has a 2-word header, followed by the data:
-       0: To (left) and From (right) bytes containing node-ids
-       1: "Type" word. 
-          Bit 1 set = odd number of bytes (if set, last word is only 1 byte)
-          Bit 7 set = normal data messages (otherwise, a timer message)
-	  Bit 16 set = broadcast timer message
-  PNC data buffers never cross page boundaries.
-
-  Primos PNC usage:
-
-  OCP '0007
-  - disconnect from ring
-
-  OCP '0207
-  - inject a token into the ring
-
-  OCP '0507
-  - set PNC into "delay" mode (token recovery BS)
-
-  OCP '1007
-  - stop any xmit in progress
-
-
-  INA '1707
-  - read network status word
-  - does this in a loop until "connected" bit is clear after disconnect above
-  - PNC status word:
-      bit 1 set if receive interrupt (rcv complete)
-      bit 2 set if xmit interrupt (xmit complete)
-      bit 3 set if "PNC booster" (PNC II)
-      bit 4 set if PNC II is in PNC II mode
-      bit 5 set if u-verify failed or bad command issued
-      bit 6 set if connected to ring
-      bit 7 set if multiple tokens detected (only after xmit EOR) (*)
-      bit 8 set if token detected (only after xmit EOR)
-      bits 9-16 controller node ID
-
-  INA '1207
-  - read receive status word
-      bit 1 set for previous ACK (*)
-      bit 2 set for multiple previous ACK (*)
-      bit 3 set for previous WACK (receiving node not ready to receive)
-      bit 4 set for previous NACK (packet received incorrectly)
-      bits 5-6 unused
-      bit 7 ACK byte parity error (*)
-      bit 8 ACK byte check error (parity on bits 1-6) (*)
-      bit 9 recv buffer parity error (*)
-      bit 10 recv busy
-      bit 11 end of range before end of message (received msg was too big
-             for the receive buffer)
-      bits 12-16 unused
-
-  INA '1307
-  - read xmit status word
-      bit 1 set for ACK
-      bit 2 set for multiple ACK (more than 1 node accepted packet) (*)
-      bit 3 set for WACK
-      bit 4 set for NACK (bad CRC) (*)
-      bit 5 unused
-      bit 6 parity bit of ACK (PNC only) (*)
-      bit 7 ACK byte parity error (*)
-      bit 8 ACK byte check error (parity on bits 1-6) (*)
-      bit 9 xmit buffer parity error (*)
-      bit 10 xmit busy
-      bit 11 packet did not return
-      bit 12 packet returned with bits 6-8 nonzero (*)
-      bit 13 retry not successful (PNC II)
-      bits 14-16 retry count (PNC II; zero on PNC)
-
-  (*) = unused in the emulator
-
-  OCP '1707
-  - initialize
-
-  OTA '1707
-  - set my node ID (in A register)
-  - if this fails, no PNC present
-
-  OTA '1607
-  - set interrupt vector (in A reg)
-
-  OTA '1407
-  - initiate receive, dma channel in A
-
-  OTA '1507
-  - initiate xmit, dma channel in A
-
-  OCP '0107
-  - connect to the ring
-  - (Primos follows this with INA '1707 loop until "connected" bit is set)
-
-  OCP '1407
-  - ack receive (clears recv interrupt request)
-
-  OCP '0407
-  - ack xmit (clears xmit interrupt request)
-
-  OCP '1507
-  - set interrupt mask (enable interrupts)
-
-  OCP '1107
-  - stop receive in progress
-
-*/
-
-int devpnc (int class, int func, int device) {
-
-#if 0
-
-#define PNCPOLL 100
-
-  /* PNC controller status bits */
-#define PNCRCVINT  0x8000    /* bit 1 rcv interrupt (rcv complete) */
-#define PNCXMITINT 0x4000    /* bit 2 xmit interrupt (xmit complete) */
-#define PNCBOOSTER 0x2000    /* bit 3 PNC booster = 1 */
-
-#define PNCCONNECTED 0x400   /* bit 6 */
-#define PNCTWOTOKENS 0x200   /* bit 7, only set after xmit EOR */
-#define PNCTOKDETECT 0x100   /* bit 8, only set after xmit EOR */
-
-  /* xmit/recv states */
-
-#define XR_IDLE   0          /* initial state: no xmit or recv */
-#define XR_READY  1          /* ready to recv or xmit */
-#define XR_XFER   3          /* transferring data over socket */
-
-#define MINCONNTIME 30       /* wait 30 seconds between connect attempts */
-#define MAXPKTBYTES 2048     /* max of 2048 byte packets */
-
-  static short configured = 0; /* true if PNC configured */
-  static unsigned short pncstat;    /* controller status word */
-  static unsigned short recvstat;   /* receive status word */
-  static unsigned short xmitstat;   /* xmit status word */
-  static unsigned short pncvec;     /* PNC interrupt vector */
-  static unsigned short myid;       /* my PNC node id */
-  static unsigned short enabled;    /* interrupts enabled flag */
-  static int pncfd;        /* socket fd for all PNC network connections */
-
-  /* the ni structure contains the important information for each node
-     in the network and is indexed by the local node id */
-
-  static struct {          /* node info for each node in my network */
-    short cfg;             /* true if seen in ring.cfg */
-    short fd;              /* socket fd for this node, -1 if unconnected */
-    char  ip[16];          /* IP address of the remote node */
-    short port;            /* emulator network port on the remote node */
-    short myremid;         /* my node ID on the remote node's ring network */
-    time_t conntime;       /* time of last connect request */
-  } ni[256];
-
-  /* array to map socket fd's to local node id's for accessing the ni
-     structure.  Not great programming, because the host OS could
-     choose to use large fd's, which will cause a runtime error */
-
-#define FDMAPSIZE 1024
-  static short fdnimap[FDMAPSIZE];
-
-  typedef struct {
-    short state, offset;
-    unsigned short dmachan, dmareg, dmaaddr;
-    short dmanw, dmabytesleft, toid, fromid, remtoid, remfromid;
-    unsigned char iobuf[MAXPKTBYTES+2];
-  } t_dma;
-  static t_dma recv, xmit;
-
-  short i;
-  unsigned short access, dmaword;
-  unsigned short *iobufp;
-  time_t timenow;
-  struct hostent* server;
-
-  struct sockaddr_in addr;
-  int fd, optval, fdflags;
-  unsigned int addrlen;
-
-  FILE *ringfile;
-  char *tok, buf[128], *p;
-  int n, linenum;
-  int tempid, tempmyremid, tempyourremid, tempport, cfgerrs;
-  char tempip[22];       /* xxx.xxx.xxx.xxx:ppppp */
-#define DELIM " \t\n"
-#define PDELIM ":"
-
-  //gvp->traceflags = ~T_MAP;
-
-  if (nport <= 0) {
-    if (class == -1)
-      fprintf(stderr, "-nport is zero, PNC not started\n");
-    else
-      TRACE(T_INST|T_RIO, "nport <= 0, PIO to PNC ignored, class=%d, func='%02o, device=%02o\n", class, func, device);
-    return -1;
-  }
-
-  switch (class) {
-
-  case -1:
-    for (i=0; i<FDMAPSIZE; i++)
-      fdnimap[i] = -1;
-    for (i=0; i<256; i++) {
-      ni[i].cfg = 0;
-      ni[i].fd = -1;
-      strcpy(ni[i].ip, "               ");
-      ni[i].port = 0;
-      ni[i].myremid = 0;
-    }
-    xmit.state = XR_IDLE;
-    recv.state = XR_IDLE;
-    myid = 0;                 /* set initial node id */
-
-    /* read the ring.cfg config file.  Each line contains:
-          localid  ip:port  [myremoteid]
-       where:
-          localid = the remote node's id (1-247) on my ring
-          ip = the remote emulator's TCP/IP address (or later, name)
-	  port = the remote emulator's TCP/IP PNC port
-          myremoteid = my node's id (1-247) on the remote ring
-
-       The remote id field is optional, and allows the emulator
-       to be in multiple rings with different administration.  If
-       not specified, myremoteid = my local id.
-
-       There cannot be duplicates among the localid field, but there
-       can be duplicates in the remoteid fields */
-
-    linenum = 0;
-    if ((ringfile=fopen("ring.cfg", "r")) != NULL) {
-      while (fgets(buf, sizeof(buf), ringfile) != NULL) {
-	linenum++;
-	if (strcmp(buf,"") == 0 || buf[0] == ';')
-	  continue;
-	if ((p=strtok(buf, DELIM)) == NULL) {
-	  fprintf(stderr,"Line %d of ring.cfg: node id missing\n", linenum);
-	  continue;
-	}
-	tempid = atoi(p);
-	if (tempid < 1 || tempid > 247) {
-	  fprintf(stderr,"Line %d of ring.cfg: node id is out of range 1-247\n", linenum);
-	  continue;
-	}
-	if (ni[tempid].cfg) {
-	  fprintf(stderr,"Line %d of ring.cfg: node id occurs twice\n", linenum);
-	  continue;
-	}
-	if ((p=strtok(NULL, DELIM)) == NULL) {
-	  fprintf(stderr,"Line %d of ring.cfg: IP address missing\n", linenum);
-	  continue;
-	}
-	if (strlen(p) > 21) {
-	  fprintf(stderr,"Line %d of ring.cfg: IP address is too long\n", linenum);
-	  continue;
-	}
-	strcpy(tempip, p);
-	if ((p=strtok(NULL, DELIM)) != NULL) {
-	  tempmyremid = atoi(p);
-	  if (tempmyremid < 1 || tempmyremid > 247) {
-	    fprintf(stderr,"Line %d of ring.cfg: my remote node id out of range 1-247\n", linenum);
-	    continue;
-	  }
-	} else 
-	  tempmyremid = -1;
-
-	/* parse the port number from the IP address */
-
-	tempport = -1;
-	if ((p=strtok(tempip, PDELIM)) != NULL) {
-	  strcpy(ni[tempid].ip, p);
-	  if ((p=strtok(NULL, PDELIM)) != NULL) {
-	    tempport = atoi(p);
-	    if (tempport < 1 || tempport > 32000)
-	      fprintf(stderr,"Line %d of ring.cfg: port number is out of range 1-32000\n", linenum);
-	  }
-	}
-	if (tempport == -1) {
-	  fprintf(stderr, "Line %d of ring.cfg: IP should be xxx.xxx.xxx.xxx:pppp\n", linenum);
-	  continue;
-	}
-	ni[tempid].cfg = 1;
-	ni[tempid].myremid = tempmyremid;
-	ni[tempid].port = tempport;
-	TRACE(T_RIO, "Line %d: id=%d, ip=\"%s\", port=%d, myremid=%d\n", linenum, tempid, tempip, tempport, tempmyremid);
-	configured = 1;
-      }
-      if (!feof(ringfile)) {
-	perror(" error reading ring.cfg");
-	fatal(NULL);
-      }
-      fclose(ringfile);
-    }
-    if (!configured) {
-      fprintf(stderr, "PNC not configured because ring.cfg missing or errors occurred.\n");
-      return -1;
-    }
-    return 0;
-
-  case 0:
-
-    /* OCP '0700 - disconnect */
-
-    if (func == 00) {
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - disconnect\n", func, device);
-      if (pncfd >= 0) {
-	close(pncfd);
-	pncfd = -1;
-      }
-      for (i=0; i<256; i++) {
-	if (ni[i].fd >= 0) {
-	  fdnimap[ni[i].fd] = -1;
-	  close(ni[i].fd);
-	  ni[i].fd = -1;
-	}
-      }
-      xmit.state = XR_IDLE;
-      recv.state = XR_IDLE;
-      pncstat &= ~PNCCONNECTED;
-
-    /* OCP '0701 - connect 
-       If any errors occur while trying to setup the listening socket,
-       it seems reasonable to leave the PNC unconnected and continue,
-       but this will cause Primos (rev 19) to hang in a spin loop. So
-       for now, bomb.  Later, we could put the PNC in a disabled state,
-       where INA/OTA don't skip, since Primos handles this better.
-    */
-
-    } else if (func == 01) {    /* connect to the ring */
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - connect\n", func, device);
-
-      /* start listening on the network port */
-
-      pncfd = socket(AF_INET, SOCK_STREAM, 0);
-      if (pncfd == -1) {
-	perror("socket failed for PNC");
-	fatal(NULL);
-      }
-      if (fcntl(pncfd, F_GETFL, fdflags) == -1) {
-	perror("unable to get ts flags for PNC");
-	fatal(NULL);
-      }
-      fdflags |= O_NONBLOCK;
-      if (fcntl(pncfd, F_SETFL, fdflags) == -1) {
-	perror("unable to set ts flags for PNC");
-	fatal(NULL);
-      }
-      optval = 1;
-      if (setsockopt(pncfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval))) {
-	perror("setsockopt failed for PNC");
-	fatal(NULL);
-      }
-      addr.sin_family = AF_INET;
-      addr.sin_port = htons(nport);
-      addr.sin_addr.s_addr = INADDR_ANY;
-      if(bind(pncfd, (struct sockaddr *)&addr, sizeof(addr))) {
-	perror("bind: unable to bind for PNC");
-	fatal(NULL);
-      }
-      if(listen(pncfd, 10)) {
-	perror("listen failed for PNC");
-	fatal(NULL);
-      }
-      pncstat |= PNCCONNECTED;
-
-    } else if (func == 02) {    /* inject a token */
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - inject token\n", func, device);
-
-    } else if (func == 04) {    /* ack xmit (clear xmit int) */
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - ack xmit int\n", func, device);
-      pncstat &= ~PNCXMITINT;   /* clear "xmit interrupting" */
-      pncstat &= ~PNCTOKDETECT; /* clear "token detected" */
-      xmitstat = 0;
-      xmit.state = XR_IDLE;
-
-    } else if (func == 05) {    /* set PNC into "delay" mode */
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - set delay mode\n", func, device);
-
-    } else if (func == 010) {   /* stop xmit in progress */
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - stop xmit\n", func, device);
-      xmitstat = 0;
-      xmit.state = XR_IDLE;
-
-    } else if (func == 011) {   /* stop recv in progress */
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - stop recv\n", func, device);
-
-    } else if (func == 012) {   /* set normal mode */
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - set normal mode\n", func, device);
-
-    } else if (func == 013) {   /* set diagnostic mode */
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - set diag mode\n", func, device);
-
-    } else if (func == 014) {   /* ack receive (clear rcv int) */
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - ack recv int\n", func, device);
-      pncstat &= ~PNCRCVINT;
-      recvstat = 0;
-      recv.active = 0;
-
-    } else if (func == 015) {   /* set interrupt mask (enable int) */
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - enable int\n", func, device);
-      enabled = 1;
-
-    } else if (func == 016) {   /* clear interrupt mask (disable int) */
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - disable int\n", func, device);
-      enabled = 0;
-
-    } else if (func == 017) {   /* initialize */
-      TRACE(T_INST|T_RIO, " OCP '%02o%02o - initialize\n", func, device);
-      /* XXX: this needs to disconnect from ring! */
-      pncstat = pncstat & 0xff;    /* keep node id across inits */
-      recvstat = 0;
-      xmitstat = 0;
-      pncvec = 0;
-      enabled = 0;
-      xmit.state = XR_IDLE;
-      recv.state = XR_IDLE;
-
-    } else {
-      printf("Unimplemented OCP device '%02o function '%02o\n", device, func);
-      fatal(NULL);
-    }
-    break;
-
-  case 1:
-    TRACE(T_INST|T_RIO, " SKS '%02o%02o\n", func, device);
-    if (func == 99)
-      IOSKIP;                     /* assume it's always ready */
-    else {
-      printf("Unimplemented SKS device '%02o function '%02o\n", device, func);
-      fatal(NULL);
-    }
-    break;
-
-  case 2:
-    if (func == 011) {          /* input ID */
-      TRACE(T_INST|T_RIO, " INA '%02o%02o - input ID\n", func, device);
-      crs[A] = 07;
-      IOSKIP;
-
-    } else if (func == 012) {   /* read receive status word */   
-      TRACE(T_INST|T_RIO, " INA '%02o%02o - get recv status '%o\n", func, device, recvstat);
-      crs[A] = recvstat;
-      IOSKIP;
-
-    } else if (func == 013) {   /* DIAG - read static register; not impl. */
-      crs[A] = 0;
-      IOSKIP;
-
-    } else if (func == 014) {   /* read xmit status word */   
-      TRACE(T_INST|T_RIO, " INA '%02o%02o - get xmit status '%o\n", func, device, xmitstat);
-      crs[A] = xmitstat;
-      IOSKIP;
-
-    } else if (func == 017) {   /* read controller status word */   
-      TRACE(T_INST|T_RIO, " INA '%02o%02o - get ctrl status '%o\n", func, device, pncstat);
-      crs[A] = pncstat;
-      IOSKIP;
-
-    } else {
-      printf("Unimplemented INA device '%02o function '%02o\n", device, func);
-      fatal(NULL);
-    }
-    break;
-
-  case 3:
-    TRACE(T_INST|T_RIO, " OTA '%02o%02o\n", func, device);
-    if (func == 011) {          /* DIAG - single step; not impl.*/
-      IOSKIP;
-
-    } else if (func == 014) {   /* initiate recv, dma chan in A */
-      recvstat = 0x0040;        /* set receive busy */
-      recv.dmachan = crs[A];
-      recv.dmareg = recv.dmachan << 1;
-      recv.dmanw = regs.sym.regdmx[recv.dmareg];
-      if (recv.dmanw <= 0)
-	recv.dmanw = -(recv.dmanw>>4);
-      else
-	recv.dmanw = -((recv.dmanw>>4) ^ 0xF000);
-      recv.dmaaddr = regs.sym.regdmx[recv.dmareg+1];
-      recv.iobufp = mem + mapio(recv.dmaaddr);
-      recv.state = XR_READY;
-      recv.offset = -1;         /* initialize for new packet */
-      TRACE(T_INST|T_RIO, " recv: dmachan=%o, dmareg=%o, dmaaddr=%o, dmanw=%d\n", recv.dmachan, recv.dmareg, recv.dmaaddr, recv.dmanw);
-      devpoll[device] = 10;
-      IOSKIP;
-
-    } else if (func == 015) {   /* initiate xmit, dma chan in A */
-      if (xmitstat & 0x0040) {  /* already busy? */
-	warn("pnc: xmit when already busy!");
-	return;                 /* yes, return and don't skip */
-      }
-      xmitstat = 0x0040;        /* set xmit busy */
-      xmit.dmachan = crs[A];
-      xmit.dmareg = xmit.dmachan<<1;
-      xmit.dmanw = regs.sym.regdmx[xmit.dmareg];
-      if (xmit.dmanw <= 0)
-	xmit.dmanw = -(xmit.dmanw>>4);
-      else
-	xmit.dmanw = -((xmit.dmanw>>4) ^ 0xF000);
-      xmit.dmaaddr = regs.sym.regdmx[xmit.dmareg+1];
-      TRACE(T_INST|T_RIO, " xmit: dmachan=%o, dmareg=%o, dmaaddr=%o, dmanw=%d\n", xmit.dmachan, xmit.dmareg, xmit.dmaaddr, xmit.dmanw);
-
-      /* read the first word, the to and from node id's, and map them
-	 to the remote hosts' expected to and from node id's */
-
-      xmit.iobufp = mem + mapva(xmit.dmaaddr, 0, RACC, &access);
-      dmaword = *xmit.iobufp++;
-      xmit.toid = dmaword >> 8;
-      xmit.fromid = dmaword & 0xFF;
-      TRACE(T_INST|T_RIO, " xmit: toid=%d, fromid=%d\n", xmit.toid, xmit.fromid);
-
-      /* broadcast packets are "I am up" timer msgs and are simply
-	 discarded here, with a succesful transmit status.  Node
-	 up/down is handled in the devpnc poll code.
-
-	XXX: should check that this really is the "I am up" msg */
-      
-      if (xmit.toid == 255) {
-	goto xmitdone1;
-      }
-
-      /* if this xmit is to me and there is a new receive pending and
-	 there is room left in the receive buffer, put the packet
-	 directly in my receive buffer.  If we can't receive it now,
-	 set NACK xmit and receive status.  If the packet is not to
-	 me, copy it to the xmit.iobuf and add the header */
-
-      if (xmit.toid == myid) {
-	if (recv.state == XR_READY && recv.dmanw >= xmit.dmanw) {
-	  memcpy(recv.iobufp, xmit.iobufp, xmit.dmanw*2);
-	  regs.sym.regdmx[recv.dmareg] += xmit.dmanw;     /* bump recv count */
-	  regs.sym.regdmx[recv.dmareg+1] += xmit.dmanw;   /* and address */
-	  pncstat |= 0x8000;                /* set recv interrupt too */
-	  recv.state = XR_IDLE;             /* no longer ready to recv */
-
-xmitdone1:
-	  regs.sym.regdmx[xmit.dmareg] += xmit.dmanw;     /* and xmit count */
-	  regs.sym.regdmx[xmit.dmareg+1] += xmit.dmanw;   /* and address */
-	  pncstat |= 0x4100;                  /* set xmit interrupt + token */
-	  xmitstat |= 0x8000;                 /* set ACK xmit status */
-	  goto xmitdone;
-
-	} else {
-	  xmitstat |= 0x1000;             /* set xmit NACK status */
-	  recvstat |= 0x20;               /* set recv premature EOR */
-	}
-      }
-
-      /* check for unreasonable situations */
-
-      if (xmit.toid == 0)
-	fatal("PNC: xmit.toid is zero");
-      if (xmit.fromid == 0)
-	fatal("PNC: xmit.fromid is zero");
-      if (xmit.fromid != myid) {
-	printf("PNC: xmit fromid=0x%02x != myid=0x%02x\n", xmit.fromid, myid);
-	fatal(NULL);
-      }
-
-      /* map local to and from node id to remote to and from node id */
-
-      if (ni[xmit.fromid].myremid < 0)
-	xmit.remfromid = myid;
-      else
-	xmit.remfromid = ni[xmit.fromid].myremid;
-      xmit.state = XR_READY;      /* xmit pending */
-      xmit.offset = -1;           /* initialize for new xmit */
-      devpoll[device] = 10;
-
-xmitdone:
-      if (enabled && (pncstat & 0xC000))
-	if (gvp->intvec == -1)
-	  gvp->intvec = pncvec;
-	else
-	  devpoll[device] = 100;
-      IOSKIP;
-
-    } else if (func == 016) {   /* set interrupt vector */
-      pncvec = crs[A];
-      TRACE(T_INST|T_RIO, " interrupt vector = '%o\n", pncvec);
-      IOSKIP;
-
-    } else if (func == 017) {   /* set my node ID */
-      myid = crs[A] & 0xFF;
-      pncstat = (pncstat & 0xFF00) | myid;
-      TRACE(T_INST|T_RIO, " my node id is %d\n", myid);
-      if (ni[myid].cfg)
-	fprintf(stderr, "Warning: my node id of %d is in ring.cfg\n", myid);
-      strcpy(ni[myid].ip, "127.0.0.1");
-      ni[myid].port = nport;
-      ni[myid].myremid = myid;
-      IOSKIP;
-
-    } else {
-      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
-      fatal(NULL);
-    }
-    break;
-
-  case 4:
-    TRACE(T_INST|T_RIO, " POLL '%02o%02o\n", func, device);
-
-    /* if a transmit is pending, start/continue it until completes */
-
-    if (xmit.state > XR_IDLE) {
-      if (ni[xmit.toid].fd == -1) {        /* not connected yet */
-	if (time(&timenow) - ni[xmit.toid].conntime < MINCONNTIME) {
-	  printf("em: waiting for connection timeout to node %d\n", xmit.toid);
-	  goto xmiterr;
-	}
-	if ((ni[xmit.toid].fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-	  perror ("Unable to create socket");
-	  exit(1);
-	}
-	server = gethostbyname(ni[xmit.toid].ip);
-	if (server == NULL) {
-	  fprintf(stderr,"pnc: cannot resolve %s\n", ni[xmit.toid].ip);
-	  close(ni[xmit.toid].fd);
-	  ni[xmit.toid].fd = -1;
-	  goto xmiterr;
-	}
-	ni[xmit.toid].conntime = timenow;
-	bzero((char *) &addr, sizeof(addr));
-	addr.sin_family = AF_INET;
-	bcopy((char *)server->h_addr, (char *)&addr.sin_addr.s_addr, server->h_length);
-	addr.sin_port = htons(ni[xmit.toid].port);
-	if (connect(ni[xmit.toid].fd, (void *) &addr,(socklen_t) sizeof(addr)) < 0) {
-	  perror("pnc: error connecting to server\n");
-	  close(ni[xmit.toid].fd);
-	  ni[xmit.toid].fd = -1;
-	  goto xmiterr;
-	}
-	xmit.state = XR_XFER;
-      }
-
-      /* start/continue the transfer */
-
-      if (xmit.state == XR_XFER) {
-	if ((n=write(ni[xmit.toid].fd, xmit.iobuf[offset], xmit.dmabytes-xmit.offset)) < 0) {
-	  perror("pnc: write error");
-	} else {
-	  xmit.offset += n;
-	  xmit.dmabytesleft -= n;
-	  if (xmit.dmabytesleft == 0)
-	    xmit.state = XR_IDLE;
-	}
-      }
-	
-#if 0
-    while ((fd = accept(pncfd, (struct sockaddr *)&addr, &addrlen)) == -1 && errno == EINTR)
-      ;
-    if (fd == -1) {
-      if (errno != EWOULDBLOCK) {
-	perror("accept error for PNC");
-      }
-    } else {
-      if (fd >= MAXFD)
-	fatal("New connection fd is too big");
-      printf("New PNC connection:\n");
-      /*
-- new connect request came in
-- scan host table to find matching IP
-- if already connected, display warning error and ignore
-
-      newdevice = 0;
-      for (i=0; devices[i] && !newdevice && i<MAXBOARDS; i++)
-	for (lx=0; lx<16; lx++)
-	  if (!(dc[devices[i]].dss & BITMASK16(lx+1))) {
-	    newdevice = devices[i];
-	    dc[newdevice].dss |= BITMASK16(lx+1);
-	    dc[newdevice].sockfd[lx] = fd;
-	    //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, newdevice, lx);
-	    break;
-	  }
-      if (!newdevice) {
-	warn("No free AMLC connection");
-	write(fd, "\rAll AMLC lines are in use!\r\n", 29);
-	close(fd);
-      }
-
-xmitdone:
-if (xmitstat == 0x0040) {             /* complete w/o errors? */
-	pncstat |= 0x4100;                  /* set xmit interrupt + token */
-	xmitstat |= 0x8000;                 /* yes, set ACK xmit status */
-    }
-#endif
-    devpoll[device] = PNCPOLL*gvp->instpermsec;
-    break;
-
-  default:
-    fatal("Bad func in devpcn");
-#else
-    return -1;
-#endif
 }

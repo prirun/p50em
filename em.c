@@ -519,6 +519,8 @@ typedef struct {
   void *disp_rmr[128];           /* R-mode memory ref dispatch table */
   void *disp_vmr[128];           /* V-mode memory ref dispatch table */
 
+#ifndef NOTRACE
+
 /* traceflags is the variable used to test tracing of each instruction
    traceuser is the user number to trace, 0 meaning any user
    traceseg is the procedure segment number to trace, 0 meaning any
@@ -534,6 +536,7 @@ typedef struct {
   int traceuser;                /* OWNERL to trace */
   int traceseg;                 /* RPH segment # to trace */
   int numtraceprocs;            /* # of procedures we're tracing */
+#endif
 
 } gv_t;
 
@@ -1757,7 +1760,28 @@ static int (*devmap[64])(int, int, int) = {
 #else
 #if 0
 
-/* this is the "full system" controller configuration */
+/* this is the "full system" configuration supported by the emulator */
+
+   '04 = devasr: system console
+   '07 = devpnc: Primenet Node Controller aka PNC (Ringnet)
+   '14 = devmt: mag tape controller (4 drives)
+   '15 = devamlc: 5th AMLC (16 lines)
+   '16 = devamlc: 6th AMLC (16 lines)
+   '17 = devamlc: 7th AMLC (16 lines)
+   '20 = devcp: clock / VCP / SOC
+   '22 = devdisk: 3rd disk controller (8 drives)
+   '23 = devdisk: 4th disk controller (8 drives)
+   '24 = devdisk: 5th disk controller (8 drives)
+   '25 = devdisk: 6th disk controller (8 drives)
+   '26 = devdisk: 1st disk controller (8 drives)
+   '27 = devdisk: 2nd disk controller (8 drives)
+   '32 = devamlc: 8th AMLC (16 lines)
+   '35 = devamlc: 4th AMLC (16 lines)
+   '45 = devdisk: 7th disk controller (8 drives)
+   '46 = devdisk: 8th disk controller (8 drives)
+   '52 = devamlc: 3rd AMLC (16 lines)
+   '53 = devamlc: 2nd AMLC (16 lines)
+   '54 = devamlc: 1st AMLC (16 lines)
 
 static int (*devmap[64])(int, int, int) = {
   /* '0x */ devnone,devnone,devnone,devnone,devasr,devnone,devnone,devpnc,
@@ -1771,19 +1795,19 @@ static int (*devmap[64])(int, int, int) = {
 
 #else
 
-/* this is the "typical system" controller configuration:
+/* this is a "typical system" controller configuration:
 
    '04 = devasr: system console
+   '07 = devpnc: Primenet Node Controller aka PNC (Ringnet)
    '14 = devmt: mag tape controller (4 drives)
    '20 = devcp: clock / VCP / SOC
-   '26 = devdisk: 1st disk controller (4/8 drives)
-   '27 = devdisk: 2nd disk controller (4/8 drives)
+   '26 = devdisk: 1st disk controller (8 drives)
+   '27 = devdisk: 2nd disk controller (8 drives)
    '54 = 1st amlc (terminal) controller (16 lines)
-   '53 = 2nd amlc (terminal) controller (16 lines)
 */
 
 static int (*devmap[64])(int, int, int) = {
-  /* '0x */ devnone,devnone,devnone,devnone,devasr,devnone,devnone,devnone,
+  /* '0x */ devnone,devnone,devnone,devnone,devasr,devnone,devnone,devpnc,
   /* '1x */ devnone,devnone,devnone,devnone,devmt,devnone, devnone, devnone,
   /* '2x */ devcp,devnone,devnone,devnone,devnone,devnone,devdisk,devdisk,
   /* '3x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
@@ -1864,7 +1888,9 @@ static void fatal(char *msg) {
   for (i=0; i<64; i++)
     devmap[i](-2, 0, i);
 
+#ifndef NOTRACE
   fclose(gvp->tracefile);
+#endif
   if (lseek(2, 0, SEEK_END) > 0)
     printf("Check error.log for more information\n");
   exit(1);
@@ -3227,10 +3253,6 @@ static ors(unsigned short pcbw) {
   crsl = regs.sym.userregs[rs];
   crs[MODALS] = modals;
   TRACE(T_PX, "ors: rs = %d, reg set in modals = %d, modals = %o\n", rs, (crs[MODALS] & 0340)>>5, crs[MODALS]);
-#if 0
-  if (rs > 1)
-    gvp->savetraceflags = ~0;
-#endif
 
   /* invalidate the mapva translation cache */
 
@@ -3714,9 +3736,6 @@ static lpsw() {
     gvp->livereglim = 010;
   } else 
     gvp->livereglim = 040;
-#if 0
-  gvp->savetraceflags |= T_FLOW;    /****/
-#endif
   if (crs[MODALS] & 010) {
     TRACE(T_PX, "Process exchange enabled:\n");
     TRACE(T_PX, "LPSW: PLA=%o, PCBA=%o, PLB=%o, PCBB=%o\n", regs.sym.pla, regs.sym.pcba, regs.sym.plb, regs.sym.pcbb);
@@ -3750,8 +3769,6 @@ static sssn() {
   ea_t ea;
   int i;
 
-  //printf("SSSN @ %o/%o\n", RPH, RPL);
-  //gvp->savetraceflags = gvp->traceflags = ~T_MAP;    /*****/
   TRACE(T_FLOW, " SSSN\n");
   ea = *(unsigned int *)(crs+XB);
   for (i=0; i<8; i++)
@@ -4344,11 +4361,13 @@ main (int argc, char **argv) {
   gvp->mapvamisses = 0;
   gvp->supercalls = 0;
   gvp->supermisses = 0;
+#ifndef NOTRACE
   gvp->traceflags = 0;
   gvp->savetraceflags = 0;
   gvp->traceuser = 0;
   gvp->traceseg = 0;
   gvp->numtraceprocs = 0;
+#endif
   invalidate_brp();
   eap = &gvp->brp[0];
 
@@ -4360,12 +4379,16 @@ main (int argc, char **argv) {
 
   signal (SIGTERM, sensorcheck);
 
+#ifndef NOTRACE
+
   /* open trace log */
 
   if ((gvp->tracefile=fopen("trace.log", "w")) == NULL) {
     perror("Unable to open trace.log");
     exit(1);
   }
+  setlinebuf(gvp->tracefile);
+#endif
 
   /* initialize dispatch tables */
 
@@ -4504,7 +4527,9 @@ main (int argc, char **argv) {
 	tport = templ;
       } else
 	fatal("-tport needs an argument\n");
+#endif
 
+#ifndef NOTRACE
     } else if (strcmp(argv[i],"-trace") == 0) {
       while (i+1 < argc && argv[i+1][0] != '-') {
 	i++;
@@ -4593,6 +4618,7 @@ main (int argc, char **argv) {
 
   /* finish setting up tracing after all options are read, ie, maps */
 
+#ifndef NOTRACE
   if (gvp->traceuser != 0)
     TRACEA("Tracing enabled for OWNERL %o\n", gvp->traceuser);
   else
@@ -4614,7 +4640,8 @@ main (int argc, char **argv) {
       printf("Can't find procedure %s in load maps for tracing.\n", traceprocs[i].name);
     }
   }
-    
+#endif
+
   /* set some vars after the options have been read */
 
   if (cpuid == 15 || cpuid == 18 || cpuid == 19 || cpuid == 24 || cpuid >= 26) {
@@ -5462,7 +5489,6 @@ d_calf:  /* 000705 */
   zlen--
 
 d_zmv:  /* 001114 */
-  //gvp->traceflags = -1; /***/
   stopwatch_push(&sw_zmv);
   TRACE(T_FLOW, " ZMV\n");
   zspace = 0240;
@@ -5489,13 +5515,11 @@ d_zmv:  /* 001114 */
     TRACE(T_FLOW, " zch1=%o (%c)\n", zch1, zch1&0x7f);
     ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
   }
-  gvp->traceflags = 0;
   stopwatch_pop(&sw_zmv);
   goto fetch;
 
 d_zmvd:  /* 001115 */
   stopwatch_push(&sw_zmvd);
-  //gvp->traceflags = -1; /***/
   TRACE(T_FLOW, " ZMVD\n");
   zlen1 = GETFLR(1);
   zlen2 = zlen1;
@@ -5544,7 +5568,6 @@ d_zmvd:  /* 001115 */
 #endif
   }
   stopwatch_pop(&sw_zmvd);
-  gvp->traceflags = 0;
   goto fetch;
 
   /* NOTE: ZFIL is used early after PX enabled, and can be used to cause
@@ -6172,6 +6195,12 @@ d_hlt:  /* 000000 */
   TRACE(T_FLOW, " HLT\n");
   RESTRICT();
   memdump(0,0xFFFF);
+  if (((crs[KEYS] & 016000) >> 10) <= 3) {
+    printf("\nCPU halt, instruction #%lu at %o/%o %s: %o %o\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d", gvp->instcount, RPH, RPL, searchloadmap(gvp->prevpc,' '), get16t(gvp->prevpc), get16t(gvp->prevpc+1), crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), *(unsigned int *)(crs+A), *(int *)(crs+A), crs[X], *(short *)(crs+X));
+    printf("\nPress Enter to continue... ");
+    getchar();
+    goto fetch;
+  }
   fatal("CPU halt");
 
 d_pim:  /* 000205 (R-mode) */
@@ -7391,7 +7420,6 @@ d_smcs:  /* 0101200 */
 d_badgen:
   TRACEA(" unrecognized generic instruction!\n");
   printf("em: #%lu %o/%o: Unrecognized generic instruction '%o!\n", gvp->instcount, RPH, RPL, inst);
-  //gvp->traceflags = ~T_MAP;
   fault(UIIFAULT, RPL, RP);
   fatal(NULL);
 
@@ -8903,6 +8931,7 @@ imode:
 imodepcl:
       stopwatch_push(&sw_pcl);
       TRACE(T_FLOW|T_PCL, "#%lu %o/%0o: PCL %o/%o %s\n", gvp->instcount, RPH, RPL-2, ea>>16, ea&0xFFFF, searchloadmap(ea, 'e'));
+#ifndef NOTRACE
       if (gvp->numtraceprocs > 0 && TRACEUSER)
 	for (i=0; i<gvp->numtraceprocs; i++)
 	  if (traceprocs[i].ecb == (ea & 0xFFFFFFF) && traceprocs[i].sb == -1) {
@@ -8912,6 +8941,7 @@ imodepcl:
 	    printf("Enabled trace for %s at sb '%o/%o\n", traceprocs[i].name, crs[SBH], crs[SBL]);
 	    break;
 	  }
+#endif
       pcl(ea);
       stopwatch_pop(&sw_pcl);
       break;
