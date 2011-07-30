@@ -336,6 +336,7 @@ static struct {
 
 static unsigned short sswitch = 014114;     /* sense switches, set with -ss & -boot */
 static unsigned short dswitch = 0;          /* data (down) switches, set with -sd */
+static unsigned short bootregs = 0;         /* load regs and keys from rvec */
 static unsigned short sensorabort = 0;      /* if 1, causes a sensor check */
 
 /* NOTE: the default cpuid is a P750: 1 MIPS, 8MB of memory
@@ -4464,13 +4465,14 @@ main (int argc, char **argv) {
 	sscanf(argv[++i],"%o", &templ);
 	sswitch = templ;
       } else
-	fatal("-ss needs an argument\n");
+	fatal("-ss needs an octal sense switch setting\n");
 
-    } else if (strcmp(argv[i],"-sd") == 0) {
+    } else if (strcmp(argv[i],"-ds") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%o", &templ);
 	dswitch = templ;
-      }
+      } else
+	fatal("-ds needs an octal data switch setting\n");
 
     } else if (strcmp(argv[i],"-boot") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
@@ -4487,6 +4489,10 @@ main (int argc, char **argv) {
 	  if (i+1 < argc && argv[i+1][0] != '-' && sscanf(argv[i+1],"%o", &templ) == 1) {
 	    i++;
 	    dswitch = templ;
+	  }
+	  if (i+1 < argc && strcmp(argv[i+1],"regs") == 0) {
+	    i++;
+	    bootregs = 1;
 	  }
 	}
       }
@@ -4738,7 +4744,14 @@ For disk boots, the last 3 digits can be:\n\
   534 = disk27u2 ctrl '27 unit 2       574 = disk23u2 ctrl '23 unit 2\n\
   734 = disk27u3 ctrl '27 unit 3       774 = disk23u3 ctrl '23 unit 3\n\
 \n\
-  The default option is -boot 14114, to boot from disk disk26u0\n");
+  The default option is -boot 14114, to boot from disk disk26u0\n\
+\n\
+If two octal values follow -boot, the first is the sense switch\n\
+setting for switches flipped up, and the second is the data switch\n\
+setting for switches pushed down.  These two values may follow the\n\
+filename if booting from a file.  If the \"regs\" option is used with\n\
+a filename, CPU registers and keys are loaded from the runfile header.\n\
+");
       exit(1);
     }
 
@@ -4800,10 +4813,12 @@ For disk boots, the last 3 digits can be:\n\
     gvp->iotlb[i].valid = 0;
 #endif
 
-  crs[A] = rvec[3];
-  crs[B] = rvec[4];
-  crs[X] = rvec[5];
-  newkeys(rvec[6]);
+  if (bootregs) {
+    crs[A] = rvec[3];
+    crs[B] = rvec[4];
+    crs[X] = rvec[5];
+    newkeys(rvec[6]);
+  }
   RPL = rvec[2];
 
   memdump(rvec[0], rvec[1]);
