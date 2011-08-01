@@ -500,6 +500,16 @@ DIGEN(0101256, "SNS 15", d_sns);
 DIGEN(0101257, "SNS 16", d_sns);
 DIGEN(0100200, "SMCR", d_smcr);
 DIGEN(0101200, "SMCS", d_smcs);
+DIGEN(0101020, "SS1", d_ssx);
+DIGEN(0100020, "SR1", d_srx);
+DIGEN(0101010, "SS2", d_ssx);
+DIGEN(0100010, "SR2", d_srx);
+DIGEN(0101004, "SS3", d_ssx);
+DIGEN(0100004, "SR3", d_srx);
+DIGEN(0101002, "SS4", d_ssx);
+DIGEN(0100002, "SR4", d_srx);
+DIGEN(0101036, "SSS", d_ssx);
+DIGEN(0100036, "SSR", d_srx);
 
 /* initialize class 3 generics */
 

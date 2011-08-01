@@ -7421,6 +7421,22 @@ d_sns:  /* 0101240 - 0101257 */
     INCRP;
   goto fetch;
 
+d_ssx:   /* 0101020, 0101010, 0101004, 0101002: SS1-4, SSS */
+  m = (inst & 036) << 11;
+  TRACE(T_FLOW, " SSx\n");
+  RESTRICT();
+  if (sswitch & m)
+    INCRP;
+  goto fetch;
+
+d_srx:   /* 0100020, 0100010, 0100004, 0100002: SR1-4, SRS */
+  m = (inst & 036) << 11;
+  TRACE(T_FLOW, " SRx\n");
+  RESTRICT();
+  if (!(sswitch & m))
+    INCRP;
+  goto fetch;
+
 d_smcr:  /* 0100200 */
   TRACE(T_FLOW, " SMCR\n");
   RESTRICT();
