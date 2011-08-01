@@ -6176,21 +6176,18 @@ d_cea:  /* 000111 */
   switch ((crs[KEYS] & 016000) >> 10) {
   case 0:                       /* 16S */
     ea = crs[A];
-    i = ea & 0100000;
-    x = ea & 040000;
-    ea &= 037777;
     while (1) {
+      i = ea & 0100000;
+      x = ea & 040000;
+      ea &= 037777;
       if (x)                           /* indexed */
-	ea += crs[X];
+	ea = (ea + crs[X]) & 037777;
       if (!i)                          /* not indirect */
 	break;
       if (ea < gvp->livereglim)
-	m = get16trap(ea);
+	ea = get16trap(ea);
       else
-	m = get16(MAKEVA(RPH,ea));
-      i = m & 0100000;
-      x = m & 040000;
-      ea = m & 037777;                 /* go indirect */
+	ea = get16(MAKEVA(RPH,ea));
     }
     crs[A] = ea;
     break;
