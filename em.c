@@ -9557,7 +9557,7 @@ d_mpl:  /* 01603 (V-mode) */
   goto fetch;
 
 d_uii:
-  fault(UIIFAULT, RPL, RP);
+  fault(UIIFAULT, RPL, ea);
   goto fetch;
 
 d_div:  /* 01700 */
