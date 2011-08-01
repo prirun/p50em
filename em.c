@@ -6298,10 +6298,11 @@ d_nrm:  /* 000101 */
 
 d_rtn:  /* 000105 */
   TRACE(T_FLOW, " RTN\n");
-  utempa = get16(crs[S]+1);
-  if (utempa == 0)
-    fatal("RTN stack underflow");
-  crs[S] = get16(crs[S]);
+  utempa = get16(crs[S]);
+  RPL = get16(utempa+1);
+  if (RPL == 0)
+    fault(STACKFAULT, 0, 0);
+  crs[S] = utempa;
   goto fetch;
 
   /* unusual instructions */
@@ -9646,7 +9647,7 @@ d_pcl:  /* 01002 (V-mode) */
 
 d_crep:  /* 01002 (R-mode) */
   TRACE(T_FLOW, " CREP\n");
-  put16t(RPL,crs[S]++);
+  put16t(RPL,crs[S]+1);
   RPL = ea;
   goto fetch;
 
