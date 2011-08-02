@@ -537,6 +537,7 @@ typedef struct {
   int traceuser;                /* OWNERL to trace */
   int traceseg;                 /* RPH segment # to trace */
   int numtraceprocs;            /* # of procedures we're tracing */
+  unsigned long traceinstcount; /* only trace if instcount > this */
 #endif
 
 } gv_t;
@@ -4368,6 +4369,7 @@ main (int argc, char **argv) {
   gvp->traceuser = 0;
   gvp->traceseg = 0;
   gvp->numtraceprocs = 0;
+  gvp->traceinstcount = 0;
 #endif
   invalidate_brp();
   eap = &gvp->brp[0];
@@ -4579,6 +4581,8 @@ main (int argc, char **argv) {
 	  gvp->traceflags = ~0;
 	else if (isdigit(argv[i][0]) && strlen(argv[i]) <= 2 && sscanf(argv[i],"%d", &templ) == 1)
 	  gvp->traceuser = 0100000 | (templ<<6);   /* form OWNERL for user # */
+	else if (isdigit(argv[i][0]) && sscanf(argv[i],"%d", &templ) == 1)
+	  gvp->traceinstcount = templ;
 	else if (strlen(argv[i]) == 6 && sscanf(argv[i],"%o", &templ) == 1)
 	  gvp->traceuser = templ;                  /* specify OWNERL directly */
 	else if (strlen(argv[i]) == 4 && sscanf(argv[i],"%o", &templ) == 1)
@@ -4625,12 +4629,15 @@ main (int argc, char **argv) {
   /* finish setting up tracing after all options are read, ie, maps */
 
 #ifndef NOTRACE
+  TRACEA("Trace flags = 04x%x\n", gvp->traceflags);
+  gvp->savetraceflags = gvp->traceflags;
+  gvp->traceflags = 0;
   if (gvp->traceuser != 0)
     TRACEA("Tracing enabled for OWNERL %o\n", gvp->traceuser);
   else
     TRACEA("Tracing enabled for all users\n");
-  gvp->savetraceflags = gvp->traceflags;
-  TRACEA("Trace flags = 04x%x\n", gvp->savetraceflags);
+  if (gvp->traceinstcount != 0)
+    TRACEA("Tracing enabled after instruction %u\n", gvp->traceinstcount);
   for (i=0; i<gvp->numtraceprocs; i++) {
     for (j=0; j<numsyms; j++) {
       if (strcasecmp(mapsym[j].symname, traceprocs[i].name) == 0 && mapsym[j].symtype == 'e') {
@@ -4776,7 +4783,7 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
     }
   }
   TRACEA("Sense switches set to %o\n", sswitch);
-  TRACE(T_FLOW, "Boot SA=%o, EA=%o, P=%o, A=%o, B=%o, X=%o, K=%o\n\n", rvec[0], rvec[1], rvec[2], rvec[3], rvec[4], rvec[5], rvec[6]);
+  TRACEA("Boot SA=%o, EA=%o, P=%o, A=%o, B=%o, X=%o, K=%o\n\n", rvec[0], rvec[1], rvec[2], rvec[3], rvec[4], rvec[5], rvec[6]);
   if (rvec[2] > rvec[1])
     fatal("Program start > ending: boot image is corrupt");
 
@@ -4862,12 +4869,44 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
 
 
 fetch:
+  gvp->instcount++;
+
+#ifndef NOTRACE
+  gvp->traceflags = 0;
+  if ((gvp->instcount >= gvp->traceinstcount) &&
+      (TRACEUSER && ((gvp->traceseg == 0) || (gvp->traceseg == (RPH & 0xFFF))))
+      )
+    gvp->traceflags = gvp->savetraceflags;
+#endif
+
+  /* hack to activate trace in 32I mode */
 
 #if 0
-  if (gvp->instcount > 2681900)
-    gvp->savetraceflags = T_FLOW;
-  if (gvp->instcount > 3000000)
-    gvp->savetraceflags = 0;
+  if ((crs[KEYS] & 0016000) == 0010000)
+    gvp->traceflags = gvp->savetraceflags;
+  else
+    gvp->traceflags = 0;
+#endif
+
+#if 0
+  /* NOTE: rev 23.4 halts at inst #75379065 with the error:
+     "System Serial Number does not agree with this version of Primos."
+     To track this down, turn on tracing just before this instruction. */
+
+  if (75370000 < gvp->instcount && gvp->instcount < 75380000)
+    gvp->traceflags = ~T_MAP;
+  else
+    gvp->traceflags = 0;
+#endif
+
+#if 0
+  /* turn on tracing  near instruction #47704931 to debug I/O TLB error
+     in rev 22.1 */
+
+  if (gvp->instcount > 47700000)
+    gvp->traceflags = ~0;
+  else
+    gvp->traceflags = 0;
 #endif
 
 #if 0
@@ -4918,41 +4957,6 @@ fetch:
   }
 #endif
 
-#ifndef NOTRACE
-  /* is this user being traced? */
-
-  if (TRACEUSER && ((gvp->traceseg == 0) || (gvp->traceseg == (RPH & 0xFFF))))
-    gvp->traceflags = gvp->savetraceflags;
-  else
-    gvp->traceflags = 0;
-#endif
-
-  /* hack to activate trace in 32I mode */
-
-#if 0
-  if ((crs[KEYS] & 0016000) == 0010000)
-    gvp->traceflags = gvp->savetraceflags;
-  else
-    gvp->traceflags = 0;
-#endif
-
-#if 0
-  /* NOTE: rev 23.4 halts at inst #75379065 with the error:
-     "System Serial Number does not agree with this version of Primos."
-     To track this down, turn on tracing just before this instruction. */
-
-  if (75370000 < gvp->instcount && gvp->instcount < 75380000)
-    gvp->traceflags = ~T_MAP;
-#endif
-
-#if 0
-  /* turn on tracing  near instruction #47704931 to debug I/O TLB error
-     in rev 22.1 */
-
-  if (gvp->instcount > 47700000)
-    gvp->traceflags = ~0;
-#endif
-
   /* bump instruction count & periodically do time-related activities.
      TIMERMASK affects the granularity of these events, and in general
      should get bigger as the emulator gets faster.  There's also the
@@ -4963,7 +4967,6 @@ fetch:
 
 #define TIMERMASK 0777   /* must be power of 2 - 1 */
 
-  gvp->instcount++;
   if ((gvp->instcount & TIMERMASK) == 0) {
     stopwatch_push(&sw_io);
     for (i=0; i<64; i++)
