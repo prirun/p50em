@@ -355,6 +355,16 @@ DIGEN(001306, "MDRS", d_mdxx);
 DIGEN(001307, "MDWC", d_mdxx);
 DIGEN(001324, "MDIW", d_mdxx);
 
+DIGEN(000217, "EPMJ", d_uii);
+DIGEN(000215, "LPMJ", d_uii);
+DIGEN(000237, "EPMX", d_uii);
+DIGEN(000235, "LPMX", d_uii);
+DIGEN(000703, "EVMJ", d_uii);
+DIGEN(000701, "ERMJ", d_uii);
+DIGEN(000723, "EVMX", d_uii);
+DIGEN(000721, "ERMX", d_uii);
+DIGEN(000515, "OSI", d_uii);
+
 /* initialize entire class 1 generics (shift group) to "badshift",
    then initialize each individual shift instruction */
 

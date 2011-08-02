@@ -5954,8 +5954,10 @@ d_sttm:  /* 000510 */
   /* OS/restricted instructions */
 
 d_rts:  /* 000511 */
-  TRACE(T_FLOW, " RTS\n", inst);
+  TRACE(T_FLOW, " RTS / P300ISI\n", inst);
   RESTRICT();
+  if (((crs[KEYS] & 016000) >> 10) <= 3)
+    goto d_uii;
   tempa = crs[TIMERH];
   templ = tempa - *(short *)(crs+A);
   ea = *(ea_t *)(crs+OWNER);
