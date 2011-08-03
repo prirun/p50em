@@ -6212,7 +6212,7 @@ d_hlt:  /* 000000 */
   TRACE(T_FLOW, " HLT\n");
   RESTRICT();
   memdump(0,0xFFFF);
-  if (((crs[KEYS] & 016000) >> 10) <= 3) {
+  if (bootarg) {
     printf("\nCPU halt, instruction #%lu at %o/%o %s: %o %o\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d", gvp->instcount, RPH, RPL, searchloadmap(gvp->prevpc,' '), get16t(gvp->prevpc), get16t(gvp->prevpc+1), crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), *(unsigned int *)(crs+A), *(int *)(crs+A), crs[X], *(short *)(crs+X));
     printf("\nPress Enter to continue... ");
     getchar();
