@@ -411,14 +411,14 @@ typedef struct {
    do the mapping and (assuming it doesn't fault) the eap cache entry
    is updated.
 
-   This special cache is invalidated whenever the STLB is changed,
-   whenever a ring change occurs, and whenever a process exchange
-   occurs.  For reads, no access checking is needed when the cache is
-   used: the cache entry is either valid, meaning that the program has
-   at least read access to the page, or the cache entry is invalid
-   (special value of 0x000000FF, which is not a virtual page address -
-   the right 10 bits must be zero for the start of a page), in which
-   case mapva is called.
+   This special cache is invalidated when the STLB is changed, a ring
+   change occurs, on process exchange, and on LPSW.  For reads, no
+   access checking is needed when the cache is used: the cache entry
+   is either valid, meaning that the program has at least read access
+   to the page, or the cache entry is invalid (special value of
+   0x000000FF, which is not a virtual page address - the right 10 bits
+   must be zero for the start of a page), in which case mapva is
+   called.
 
    The special cache can also be used for write references.  Bits 2-4
    of the cache entry vpn are the access bits from mapva, so bit 4
@@ -3725,6 +3725,7 @@ static lpsw() {
     printf("WARNING: LPSW changed current register set: current modals=%o, new modals=%o\n", crs[MODALS], m);
     crsl = regs.sym.userregs[(m & 0340) >> 5];
   }
+  invalidate_brp();
 
   crs[MODALS] = m;
   gvp->inhcount = 1;
