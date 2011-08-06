@@ -391,6 +391,10 @@ typedef struct {
   char valid;                 /* 1 if IOTLB entry is valid, zero otherwise */
 } iotlbe_t;
 
+/* maximum indirect levels is 8 according to T&M CPUT4 */
+
+#define INDLEVELS 8
+
 /* the emulator uses a special, very small address translation cache
    to hold the virtual page address and corresponding MEM[] pointer
    for a few special pages:
@@ -2078,6 +2082,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
 static ea_t ea16s (unsigned short inst) {
   
   unsigned short rpl, amask, i, x;
+  int indlevel;
   ea_t ea, va;
 
   i = inst & 0100000;                            /* indirect */
@@ -2088,11 +2093,14 @@ static ea_t ea16s (unsigned short inst) {
     ea = (rpl & 037000) | (inst & 0777);         /* current sector */
   else
     ea = (inst & 0777);                          /* sector 0 */
+  indlevel = 0;
   while (1) {
     if (x)                                       /* indexed */
       ea += crs[X];
     if (!i)                                      /* not indirect */
       break;
+    if (indlevel++ == INDLEVELS)
+      fault(RESTRICTFAULT, 0, 0);
     ea &= amask;
     if (ea < gvp->livereglim)                    /* flag live register ea */
       ea |= 0x80000000;
@@ -2113,6 +2121,7 @@ static ea_t ea16s (unsigned short inst) {
 static ea_t ea32s (unsigned short inst) {
   
   unsigned short rpl, amask, i, x;
+  int indlevel;
   ea_t ea, va;
 
   i = inst & 0100000;                            /* indirect */
@@ -2128,7 +2137,9 @@ static ea_t ea32s (unsigned short inst) {
       x = 0;
     }
   }
-  while (i) {
+  for (indlevel=0; i; indlevel++) {
+    if (indlevel == INDLEVELS)
+      fault(RESTRICTFAULT, 0, 0);
     ea &= amask;
     if (ea < gvp->livereglim)                    /* flag live register ea */
       ea |= 0x80000000;
@@ -2151,6 +2162,7 @@ static ea_t ea32s (unsigned short inst) {
 static inline ea_t ea32r64r (ea_t earp, unsigned short inst) {
 
   unsigned short ea, m, rph, rpl, amask, class, i, x;
+  int indlevel;
   ea_t va;
 
   x = ((inst & 036000) != 032000) ? (inst & 040000) : 0;
@@ -2181,7 +2193,9 @@ static inline ea_t ea32r64r (ea_t earp, unsigned short inst) {
     }
   }
   ea &= amask;
-  while (i) {
+  for (indlevel=0; i; indlevel++) {
+    if (indlevel == INDLEVELS)
+      fault(RESTRICTFAULT, 0, 0);
     if (ea >= gvp->livereglim)
       m = get16(MAKEVA(rph,ea));
     else
