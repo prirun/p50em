@@ -6214,9 +6214,15 @@ d_hlt:  /* 000000 */
   memdump(0,0xFFFF);
   if (bootarg) {
     printf("\nCPU halt, instruction #%lu at %o/%o %s: %o %o\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d", gvp->instcount, RPH, RPL, searchloadmap(gvp->prevpc,' '), get16t(gvp->prevpc), get16t(gvp->prevpc+1), crs[A], *(short *)(crs+A), crs[B], *(short *)(crs+B), *(unsigned int *)(crs+A), *(int *)(crs+A), crs[X], *(short *)(crs+X));
-    printf("\nPress Enter to continue... ");
-    getchar();
-    goto fetch;
+    while (1) {
+      printf("\nPress Enter to continue, h to halt... ");
+      utempa = getchar();
+      if (utempa == '\r') {
+	printf("\n");
+	goto fetch;
+      } else if (utempa == 'h')
+	break;
+    }
   }
   fatal("CPU halt");
 
@@ -9758,6 +9764,7 @@ d_jsx:  /* 03503 */
 d_cls:  /* 01103 */
   TRACE(T_FLOW, " CLS\n");
   templ = get32(ea);
+  TRACE(T_INST, " [ea]='%o/%+d/%u '%o/'%o\n", templ, templ, templ, *(unsigned int *)&templ >> 16, templ & 0xFFFF);
   CLEARCC;
   if (*(int *)(crs+L) == templ) {
     INCRP;
