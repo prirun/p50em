@@ -568,8 +568,9 @@ static  jmp_buf bootjmp;               /* for longjumps to the fetch loop */
    speed up system boots and diagnostics during emulator testing.
 */
 
-#define MAXMB   512
+#define MAXMB   512     /* must be a power of 2 */
 #define MEMSIZE MAXMB/2*1024*1024
+#define MEMMASK MEMSIZE-1
 #define MEM physmem
 
 static unsigned short physmem[MEMSIZE]; /* system's physical memory */
@@ -1034,7 +1035,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
     pa = stlbp->ppa | (ea & 0x3FF);
     TRACE(T_MAP,"        for ea %o/%o, iacc=%d, stlbix=%d, pa=%o	loaded at #%lu\n", ea>>16, ea&0xffff, intacc, stlbix, pa, stlbp->load_ic);
   } else {
-    pa = ea;
+    pa = ea & MEMMASK;
   }
   stopwatch_pop(&sw_mapva);
 #ifndef NOMEM
