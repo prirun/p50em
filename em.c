@@ -6219,10 +6219,10 @@ d_hlt:  /* 000000 */
     while (1) {
       printf("\nPress Enter to continue, h to halt... ");
       utempa = getchar();
-      if (utempa == '\r') {
-	printf("\n");
+      printf("\n");
+      if (utempa == '\r')
 	goto fetch;
-      } else if (utempa == 'h')
+      if (utempa == 'h')
 	break;
     }
   }
