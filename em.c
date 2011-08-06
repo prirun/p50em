@@ -7162,18 +7162,22 @@ d_tstq:  /* 0141757 */
 
 d_emcm:  /* 000503 - enter machine check mode */
   TRACE(T_FLOW, " EMCM\n");
+  RESTRICT();
   goto fetch;
 
 d_lmcm:  /* 000501 - leave machine check mode */
   TRACE(T_FLOW, " LMCM\n");
+  RESTRICT();
   goto fetch;
 
 d_rmc:  /* 000021 - reset machine check FF */
   TRACE(T_FLOW, " RMC\n");
+  RESTRICT();
   goto fetch;
 
 d_viry:  /* 000311 - ucode verify */
   TRACE(T_FLOW, " VIRY\n");
+  RESTRICT();
   goto fetch;
 
 d_xvfy:  /* 001113 - extended ucode verify */
@@ -7190,6 +7194,7 @@ d_xvfy:  /* 001113 - extended ucode verify */
 
 d_mdxx:  /* 01304-01307, 01324 */
   TRACE(T_FLOW, " MDxx\n");
+  RESTRICT();
   goto fetch;
 
 
@@ -10035,6 +10040,11 @@ d_entr:  /* 00103 */
   crs[S] -= ea;
   put16t(utempa,crs[S]);
   goto fetch;
+
+d_lpid:  /* LPID 00617 */
+  TRACE(T_FLOW, " LPID\n");
+  RESTRICT();
+  goto d_uii;
 
 d_badmr:
   printf("em: unknown memory reference, inst='%06o, opcode '%o, op index=%d\n", inst, opcode, opix);

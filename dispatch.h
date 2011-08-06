@@ -347,7 +347,7 @@ DIGEN(000003, "SYNC", d_sync);
 DIGEN(000503, "EMCM", d_emcm);
 DIGEN(000501, "LMCM", d_lmcm);
 DIGEN(000021, "RMC", d_rmc);
-DIGEN(000311, "VIFY", d_viry);
+DIGEN(000311, "VIRY", d_viry);
 DIGEN(001113, "XVFY", d_xvfy);
 DIGEN(001304, "MDEI", d_mdxx);
 DIGEN(001305, "MDII", d_mdxx);
@@ -364,6 +364,8 @@ DIGEN(000701, "ERMJ", d_uii);
 DIGEN(000723, "EVMX", d_uii);
 DIGEN(000721, "ERMX", d_uii);
 DIGEN(000515, "OSI", d_uii);
+
+DIGEN(000617, "LPID", d_lpid);
 
 /* initialize entire class 1 generics (shift group) to "badshift",
    then initialize each individual shift instruction */
