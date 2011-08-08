@@ -3817,8 +3817,8 @@ static sssn() {
 
 /* Character instructions */
 
-#define GETFLR(n) (((crsl[FLR0+2*(n)] >> 11) & 0x1FFFE0) | (crsl[FLR0+2*(n)] & 0x1F))
-#define PUTFLR(n,v) crsl[FLR0+2*(n)] = (((v) << 11) & 0xFFFF0000) | (crsl[FLR0+2*(n)] & 0xF000) | ((v) & 0x1F)
+#define GETFLR(n) ((crsl[FLR0+2*(n)] >> 16) | ((crsl[FLR0+2*(n)] & 0x1F) << 16))
+#define PUTFLR(n,v) crsl[FLR0+2*(n)] = (((v) << 16) | (crsl[FLR0+2*(n)] & 0xF000) | (((v) >> 16) & 0x1F))
 
 static inline unsigned short ldc(int n, unsigned short result) {
   unsigned int utempl;
