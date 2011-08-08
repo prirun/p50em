@@ -4498,8 +4498,10 @@ main (int argc, char **argv) {
 	  sswitch = 0;
 	  i++;
 	} else {
-	  if (sscanf(argv[i+1],"%o", &templ) == 0)
+	  if (sscanf(argv[i+1],"%o", &templ) == 0) {
 	    bootarg = argv[++i];
+	    sswitch = 0;
+	  }
 	  if (i+1 < argc && argv[i+1][0] != '-' && sscanf(argv[i+1],"%o", &templ) == 1) {
 	    i++;
 	    sswitch = templ;
@@ -6234,7 +6236,7 @@ d_hlt:  /* 000000 */
       printf("\nPress Enter to continue, h to halt... ");
       utempa = getchar();
       printf("\n");
-      if (utempa == '\r')
+      if (utempa == '\r' || utempa == '\n')
 	goto fetch;
       if (utempa == 'h')
 	break;
