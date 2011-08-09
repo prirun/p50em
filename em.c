@@ -5264,7 +5264,7 @@ d_stc1:  /* 001332 */
 d_eafa0:  /* 001300 */
   TRACE(T_FLOW, " EAFA 0\n");
   ea = apea(&eabit);
-  crsl[FAR0] = ea & 0x6FFFFFFF;
+  crsl[FAR0] = ea;
   crsl[FLR0] = (crsl[FLR0] & 0xFFFF0FFF) | (eabit << 12);
   TRACE(T_INST, " FAR0=%o/%o, eabit=%d, FLR=%x\n", crsl[FAR0]>>16, crsl[FAR0]&0xFFFF, eabit, crsl[FLR0]);
   goto fetch;
@@ -5272,7 +5272,7 @@ d_eafa0:  /* 001300 */
 d_eafa1:  /* 001310 */
   TRACE(T_FLOW, " EAFA 1\n");
   ea = apea(&eabit);
-  crsl[FAR1] = ea & 0x6FFFFFFF;
+  crsl[FAR1] = ea;
   crsl[FLR1] = (crsl[FLR1] & 0xFFFF0FFF) | (eabit << 12);
   TRACE(T_INST, " FAR1=%o/%o, eabit=%d, FLR=%x\n", crsl[FAR1]>>16, crsl[FAR1]&0xFFFF, eabit, crsl[FLR1]);
   goto fetch;
