@@ -2360,8 +2360,6 @@ static ea_t apea(unsigned short *bitarg) {
     ea = ip;
     TRACE(T_EAAP, " After indirect, AP ea = %o/%o, bit=%d  %s\n", ea>>16, ea & 0xFFFF, bit, searchloadmap(ea,' '));
   }
-  if (bit)
-    ea |= EXTMASK32;
   if (bitarg != NULL)
     *bitarg = bit;
   TRACE(T_FLOW|T_EAAP," APEA: %o/%o-%d %s\n", ea>>16, ea&0xFFFF, bit, searchloadmap(ea,' '));
