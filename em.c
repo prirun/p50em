@@ -288,6 +288,7 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 #define T_LM    0x00008000
 #define T_PUT   0x00010000
 #define T_GET   0x00020000
+#define T_EAS   0x00040000
 
 #define BITMASK16(b) (0x8000 >> ((b)-1))
 #define BITMASK32(b) ((unsigned int)(0x80000000) >> ((b)-1))
@@ -2127,14 +2128,18 @@ static ea_t ea32s (unsigned short inst) {
 
   i = inst & 0100000;                            /* indirect */
   x = ((inst & 036000) != 032000) ? (inst & 040000) : 0;
+  TRACE(T_EAS, " ea32s: i=%o, x=%o, s=%o\n", i!= 0, x!=0, (inst & 01000)!=0);
   amask = 077777;
   rpl = gvp->prevpc;
-  if (inst & 001000)
+  if (inst & 001000) {
     ea = (rpl & 077000) | (inst & 0777);         /* current sector */
-  else {
+    TRACE(T_EAS, " current sector, P=%o, ea=%o\n", rpl, ea);
+  } else {
     ea = (inst & 0777);                          /* sector 0 */
+    TRACE(T_EAS, " sector 0, ea=%o\n", ea);
     if (ea < 0100 && x) {                        /* preindex by X */
       ea += crs[X];
+      TRACE(T_EAS, " preindex, ea=%o\n", ea);
       x = 0;
     }
   }
@@ -2145,10 +2150,13 @@ static ea_t ea32s (unsigned short inst) {
     if (ea < gvp->livereglim)                    /* flag live register ea */
       ea |= 0x80000000;
     ea = get16t(ea);                             /* go indirect */
+    TRACE(T_EAS, " indirect, ea=%o\n", ea);
     i = ea & 0100000;
   }
-  if (x)                                         /* postindex */
+  if (x) {                                       /* postindex */
     ea += crs[X];
+    TRACE(T_EAS, " postindex, ea=%o\n", ea);
+  }
   ea &= amask;
   va = MAKEVA(RPH, ea);
   if (ea < gvp->livereglim)                      /* flag live register ea */
@@ -4896,6 +4904,15 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
 
 fetch:
   gvp->instcount++;
+
+#if 0
+  /* check for memory overwrite in prmnt1 T&M: OTA '1507 w/packet length 3712*2 :( */
+  utempa = get16(0124);
+  if (utempa != 014011) {
+    printf("[] = %o\n", utempa);
+    fatal("Mem overwrite!");
+  }
+#endif
 
 #ifndef NOTRACE
   gvp->traceflags = 0;
