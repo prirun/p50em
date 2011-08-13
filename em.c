@@ -2244,7 +2244,9 @@ special:
       ea += crs[X];
       TRACE(T_EAR, " Preindex, new ea=%o\n", ea);
     }
-    while (i) {
+    for (indlevel=0; i; indlevel++) {
+      if (indlevel == INDLEVELS)
+	fault(RESTRICTFAULT, 0, 0);
       if (ea >= gvp->livereglim)
 	m = get16(MAKEVA(rph,ea));
       else
@@ -2268,7 +2270,9 @@ special:
       ea += (short) crs[S];
       eap = &gvp->brp[SBBR];
     }
-    while (i) {
+    for (indlevel=0; i; indlevel++) {
+      if (indlevel == INDLEVELS)
+	fault(RESTRICTFAULT, 0, 0);
       if (ea >= gvp->livereglim)
 	m = get16(MAKEVA(rph,ea));
       else
@@ -2302,7 +2306,9 @@ special:
 	i = m & 0100000;
       ea = m & amask;
     }
-    while (i) {
+    for (indlevel=0; i; indlevel++) {
+      if (indlevel == INDLEVELS)
+	fault(RESTRICTFAULT, 0, 0);
       if (ea >= gvp->livereglim)
 	m = get16(MAKEVA(rph,ea));
       else
