@@ -117,6 +117,17 @@
        6: data 1
        7: data 2
 
+  PNC diagnostic register:
+	NORXTX   EQU   '100000         DISABLE TX AND RX
+	TXDATER  EQU   '040000         FORCE RX CRC ERROR
+	TXACKER  EQU   '020000         FORCE TX ACK ERROR
+	RXACKER  EQU   '010000         FORCE RX ACK BYTE ERROR
+	CABLE    EQU   '000001         LOOPBACK OVER CABLE
+	ANALOG   EQU   '000002         LOOPBACK THRU ANALOG DEVICES
+	SINGSTEP EQU   '000004         LOOPBACK THRU SHIFT REG
+	RETRY    EQU   '000000         ALLOW HARDWR RETRY
+	NORETRY  EQU   '000010         NO HARDWR RETRY
+
   Primos PNC usage:
 
   OCP '0007
@@ -196,14 +207,14 @@
   //#define PNCNSERROR     0x0800  /* bit 5 u-verify failure or bad command (II) */
 #define PNCNSCONNECTED 0x0400  /* bit 6 connected to ring */
   //#define PNCNSMULTOKEN  0x0200  /* bit 7 multiple tokens (only after xmit EOR) */
-#define PNCNSTOKEN     0x0100  /* bit 8, token (only after xmit EOR) */
-#define PNCNSNODEID    0x00FF  /* bits 9-16 node-id mask */
+#define PNCNSTOKEN         0x0100  /* bit 8, token (only after xmit EOR) */
+#define PNCNSNODEIDMASK    0x00FF  /* bits 9-16 node-id mask */
 
 /* receive status word: first 8 bits are the "ACK byte" */
 
-#define PNCRSACK       0x8000  /* ACK'd */
+  //#define PNCRSACK       0x8000  /* ACK'd */
   //#define PNCRSMACK      0x4000  /* multiple ACK */
-#define PNCRSWACK      0x2000  /* WACK'd */
+  //#define PNCRSWACK      0x2000  /* WACK'd */
   //#define PNCRSNAK       0x1000  /* NAK'd */
   //#define PNCRSABPE      0x0200  /* ack byte parity error */
   //#define PNCRSABCE      0x0100  /* ack byte check error */
@@ -230,12 +241,15 @@
 #define MAXACCEPTTIME 5      /* only wait 5 seconds to receive uid */
 #define MINCONNTIME 30       /* wait 30 seconds between connect attempts */
 #define MAXPNCBYTES 2048     /* max of 2048 byte packets */
-#define MAXPKTBYTES 2052     /* adds 16-bit length word to each end */
+#define MAXPNCWORDS 1024     /* max of 1024 word packets */
+#define MAXPKTBYTES (MAXPNCBYTES+4)     /* adds 16-bit length word to each end */
 
+#define MAXNODEID 254        /* 0 is a dummy, 255 is broadcast */
 #define MAXHOSTLEN 64        /* max length of remote host name */
 #define MAXUIDLEN 16         /* max length of unique id/password */
 
 static short configured = 0;      /* true if PNC configured */
+static unsigned short pncdiag=0;  /* controller diagnostic register */
 static unsigned short pncstat;    /* controller status word */
 static unsigned short rcvstat;    /* receive status word */
 static unsigned short xmitstat;   /* xmit status word */
@@ -253,10 +267,10 @@ static struct {             /* node info for each node in my network */
   char  host[MAXHOSTLEN+1]; /* host name/address of the remote node */
   short port;               /* emulator network port on the remote node */
   char  uid[MAXUIDLEN+1];   /* unique ID/password for this node (16 + null) */
-  char  rcvpkt[MAXPKTBYTES];/* receive packet w/leading + trailing length */
-  short rcvoffset;          /* next byte offset for receive */
+  unsigned char rcvpkt[MAXPKTBYTES];/* receive packet w/leading + trailing length */
+  short rcvlen;             /* length received so far */
   time_t conntime;          /* time of last connect attempt */
-} ni[255];                  /* ring id 0-254 (255 is broadcast) */
+} ni[MAXNODEID+1];          /* ring id 0-254 (255 is broadcast) */
 
 /* PNC connection states.  This is a bit complex because the socket
    operations are all non-blocking and the unique ID has to be sent
@@ -283,27 +297,24 @@ static short fdnimap[FDMAPSIZE];
 
 #define PNCBSIDLE 0          /* initial state: no xmit or recv */
 #define PNCBSRDY  1          /* ready to recv or xmit */
-#define PNCBSXFER 2          /* transferring data over socket */
 
 typedef struct {
   short toid, fromid;
   short state;
   short pktsize;           /* size of packet in bytes */
-  short offset;
   unsigned short dmachan, dmareg, dmaaddr;
-  short dmanw, dmabytesleft;
+  short dmanw;
   unsigned short *memp;      /* ptr to Prime memory */
   unsigned char iobuf[MAXPKTBYTES];
 } t_dma;
 static t_dma rcv;
-t_dma xmit;
+static t_dma xmit;
 
 /* return pointer to a hex-formatted uid */
 
 char * pnchexuid(char * uid) {
-  static char hexuid[MAXUIDLEN*2];
-  int i;
-  char ch;
+  static char hexuid[MAXUIDLEN*2+1];
+  int i, ch;
 
   for (i=0; i<MAXUIDLEN; i++) {
     ch = uid[i] >> 4;
@@ -317,17 +328,43 @@ char * pnchexuid(char * uid) {
     else
       hexuid[i*2+1] = ch - 10 + 'a';
   }
+  hexuid[MAXUIDLEN*2] = 0;
   return hexuid;
+}
+
+char * pncdumppkt(unsigned char * pkt, int len) {
+  static char hexpkt[MAXPKTBYTES*2 + 1];
+  unsigned int i, ch;
+
+  return;
+  if (len > MAXPKTBYTES)
+    len = MAXPKTBYTES;
+  for (i=0; i<len; i++) {
+    ch = pkt[i] >> 4;
+    if (0 <= ch  && ch <= 9)
+      hexpkt[i*2] = ch + '0';
+    else
+      hexpkt[i*2] = ch - 10 + 'a';
+    ch = pkt[i] & 0xF;
+    if (0 <= ch && ch <= 9)
+      hexpkt[i*2+1] = ch + '0';
+    else
+      hexpkt[i*2+1] = ch - 10 + 'a';
+  }
+  hexpkt[len*2] = 0;
+  TRACE(T_RIO, " pncdumppkt: %s\n", hexpkt);
 }
 
 /* disconnect from a node */
 
 unsigned short pncdisc(nodeid) {
   if (ni[nodeid].cstate > PNCCSDISC) {
+    fprintf(stderr, "devpnc: disconnect from node %d\n", nodeid);
     TRACE(T_RIO, " pncdisc: disconnect from node %d\n", nodeid);
     close(ni[nodeid].fd);
     fdnimap[ni[nodeid].fd] = -1;
     ni[nodeid].cstate = PNCCSDISC;
+    ni[nodeid].rcvlen = 0;
     ni[nodeid].fd = -1;
   }
 }
@@ -407,10 +444,10 @@ pncaccept(time_t timenow) {
   /* look up the uid in our ring.cfg array to determine the node id
      we'll use for this remote emulator */
 
-  for (i=1; i<255; i++)
+  for (i=1; i<=MAXNODEID; i++)
     if (memcmp(uid, ni[i].uid, MAXUIDLEN) == 0)
       break;
-  if (i == 255) {
+  if (i > MAXNODEID) {
     fprintf(stderr, "devpnc: couldn't find uid %s\n", uid);
     goto disc;
   }
@@ -422,6 +459,7 @@ pncaccept(time_t timenow) {
       pncdisc(i);
   }
   ni[i].cstate = PNCCSAUTH;
+  ni[i].rcvlen = 0;
   ni[i].fd = fd;
   fdnimap[fd] = i;
   fd = -1;
@@ -471,8 +509,8 @@ unsigned short pncconn1(nodeid, timenow) {
 pncauth1(int nodeid, time_t timenow) {
   int n;
 
-  n = write(ni[nodeid].fd, ni[nodeid].uid, MAXUIDLEN);
-  TRACE(T_RIO, "sent uid %s, hex %s, for node %d, fd %d, %d bytes\n", ni[nodeid].uid, pnchexuid(ni[nodeid].uid), nodeid, ni[nodeid].fd, n);
+  n = write(ni[nodeid].fd, ni[myid].uid, MAXUIDLEN);
+  TRACE(T_RIO, "sent my uid %s, hex %s, to node %d, fd %d, %d bytes\n", ni[myid].uid, pnchexuid(ni[myid].uid), nodeid, ni[nodeid].fd, n);
   if (n == MAXUIDLEN) {
     ni[nodeid].cstate = PNCCSAUTH;
     return;
@@ -482,14 +520,9 @@ pncauth1(int nodeid, time_t timenow) {
       return;
     if (errno != EPIPE)
       perror("error sending PNC uid");
-    goto disc;
-  }
-  fprintf(stderr, "devpnc: expected %d bytes, only wrote %d bytes for uid\n", MAXUIDLEN, n);
-  
-disc:
-  close(ni[nodeid].fd);
-  ni[nodeid].fd = -1;
-  ni[nodeid].cstate = PNCCSDISC;
+  } else
+    fprintf(stderr, "devpnc: expected %d bytes, only wrote %d bytes for uid\n", MAXUIDLEN, n);
+  pncdisc(nodeid);
 }
 
 /* connect to the next unconnected node.  We only try to connect to a
@@ -497,16 +530,14 @@ disc:
    connect to us when they come up */
 
 pncconnect(time_t timenow) {
-  static int prevnode=0;
+  static int prevnode=MAXNODEID;
   int i, nodeid;
 
   if (myid == 0)
     return;
   i = prevnode;
   while (1) {
-    i = (i % 254) + 1;
-    if (i == prevnode)      /* went round once? */
-      break;
+    i = (i % MAXNODEID) + 1;
     if (i == myid)          /* don't connect to myself */
       continue;
     if (ni[i].cstate == PNCCSCONN) {
@@ -518,6 +549,8 @@ pncconnect(time_t timenow) {
       pncconn1(i, timenow);
       break;
     }
+    if (i == prevnode)      /* went round once? */
+      break;
   }
   prevnode = i;
 }
@@ -525,17 +558,16 @@ pncconnect(time_t timenow) {
 /* initialize a dma transfer */
 
 pncinitdma(t_dma *iob, char *iotype) {
+  if (crs[A] > 037)
+    fatal("PNC doesn't support chaining, DMC, or DMA reg > 037");
   (*iob).dmachan = crs[A];
   (*iob).dmareg = (*iob).dmachan << 1;
-  (*iob).dmanw = regs.sym.regdmx[(*iob).dmareg];
-  if ((*iob).dmanw <= 0)
-    (*iob).dmanw = -((*iob).dmanw>>4);
-  else
-    (*iob).dmanw = -(((*iob).dmanw>>4) ^ 0xF000);
+  (*iob).dmanw = -((regs.sym.regdmx[(*iob).dmareg]>>4) | 0xF000);
+  if ((*iob).dmanw > MAXPNCWORDS)
+    (*iob).dmanw = MAXPNCWORDS;      /* clamp it */
   (*iob).dmaaddr = ((regs.sym.regdmx[(*iob).dmareg] & 3)<<16) | regs.sym.regdmx[(*iob).dmareg+1];
   (*iob).memp = MEM + mapio((*iob).dmaaddr);
   (*iob).state = PNCBSRDY;
-  (*iob).offset = 0;
   TRACE(T_RIO, " pncinitdma: %s dmachan=%o, dmareg=%o, dmaaddr=%o, dmanw=%d\n", iotype, (*iob).dmachan, (*iob).dmareg, (*iob).dmaaddr, (*iob).dmanw);
 }
 
@@ -556,7 +588,9 @@ unsigned short pncxmit1(short nodeid, t_dma *iob) {
   /* NOTE: setsockopt SO_SNDLOWAT ensures that a partial packet write
      doesn't occur here */
 
+  TRACE(T_RIO, " xmit packet to node %d\n", nodeid);
   ntowrite = (*iob).dmanw*2 + 4;
+  pncdumppkt((*iob).iobuf, ntowrite);
   if ((nwritten=write(ni[nodeid].fd, (*iob).iobuf, ntowrite)) < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       TRACE(T_RIO, " wack packet to node %d\n", nodeid);
@@ -582,19 +616,107 @@ unsigned short pncxmit(t_dma *iob) {
   short  i;
 
   if ((*iob).toid == 255) {
-    for (i=1; i<255; i++)
-      xmitstat |= pncxmit1(i, iob);
+    for (i=1; i<=MAXNODEID; i++)
+      if (i != myid)
+	xmitstat |= pncxmit1(i, iob);
   } else {
     xmitstat |= pncxmit1((*iob).toid, iob);
   }
   return xmitstat;
 }
 
-/* process receives on all connections */
+/* do socket reads on all connections until 1 connection has a
+   complete packet, then return that packet to the Prime */
 
 pncrecv(time_t timenow) {
+  static int prevnode=MAXNODEID;
+  int i, nodeid;
+
+  if (myid == 0)
+    return;
+  i = prevnode;
+  while (1) {
+    i = (i % MAXNODEID) + 1;
+    if (i == myid)          /* don't read from myself */
+      continue;
+    if (ni[i].cstate == PNCCSAUTH) {
+      if (pncrecv1(i))
+	break;
+    }
+    if (i == prevnode)      /* went round once? */
+      break;
+  }
+  prevnode = i;
 }
 
+/* try to read a complete packet from a node.  On entry, the receive
+   can be in two states:
+
+   1. haven't read the entire 2-byte packet length yet
+   2. got the length, but have more to read
+*/
+
+pncrecv1(int nodeid) {
+  int pktlen, nw;
+
+  TRACE(T_RIO, " pncrecv1: reading from node %d\n", nodeid);
+  if (ni[nodeid].rcvlen < 2) {
+    if (!pncread(nodeid, 2 - ni[nodeid].rcvlen))
+      return 0;
+  }
+  pktlen = *(short *)(ni[nodeid].rcvpkt);
+  if (pktlen > MAXPKTBYTES) {
+    fprintf(stderr, "devpnc: packet > max from node %d\n", nodeid);
+    pncdisc(nodeid);
+    return 0;
+  }
+  TRACE(T_RIO, " pncrecv1: have %d of %d\n", ni[nodeid].rcvlen, pktlen);
+  if (!pncread(nodeid, pktlen - ni[nodeid].rcvlen))
+    return 0;
+  if (pktlen != *(short *)(ni[nodeid].rcvpkt+pktlen-2)) {
+    fprintf(stderr, "devpnc: node %d, pktlen mismatch: %d != %d\n", nodeid, pktlen, *(short *)(ni[nodeid].rcvpkt+pktlen-2));
+    pncdisc(nodeid);
+    return 0;
+  }
+
+  /* send completed packet back to the Prime */
+
+  TRACE(T_RIO, " pncrecv1: pkt complete\n");
+  pncdumppkt(ni[nodeid].rcvpkt, ni[nodeid].rcvlen);
+  rcvstat = 0;
+  nw = (pktlen-4)/2;
+  if (nw > rcv.dmanw) {
+    fprintf(stderr, "devpnc: node %d, packet truncated: %d > %d\n", nodeid, nw, rcv.dmanw);
+    nw = rcv.dmanw;
+    rcvstat |= PNCRSEOR;
+  }
+  memcpy(rcv.memp, ni[nodeid].rcvpkt+2, nw*2);
+  regs.sym.regdmx[rcv.dmareg] += nw<<4;  /* bump recv count */
+  regs.sym.regdmx[rcv.dmareg+1] += nw;   /* and address */
+  pncstat |= PNCNSRCVINT;                /* set recv interrupt bit */
+  rcv.state = PNCBSIDLE;                 /* no longer ready to recv */
+  ni[nodeid].rcvlen = 0;                 /* reset for next read */
+  return 1;
+}
+
+/* read nbytes from a connection, return true if that many were read */
+
+pncread (int nodeid, int nbytes) {
+  int n;
+
+  n = read(ni[nodeid].fd, ni[nodeid].rcvpkt+ni[nodeid].rcvlen, nbytes);
+  if (n == -1) {
+    if (errno != EWOULDBLOCK && errno != EINTR && errno != EAGAIN) {
+      if (errno != EPIPE)
+	perror("error reading PNC connection");
+      pncdisc(nodeid);
+    }
+    n = 0;
+  }
+  ni[nodeid].rcvlen += n;
+  return (n == nbytes);
+}
+  
 int devpnc (int class, int func, int device) {
 
   short i;
@@ -638,7 +760,7 @@ int devpnc (int class, int func, int device) {
     pncfd = -1;
     for (i=0; i<FDMAPSIZE; i++)
       fdnimap[i] = -1;
-    for (i=0; i<256; i++) {
+    for (i=0; i<=MAXNODEID; i++) {
       ni[i].cstate = PNCCSNONE;
       ni[i].fd = -1;
       ni[i].host[0] = 0;
@@ -769,7 +891,7 @@ int devpnc (int class, int func, int device) {
 
     if (func == 00) {    /* OCP '0700 - disconnect */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - disconnect\n", func, device);
-      for (i=0; i<256; i++) {
+      for (i=0; i<=MAXNODEID; i++) {
 	fd = ni[i].fd;
 	if (fd >= 0) {
 	  fdnimap[fd] = -1;
@@ -778,9 +900,9 @@ int devpnc (int class, int func, int device) {
 	}
       }
       rcv.state = PNCBSIDLE;
-      rcvstat = 0;
-      xmitstat = 0;
-      pncstat &= PNCNSNODEID;
+      rcvstat = PNCRSBUSY;
+      xmitstat = PNCXSBUSY;
+      pncstat &= PNCNSNODEIDMASK;
 
     } else if (func == 01) {    /* OCP '0701 connect to the ring */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - connect\n", func, device);
@@ -801,13 +923,11 @@ int devpnc (int class, int func, int device) {
 
     } else if (func == 010) {   /* OCP '0710 stop xmit in progress */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - stop xmit\n", func, device);
-      if (xmit.offset == 0) {
-	xmitstat = 0;
-	xmit.state = PNCBSIDLE;
-      }
 
     } else if (func == 011) {   /* OCP '0711 stop recv in progress */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - stop recv\n", func, device);
+      rcvstat = 0;
+      rcv.state = PNCBSIDLE;
 
     } else if (func == 012) {   /* OCP '0712 set normal mode */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - set normal mode\n", func, device);
@@ -857,21 +977,35 @@ int devpnc (int class, int func, int device) {
       IOSKIP;
 
     } else if (func == 012) {   /* read receive status word */   
-      TRACE(T_INST|T_RIO, " INA '%02o%02o - get recv status '%o\n", func, device, rcvstat);
+      TRACE(T_INST|T_RIO, " INA '%02o%02o - get recv status '%o 0x%04x\n", func, device, rcvstat, rcvstat);
       crs[A] = rcvstat;
       IOSKIP;
 
-    } else if (func == 013) {   /* DIAG - read static register; not impl. */
-      crs[A] = 0;
-      IOSKIP;
-
-    } else if (func == 014) {   /* read xmit status word */   
-      TRACE(T_INST|T_RIO, " INA '%02o%02o - get xmit status '%o\n", func, device, xmitstat);
+    } else if (func == 013) {   /* read xmit status word */
+      TRACE(T_INST|T_RIO, " INA '%02o%02o - get xmit status '%o 0x%04x\n", func, device, xmitstat, xmitstat);
       crs[A] = xmitstat;
       IOSKIP;
 
+      /* I don't understand these next two at all, but prmnt1 T&M wants them this way... */
+
+    } else if (func == 014) {   /* read recv DMX channel */
+      TRACE(T_INST|T_RIO, " INA '%02o%02o - get recv DMX chan '%o 0x%04x\n", func, device, rcv.dmachan, rcv.dmachan);
+      crs[A] = (~rcv.dmachan & 0xF000) | rcv.dmachan & 0x0FFE;
+      IOSKIP;
+
+    } else if (func == 015) {   /* read xmit DMX channel */
+      TRACE(T_INST|T_RIO, " INA '%02o%02o - get xmit DMX chan '%o 0x%04x\n", func, device, xmit.dmachan, xmit.dmachan);
+      crs[A] = (~xmit.dmachan & 0xF000) | xmit.dmachan & 0x0FFE;
+      TRACE(T_INST|T_RIO, " returning '%o 0x%04x\n", crs[A], crs[A]);
+      IOSKIP;
+
+    } else if (func == 016) {   /* read diagnostic register */
+      TRACE(T_INST|T_RIO, " INA '%02o%02o - read diag reg '%o 0x%04x\n", func, device, pncdiag, pncdiag);
+      crs[A] = pncdiag;
+      IOSKIP;
+
     } else if (func == 017) {   /* read network status word */   
-      TRACE(T_INST|T_RIO, " INA '%02o%02o - get ctrl status '%o\n", func, device, pncstat);
+      TRACE(T_INST|T_RIO, " INA '%02o%02o - get ctrl status '%o 0x%04x\n", func, device, pncstat, pncstat);
       crs[A] = pncstat;
       IOSKIP;
 
@@ -883,22 +1017,40 @@ int devpnc (int class, int func, int device) {
 
   case 3:
     TRACE(T_INST|T_RIO, " OTA '%02o%02o\n", func, device);
-    if (func == 011) {          /* DIAG - single step; not impl.*/
+    if (func == 011) {          /* output diagnostic register */
+      pncdiag = crs[A];
       IOSKIP;
 
     } else if (func == 014) {   /* initiate recv, dma chan in A */
+      if (!(pncstat & PNCNSCONNECTED)) {
+	return;                 /* yes, return and don't skip */
+      }
       if (rcvstat & PNCRSBUSY) {  /* already busy? */
-	warn("pnc: recv when already busy!");
+	warn("pnc: recv when already busy ignored");
 	return;                 /* yes, return and don't skip */
       }
       IOSKIP;
       rcvstat = PNCRSBUSY;        /* set receive busy */
       pncinitdma(&rcv, "rcv");
-      devpoll[device] = 10;
+
+      /* NOTE: PNCDIM does the recv/xmit OTA, and if it works, sets
+	 flags in the next few instructions indicating a receive or
+	 transmit is pending.  This is a race condition for the
+	 emulator, because it is ready to interrupt immediately
+	 following a xmit OTA.  This inhcount hack is to make sure
+	 that the instructions in PNCDIM to set the flags are executed
+	 before devpnc can interrupt.
+      */
+
+      gvp->inhcount += 10;      /* make sure PNCDIM flags get set */
+      devpoll[device] = 10;     /* quick poll following recv */
 
     } else if (func == 015) {   /* initiate xmit, dma chan in A */
+      if (!(pncstat & PNCNSCONNECTED)) {
+	return;                 /* yes, return and don't skip */
+      }
       if (xmitstat & PNCXSBUSY) {  /* already busy? */
-	warn("pnc: xmit when already busy!");
+	warn("pnc: xmit when already busy ignored");
 	return;                 /* yes, return and don't skip */
       }
       IOSKIP;
@@ -910,19 +1062,12 @@ int devpnc (int class, int func, int device) {
       dmaword = *xmit.memp;
       xmit.toid = dmaword >> 8;
       xmit.fromid = dmaword & 0xFF;
-      TRACE(T_INST|T_RIO, " xmit: toid=%d, fromid=%d\n", xmit.toid, xmit.fromid);
-
-      /* check for unreasonable situations */
-
-      if (xmit.fromid != myid) {
-	printf("PNC: xmit fromid=0x%02x != myid=0x%02x\n", xmit.fromid, myid);
-	fatal(NULL);
-      }
+      TRACE(T_INST|T_RIO, " xmit: toid=%d, fromid=%d, myid=%d\n", xmit.toid, xmit.fromid, myid);
 
       /* bump the DMA registers to show the transfer */
 
-      regs.sym.regdmx[xmit.dmareg] += xmit.dmanw;   /* bump xmit count */
-      regs.sym.regdmx[xmit.dmareg+1] += xmit.dmanw; /* and address */
+      regs.sym.regdmx[xmit.dmareg] += xmit.dmanw<<4;   /* bump xmit count */
+      regs.sym.regdmx[xmit.dmareg+1] += xmit.dmanw;    /* and address */
 
       /* the Primenet startup code sends a single ring packet from me
 	 to me, to verify that my node id is unique.  This packet must
@@ -937,8 +1082,9 @@ int devpnc (int class, int func, int device) {
 
       if (xmit.toid == myid) {
 	if (rcv.state == PNCBSRDY && rcv.dmanw >= xmit.dmanw) {
+	  TRACE(T_INST|T_RIO, " xmit: loopback, rcv.memp=%o/%o\n", ((int)(rcv.memp))>>16, ((int)(rcv.memp))&0xFFFF);
 	  memcpy(rcv.memp, xmit.memp, xmit.dmanw*2);
-	  regs.sym.regdmx[rcv.dmareg] += xmit.dmanw;     /* bump recv count */
+	  regs.sym.regdmx[rcv.dmareg] += xmit.dmanw<<4;  /* bump recv count */
 	  regs.sym.regdmx[rcv.dmareg+1] += xmit.dmanw;   /* and address */
 	  pncstat |= PNCNSRCVINT;             /* set recv interrupt bit */
 	  rcvstat = 0;                        /* set receive status (no ack!) */
@@ -960,9 +1106,10 @@ int devpnc (int class, int func, int device) {
 
 	xmitstat = pncxmit(&xmit);
       }
-      pncstat |= PNCNSXMITINT;                      /* set xmit int */
-      pncstat |= PNCNSTOKEN;                        /* and token seen */
-      goto intrexit;
+      pncstat |= PNCNSXMITINT;       /* set xmit interrupt */
+      pncstat |= PNCNSTOKEN;         /* and token seen */
+      gvp->inhcount += 10;           /* make sure PNCDIM flags get set */
+      devpoll[device] = 10;          /* quick poll following xmit */
 
     } else if (func == 016) {   /* set interrupt vector */
       pncvec = crs[A];
@@ -987,12 +1134,12 @@ int devpnc (int class, int func, int device) {
     time(&timenow);
     pncaccept(timenow);   /* accept 1 new connection each poll */
     pncconnect(timenow);  /* try to connect to a disconnected node */
+    if (rcv.state = PNCBSRDY)
+      pncrecv(timenow);     /* try to read from a node */
 
     /* set default repoll and take any pending interrupt */
 
     devpoll[device] = PNCPOLL*gvp->instpermsec;
-
-intrexit:
     if (enabled && (pncstat & 0xC000)) {
       if (gvp->intvec == -1)
 	gvp->intvec = pncvec;
