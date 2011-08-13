@@ -538,10 +538,11 @@ typedef struct {
   FILE *tracefile;              /* trace.log file */
   int traceflags;               /* each bit is a trace flag */
   int savetraceflags;
-  int traceuser;                /* OWNERL to trace */
-  int traceseg;                 /* RPH segment # to trace */
-  int numtraceprocs;            /* # of procedures we're tracing */
+  short traceuser;              /* OWNERL to trace */
+  short traceseg;               /* RPH segment # to trace */
+  short numtraceprocs;          /* # of procedures we're tracing */
   unsigned long traceinstcount; /* only trace if instcount > this */
+  short tracetriggered;         /* Ctrl-T toggles tracing */
 #endif
 
 } gv_t;
@@ -4384,6 +4385,7 @@ main (int argc, char **argv) {
   gvp->traceseg = 0;
   gvp->numtraceprocs = 0;
   gvp->traceinstcount = 0;
+  gvp->tracetriggered = 1;
 #endif
   invalidate_brp();
   eap = &gvp->brp[0];
@@ -4587,6 +4589,8 @@ main (int argc, char **argv) {
 	  gvp->traceflags |= T_TERM;
 	else if (strcmp(argv[i],"rio") == 0)
 	  gvp->traceflags |= T_RIO;
+	else if (strcmp(argv[i],"off") == 0)
+	  gvp->tracetriggered = 0;
 	else if (strcmp(argv[i],"lm") == 0)
 	  gvp->traceflags |= T_LM;
 	else if (strcmp(argv[i],"put") == 0)
@@ -4645,7 +4649,7 @@ main (int argc, char **argv) {
   /* finish setting up tracing after all options are read, ie, maps */
 
 #ifndef NOTRACE
-  TRACEA("Trace flags = 04x%x\n", gvp->traceflags);
+  TRACEA("Trace flags = 0x%x\n", gvp->traceflags);
   gvp->savetraceflags = gvp->traceflags;
   gvp->traceflags = 0;
   if (gvp->traceuser != 0)
@@ -4889,7 +4893,8 @@ fetch:
 
 #ifndef NOTRACE
   gvp->traceflags = 0;
-  if ((gvp->instcount >= gvp->traceinstcount) &&
+  if (gvp->tracetriggered &&
+      (gvp->instcount >= gvp->traceinstcount) &&
       (TRACEUSER && ((gvp->traceseg == 0) || (gvp->traceseg == (RPH & 0xFFF))))
       )
     gvp->traceflags = gvp->savetraceflags;
@@ -5162,7 +5167,7 @@ xec:
        x=1, opcode='15 03 -> jsx (RV) (aka '35 03)
   */
 
-  TRACE(T_EAR|T_EAV, " opcode=%#05o, i=%o, x=%o\n", ((inst & 036000) != 032000) ? ((inst & 036000) >> 4) : ((inst & 076000) >> 4), inst & 0100000, ((inst & 036000) != 032000) ? (inst & 040000) : 0);
+  TRACE(T_EAR|T_EAV, " op=%#05o, i=%o, x=%o, mode=%d\n", ((inst & 036000) != 032000) ? ((inst & 036000) >> 4) : ((inst & 076000) >> 4), inst & 0100000, ((inst & 036000) != 032000) ? (inst & 040000) : 0, (crs[KEYS] & 016000) >> 10);
 
   if ((crs[KEYS] & 016000) == 014000) {   /* 64V mode */
     ea = ea64v(inst, earp);

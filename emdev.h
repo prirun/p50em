@@ -482,16 +482,11 @@ readasr:
 	}
 #ifndef NOTRACE
 	if (ch == '') {
-	  printf("Trace owner = %o/%o\n", crs[OWNER], crs[OWNERL]);
-	  if (gvp->savetraceflags == 0) {
+	  gvp->tracetriggered = !gvp->tracetriggered;
+	  if (gvp->tracetriggered) {
 	    TRACEA("\nTRACE ENABLED:\n\n");
-	    gvp->savetraceflags = ~T_MAP;
-	    gvp->savetraceflags = T_GET;
-	    gvp->savetraceflags = ~0;
-	    gvp->savetraceflags = T_FLOW|T_FAULT;
 	  } else {
 	    TRACEA("\nTRACE DISABLED:\n\n");
-	    gvp->savetraceflags = 0;
 	  }
 	  fflush(gvp->tracefile);
 	  goto readasr;
