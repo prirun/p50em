@@ -9,16 +9,16 @@ em:
 
 
 debug:
-	cc -arch ppc -DNOREGS -g -O0 -DNOTRACE -DFAST -DNOMEM -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DNOREGS -g -O0 -DNOTRACE -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 
 trace:
-	cc -arch ppc -DNOREGS -g -O0 -DFAST -DNOMEM -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
 fixed:
-	cc -arch ppc -DFIXEDCLOCK -DNOIDLE -DNOREGS -g -O0 -DFAST -DNOMEM -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DFIXEDCLOCK -DNOIDLE -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 

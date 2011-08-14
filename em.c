@@ -5052,6 +5052,9 @@ fetch:
       regs.sym.pswpb = RP & 0x7FFFFFFF;
       regs.sym.pswkeys = crs[KEYS];
 
+      /* NOTE: this code doesn't match the description on page B-21 of
+	 the Sys Arch Guide 2nd Ed. for Standard Interrupt Mode */
+
       if (crs[MODALS] & 010) {              /* PX enabled */
 	//gvp->traceflags = ~T_MAP;
 	newkeys(014000);

@@ -227,7 +227,7 @@
 #define PNCXSACK       0x8000  /* ACK'd */
   //#define PNCXSMACK      0x4000  /* multiple ACK */
 #define PNCXSWACK      0x2000  /* WACK'd */
-  //#define PNCXSNAK       0x1000  /* NAK'd */
+#define PNCXSNAK       0x1000  /* NAK'd (no node ack'd packet) */
   //#define PNCXSABPE      0x0200  /* ack byte parity error */
   //#define PNCXSABCE      0x0100  /* ack byte check error */
   //#define PNCXSXBPE      0x0080  /* transmit buffer parity error */
@@ -235,13 +235,13 @@
   //#define PNCXSNORET     0x0020  /* packet didn't return */
   //#define PNCXSRETBAD    0x0010  /* returned w/Ack byte or CRC error */
   //#define PNCXSRETRYFAIL 0x0008  /* retry not successful */
-  //#define PNCXSRETRIES   0x0007  /* retry count */
+  //#define PNCXSRETRIES   0x0007  /* retry count (3 bits) */
 
 #define MINACCEPTTIME 1      /* wait 1 second before accepting new connections */
 #define MAXACCEPTTIME 5      /* only wait 5 seconds to receive uid */
-#define MINCONNTIME 30       /* wait 30 seconds between connect attempts */
+#define MINCONNTIME 30       /* wait 30 seconds between connects to 1 node */
 #define MAXPNCBYTES 2048     /* max of 2048 byte packets */
-#define MAXPNCWORDS 1024     /* max of 1024 word packets */
+#define MAXPNCWORDS 1024     /* that's 1024 words */
 #define MAXPKTBYTES (MAXPNCBYTES+4)     /* adds 16-bit length word to each end */
 
 #define MAXNODEID 254        /* 0 is a dummy, 255 is broadcast */
@@ -263,40 +263,33 @@ static int pncfd;                 /* socket fd for all PNC network connections *
 
 static struct {             /* node info for each node in my network */
   short cstate;             /* connection state (see below) */
-  short fd;                 /* socket fd for this node, -1 if unconnected */
-  char  host[MAXHOSTLEN+1]; /* host name/address of the remote node */
-  short port;               /* emulator network port on the remote node */
-  char  uid[MAXUIDLEN+1];   /* unique ID/password for this node (16 + null) */
+  short fd;                 /* socket fd, -1 if unconnected */
+  char  host[MAXHOSTLEN+1]; /* TCP/IP host name/address */
+  short port;               /* emulator network port */
+  char  uid[MAXUIDLEN+1];   /* unique ID/password (+ null byte) */
   unsigned char rcvpkt[MAXPKTBYTES];/* receive packet w/leading + trailing length */
   short rcvlen;             /* length received so far */
-  time_t conntime;          /* time of last connect attempt */
+  time_t conntime;          /* time of last connect */
 } ni[MAXNODEID+1];          /* ring id 0-254 (255 is broadcast) */
 
 /* PNC connection states.  This is a bit complex because the socket
    operations are all non-blocking and the unique ID has to be sent
    after connecting */
 
-#define PNCCSNONE 0           /* not configured */
+#define PNCCSNONE 0           /* not configured in ring.cfg */
 #define PNCCSDISC 1           /* not connected */
 #define PNCCSCONN 2           /* connected */
 #define PNCCSAUTH 3           /* unique ID / password sent */
 
-/* array to map socket fd's to node id's for accessing the ni
-   structure.  Not great programming, because the host OS could
-   choose to use large fd's, which will cause a runtime error */
+/* xmit/recv buffer states and buffers.  These must be static because
+   they also contain the dma register settings set with an OTA, and
+   can be read later with an INA.  The state field is really only
+   important for the recv buffer, to indicate there is a receive
+   pending on the Prime.  For transmits, the packet is copied into the
+   socket buffer in 1 devpnc call, so there are no transmit states. */
 
-#define MAXFD 1023
-#define FDMAPSIZE MAXFD+1
-
-static short fdnimap[FDMAPSIZE];
-
-/* xmit/recv buffer states and buffers.  The recv buffer must be
-   static since data may be received over multiple devpnc calls.  The
-   xmit buffer is on the stack: we copy whole packets into the socket
-   buffer in 1 devpnc call */
-
-#define PNCBSIDLE 0          /* initial state: no xmit or recv */
-#define PNCBSRDY  1          /* ready to recv or xmit */
+#define PNCBSIDLE 0          /* initial state: no recv pending */
+#define PNCBSRDY  1          /* recv is pending */
 
 typedef struct {
   short toid, fromid;
@@ -307,8 +300,7 @@ typedef struct {
   unsigned short *memp;      /* ptr to Prime memory */
   unsigned char iobuf[MAXPKTBYTES];
 } t_dma;
-static t_dma rcv;
-static t_dma xmit;
+static t_dma rcv, xmit;
 
 /* return pointer to a hex-formatted uid */
 
@@ -362,7 +354,6 @@ unsigned short pncdisc(nodeid) {
     fprintf(stderr, "devpnc: disconnect from node %d\n", nodeid);
     TRACE(T_RIO, " pncdisc: disconnect from node %d\n", nodeid);
     close(ni[nodeid].fd);
-    fdnimap[ni[nodeid].fd] = -1;
     ni[nodeid].cstate = PNCCSDISC;
     ni[nodeid].rcvlen = 0;
     ni[nodeid].fd = -1;
@@ -400,8 +391,6 @@ pncaccept(time_t timenow) {
   char uid[MAXUIDLEN+1];
   int i,n;
 
-  if (!(pncstat & PNCNSCONNECTED))
-    return;
   if (fd == -1) {
     if (timenow-accepttime < MINACCEPTTIME)
       return;
@@ -412,8 +401,11 @@ pncaccept(time_t timenow) {
 	perror("accept error for PNC");
       return;
     }
-    if (fd >= MAXFD)
-      fatal("New connection fd is too big");
+    if (!(pncstat & PNCNSCONNECTED)) {
+      close(fd);
+      TRACE(T_RIO, " not connected, closed new PNC connection, fd %d\n", fd);
+      return;
+    }
     TRACE(T_RIO, " new PNC connection, fd %d\n", fd);
   }
 
@@ -461,7 +453,6 @@ pncaccept(time_t timenow) {
   ni[i].cstate = PNCCSAUTH;
   ni[i].rcvlen = 0;
   ni[i].fd = fd;
-  fdnimap[fd] = i;
   fd = -1;
   return;
 
@@ -614,15 +605,19 @@ unsigned short pncxmit1(short nodeid, t_dma *iob) {
 
 unsigned short pncxmit(t_dma *iob) {
   short  i;
+  unsigned short xstat;
 
+  xstat = PNCXSNAK;
   if ((*iob).toid == 255) {
     for (i=1; i<=MAXNODEID; i++)
       if (i != myid)
-	xmitstat |= pncxmit1(i, iob);
+	xstat |= pncxmit1(i, iob);
   } else {
-    xmitstat |= pncxmit1((*iob).toid, iob);
+    xstat |= pncxmit1((*iob).toid, iob);
   }
-  return xmitstat;
+  if (xstat != PNCXSNAK)    /* if anyone modified it, don't NAK */
+    xstat &= ~PNCXSNAK;
+  return xstat;
 }
 
 /* do socket reads on all connections until 1 connection has a
@@ -683,7 +678,6 @@ pncrecv1(int nodeid) {
 
   TRACE(T_RIO, " pncrecv1: pkt complete\n");
   pncdumppkt(ni[nodeid].rcvpkt, ni[nodeid].rcvlen);
-  rcvstat = 0;
   nw = (pktlen-4)/2;
   if (nw > rcv.dmanw) {
     fprintf(stderr, "devpnc: node %d, packet truncated: %d > %d\n", nodeid, nw, rcv.dmanw);
@@ -758,8 +752,6 @@ int devpnc (int class, int func, int device) {
     myid = 0;                 /* set initial node id */
     enabled = 0;
     pncfd = -1;
-    for (i=0; i<FDMAPSIZE; i++)
-      fdnimap[i] = -1;
     for (i=0; i<=MAXNODEID; i++) {
       ni[i].cstate = PNCCSNONE;
       ni[i].fd = -1;
@@ -894,7 +886,6 @@ int devpnc (int class, int func, int device) {
       for (i=0; i<=MAXNODEID; i++) {
 	fd = ni[i].fd;
 	if (fd >= 0) {
-	  fdnimap[fd] = -1;
 	  close(fd);
 	  ni[i].fd = -1;
 	}
@@ -914,15 +905,16 @@ int devpnc (int class, int func, int device) {
     } else if (func == 04) {    /* OCP '0704 ack xmit (clear xmit int) */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - ack xmit int\n", func, device);
       pncstat &= ~PNCNSXMITINT;   /* clear "xmit interrupting" */
-      pncstat &= ~PNCNSTOKEN; /* clear "token detected" */
+      pncstat &= ~PNCNSTOKEN;     /* clear "token detected" */
       xmitstat = 0;
-      xmit.state = PNCBSIDLE;
 
     } else if (func == 05) {    /* OCP '0705 set PNC into "delay" mode */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - set delay mode\n", func, device);
 
     } else if (func == 010) {   /* OCP '0710 stop xmit in progress */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - stop xmit\n", func, device);
+      xmitstat = 0;
+      pncstat &= ~PNCNSTOKEN;     /* clear "token detected" */
 
     } else if (func == 011) {   /* OCP '0711 stop recv in progress */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - stop recv\n", func, device);
@@ -986,7 +978,13 @@ int devpnc (int class, int func, int device) {
       crs[A] = xmitstat;
       IOSKIP;
 
-      /* I don't understand these next two at all, but prmnt1 T&M wants them this way... */
+      /* these next two are mostly bogus: prmnt1 T&M wants them this
+	 way because it puts the PNC in diagnostic mode, disables
+	 transmit and receive, then does transmit and receive
+	 operations to see how the DMA registers are affected.  I
+	 couldn't get very far with this T&M (couldn't complete test
+	 1) because it is so specific to the exact states the PNC
+	 hardware moves through. */
 
     } else if (func == 014) {   /* read recv DMX channel */
       TRACE(T_INST|T_RIO, " INA '%02o%02o - get recv DMX chan '%o 0x%04x\n", func, device, rcv.dmachan, rcv.dmachan);
@@ -1039,7 +1037,8 @@ int devpnc (int class, int func, int device) {
 	 emulator, because it is ready to interrupt immediately
 	 following a xmit OTA.  This inhcount hack is to make sure
 	 that the instructions in PNCDIM to set the flags are executed
-	 before devpnc can interrupt.
+	 before devpnc can interrupt, because if we interrupt before
+	 the flags are set, PNCDIM ignores the receive/transmit.
       */
 
       gvp->inhcount += 10;      /* make sure PNCDIM flags get set */
@@ -1087,11 +1086,9 @@ int devpnc (int class, int func, int device) {
 	  regs.sym.regdmx[rcv.dmareg] += xmit.dmanw<<4;  /* bump recv count */
 	  regs.sym.regdmx[rcv.dmareg+1] += xmit.dmanw;   /* and address */
 	  pncstat |= PNCNSRCVINT;             /* set recv interrupt bit */
-	  rcvstat = 0;                        /* set receive status (no ack!) */
-	  xmitstat = 0;                       /* same for transmit status */
 	  rcv.state = PNCBSIDLE;              /* no longer ready to recv */
 	} else {
-	  xmitstat = PNCXSWACK;               /* no receive, wack it */
+	  xmitstat |= PNCXSWACK;              /* no receive, wack it */
 	}
       } else {                                /* regular transmit */
 
@@ -1104,7 +1101,7 @@ int devpnc (int class, int func, int device) {
 
 	/* send packet, set transmit interrupt, return */
 
-	xmitstat = pncxmit(&xmit);
+	xmitstat |= pncxmit(&xmit);
       }
       pncstat |= PNCNSXMITINT;       /* set xmit interrupt */
       pncstat |= PNCNSTOKEN;         /* and token seen */
