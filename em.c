@@ -536,6 +536,8 @@ typedef struct {
    TRACEUSER is a macro that is true if the current user is being traced
 */
 
+#define MAXRPQ 8
+
   FILE *tracefile;              /* trace.log file */
   int traceflags;               /* each bit is a trace flag */
   int savetraceflags;
@@ -544,6 +546,8 @@ typedef struct {
   short numtraceprocs;          /* # of procedures we're tracing */
   unsigned long traceinstcount; /* only trace if instcount > this */
   short tracetriggered;         /* Ctrl-T toggles tracing */
+  short tracerpqx;              /* rpq index to store next RP */
+  unsigned int tracerpq[MAXRPQ];/* last 16 locations executed */
 #endif
 
 } gv_t;
@@ -1886,6 +1890,15 @@ static void fatal(char *msg) {
   }
 
 #ifndef NOTRACE
+  printf("RP queue:");
+  i = gvp->tracerpqx;
+  while(1) {
+    printf(" %o/%o", gvp->tracerpq[i]>>16, gvp->tracerpq[i]&0xFFFF);
+    i = (i+1) & (MAXRPQ-1);
+    if (i == gvp->tracerpqx)
+      break;
+  }
+  printf("\n");
   printf("STLB calls: %d  misses: %d  hitrate: %5.2f%%\n", gvp->mapvacalls, gvp->mapvamisses, (double)(gvp->mapvacalls-gvp->mapvamisses)/gvp->mapvacalls*100.0);
   printf("Supercache calls: %d  misses: %d  hitrate: %5.2f%%\n", gvp->supercalls, gvp->supermisses, (double)(gvp->supercalls-gvp->supermisses)/gvp->supercalls*100.0);
 #endif
@@ -4378,8 +4391,10 @@ main (int argc, char **argv) {
 
   /* initialize global variables */
 
-  if (sizeof(gv) > 16*1024)
+  if (sizeof(gv) > 16*1024) {
     printf("em: size of global vars = %lu\n", sizeof(gv));
+    fatal(NULL);
+  }
 
   gvp = &gv;
   gvp->physmem = physmem;
@@ -4400,6 +4415,9 @@ main (int argc, char **argv) {
   gvp->numtraceprocs = 0;
   gvp->traceinstcount = 0;
   gvp->tracetriggered = 1;
+  gvp->tracerpqx = 0;
+  for (i=0; i<MAXRPQ; i++)
+    gvp->tracerpq[i] = 0;
 #endif
   invalidate_brp();
   eap = &gvp->brp[0];
@@ -4921,6 +4939,8 @@ fetch:
       (TRACEUSER && ((gvp->traceseg == 0) || (gvp->traceseg == (RPH & 0xFFF))))
       )
     gvp->traceflags = gvp->savetraceflags;
+  gvp->tracerpq[gvp->tracerpqx] = RP;
+  gvp->tracerpqx = (gvp->tracerpqx+1) & (MAXRPQ-1);
 #endif
 
   /* hack to activate trace in 32I mode */
