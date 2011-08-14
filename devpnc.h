@@ -1,25 +1,26 @@
 /* PNC (ring net) device handler
 
-  On a real Prime ring network, each node has a unique node id from 1
+  On a real Prime ring network, each node has a unique node id from 0
   to 254.  The node id is configured with software and stored into the
   PNC during network initialization.  The node id of a master-cleared
-  PNC is zero, and Primos may tell a PNC to connect to the ring with
-  node id 0 so that the PNC will regenerate packets ("transceive") as
-  they pass by.  The reason is that when a PNC disconnects from the
-  ring, the segment between its two neighbors becomes longer, and
-  there is a limit to the distance between active nodes.  Since no
+  PNC is 0, and Primos may tell a PNC to connect to the ring with node
+  id 0 so that the PNC will regenerate packets ("transceive") as they
+  pass by.  The reason is that when a PNC disconnects from the ring,
+  the segment between its two neighbors becomes longer, and there is a
+  limit to the distance between active nodes.  Since in practice, no
   node ever has a real node id of zero, this PNC will not ack or
-  receive any packets.  The broadcast node id is 255 (all PNCs accept
-  packets with this "to" id).  In practice, CONFIG_NET limits the node
-  id to 247.  When a node starts, it sends a message to itself.  If
-  any system acks this packet, it means the node id is already in use
-  and the new node will disconnect from the ring.  Since all systems
-  in a ring have to be physically cabled together, there was usually a
-  common network administration to ensure that no two nodes had the
-  same node id.  Prime rings were often logically segmented: nodes A,
-  B, C, D in a physical ring might be configured as two logical
-  networks: AB and CD.  But all 4 systems must still have unique node
-  ids since they are in the same physical ring.
+  receive any packets.  Node id 0 is also used in the T&M test prmnt1.
+  The broadcast node id is 255 (all PNCs accept packets with this "to"
+  id).  In practice, CONFIG_NET limits the node id to 247.  When a
+  node starts, it sends a message to itself.  If any system acks this
+  packet, it means the node id is already in use and the new node will
+  disconnect from the ring.  Since all systems in a ring have to be
+  physically cabled together, there was usually a common network
+  administration to ensure that no two nodes had the same node id.
+  Prime rings were often logically segmented: nodes A, B, C, D in a
+  physical ring might be configured as two logical networks: AB and
+  CD.  But all 4 systems must still have unique node ids since they
+  are in the same physical ring.
 
   The emulation of the PNC controller uses TCP/IP and sockets to
   communicate with other emulators.  The main differences are unique
@@ -210,7 +211,8 @@
 #define PNCNSTOKEN         0x0100  /* bit 8, token (only after xmit EOR) */
 #define PNCNSNODEIDMASK    0x00FF  /* bits 9-16 node-id mask */
 
-/* receive status word: first 8 bits are the "ACK byte" */
+/* receive status word: first 8 bits are the "ACK byte"; PNCDIM
+   expects all bits except busy to be zero for a good receive */
 
   //#define PNCRSACK       0x8000  /* ACK'd */
   //#define PNCRSMACK      0x4000  /* multiple ACK */
@@ -674,7 +676,7 @@ pncrecv1(int nodeid) {
     return 0;
   }
 
-  /* send completed packet back to the Prime */
+  /* send completed packet to the Prime */
 
   TRACE(T_RIO, " pncrecv1: pkt complete\n");
   pncdumppkt(ni[nodeid].rcvpkt, ni[nodeid].rcvlen);
@@ -684,6 +686,11 @@ pncrecv1(int nodeid) {
     nw = rcv.dmanw;
     rcvstat |= PNCRSEOR;
   }
+
+  /* modify to/from word to allow me to be in multiple rings */
+
+  
+  *(unsigned short *)(ni[nodeid].rcvpkt+2) = (myid<<8) | nodeid;
   memcpy(rcv.memp, ni[nodeid].rcvpkt+2, nw*2);
   regs.sym.regdmx[rcv.dmareg] += nw<<4;  /* bump recv count */
   regs.sym.regdmx[rcv.dmareg+1] += nw;   /* and address */
@@ -881,7 +888,7 @@ int devpnc (int class, int func, int device) {
 
   case 0:
 
-    if (func == 00) {    /* OCP '0700 - disconnect */
+    if (func == 00) {    /* OCP '0007 - disconnect */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - disconnect\n", func, device);
       for (i=0; i<=MAXNODEID; i++) {
 	fd = ni[i].fd;
@@ -895,52 +902,52 @@ int devpnc (int class, int func, int device) {
       xmitstat = PNCXSBUSY;
       pncstat &= PNCNSNODEIDMASK;
 
-    } else if (func == 01) {    /* OCP '0701 connect to the ring */
+    } else if (func == 01) {    /* OCP '0107 connect to the ring */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - connect\n", func, device);
       pncstat |= PNCNSCONNECTED;
 
-    } else if (func == 02) {    /* OCP '0702 inject a token */
+    } else if (func == 02) {    /* OCP '0207 inject a token */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - inject token\n", func, device);
 
-    } else if (func == 04) {    /* OCP '0704 ack xmit (clear xmit int) */
+    } else if (func == 04) {    /* OCP '0407 ack xmit (clear xmit int) */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - ack xmit int\n", func, device);
       pncstat &= ~PNCNSXMITINT;   /* clear "xmit interrupting" */
       pncstat &= ~PNCNSTOKEN;     /* clear "token detected" */
-      xmitstat = 0;
+      xmitstat = 0;               /* clear xmit busy */
 
-    } else if (func == 05) {    /* OCP '0705 set PNC into "delay" mode */
+    } else if (func == 05) {    /* OCP '0507 set PNC into "delay" mode */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - set delay mode\n", func, device);
 
-    } else if (func == 010) {   /* OCP '0710 stop xmit in progress */
+    } else if (func == 010) {   /* OCP '1007 stop xmit in progress */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - stop xmit\n", func, device);
-      xmitstat = 0;
+      xmitstat = 0;               /* clear xmit busy */
       pncstat &= ~PNCNSTOKEN;     /* clear "token detected" */
 
-    } else if (func == 011) {   /* OCP '0711 stop recv in progress */
+    } else if (func == 011) {   /* OCP '1107 stop recv in progress */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - stop recv\n", func, device);
-      rcvstat = 0;
-      rcv.state = PNCBSIDLE;
+      rcvstat = 0;                /* clear recv busy */
+      rcv.state = PNCBSIDLE;      /* need a new DMA setup */
 
-    } else if (func == 012) {   /* OCP '0712 set normal mode */
+    } else if (func == 012) {   /* OCP '1207 set normal mode */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - set normal mode\n", func, device);
 
-    } else if (func == 013) {   /* OCP '0713 set diagnostic mode */
+    } else if (func == 013) {   /* OCP '1307 set diagnostic mode */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - set diag mode\n", func, device);
 
-    } else if (func == 014) {   /* OCP '0714 ack receive (clear rcv int) */
+    } else if (func == 014) {   /* OCP '1407 ack receive (clear rcv int) */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - ack recv int\n", func, device);
-      rcvstat = 0;
+      rcvstat = 0;                /* clear recv busy */
       pncstat &= ~PNCNSRCVINT;
 
-    } else if (func == 015) {   /* OCP '0715 set interrupt mask (enable int) */
+    } else if (func == 015) {   /* OCP '1507 set interrupt mask (enable int) */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - enable int\n", func, device);
       enabled = 1;
 
-    } else if (func == 016) {   /* OCP '0716 clear interrupt mask (disable int) */
+    } else if (func == 016) {   /* OCP '1607 clear interrupt mask (disable int) */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - disable int\n", func, device);
       enabled = 0;
 
-    } else if (func == 017) {   /* OCP '0717 initialize */
+    } else if (func == 017) {   /* OCP '1707 initialize */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - initialize\n", func, device);
       devpnc(0, 0, 7);   /* disconnect */
       pncvec = 0;
@@ -1021,36 +1028,24 @@ int devpnc (int class, int func, int device) {
 
     } else if (func == 014) {   /* initiate recv, dma chan in A */
       if (!(pncstat & PNCNSCONNECTED)) {
-	return;                 /* yes, return and don't skip */
+	break;                  /* yes, return and don't skip */
       }
       if (rcvstat & PNCRSBUSY) {  /* already busy? */
 	warn("pnc: recv when already busy ignored");
-	return;                 /* yes, return and don't skip */
+	break;                  /* yes, return and don't skip */
       }
       IOSKIP;
       rcvstat = PNCRSBUSY;        /* set receive busy */
       pncinitdma(&rcv, "rcv");
-
-      /* NOTE: PNCDIM does the recv/xmit OTA, and if it works, sets
-	 flags in the next few instructions indicating a receive or
-	 transmit is pending.  This is a race condition for the
-	 emulator, because it is ready to interrupt immediately
-	 following a xmit OTA.  This inhcount hack is to make sure
-	 that the instructions in PNCDIM to set the flags are executed
-	 before devpnc can interrupt, because if we interrupt before
-	 the flags are set, PNCDIM ignores the receive/transmit.
-      */
-
-      gvp->inhcount += 10;      /* make sure PNCDIM flags get set */
       devpoll[device] = 10;     /* quick poll following recv */
 
     } else if (func == 015) {   /* initiate xmit, dma chan in A */
       if (!(pncstat & PNCNSCONNECTED)) {
-	return;                 /* yes, return and don't skip */
+	break;                  /* yes, return and don't skip */
       }
       if (xmitstat & PNCXSBUSY) {  /* already busy? */
 	warn("pnc: xmit when already busy ignored");
-	return;                 /* yes, return and don't skip */
+	break;                  /* yes, return and don't skip */
       }
       IOSKIP;
       xmitstat = PNCXSBUSY;
@@ -1085,7 +1080,7 @@ int devpnc (int class, int func, int device) {
 	  memcpy(rcv.memp, xmit.memp, xmit.dmanw*2);
 	  regs.sym.regdmx[rcv.dmareg] += xmit.dmanw<<4;  /* bump recv count */
 	  regs.sym.regdmx[rcv.dmareg+1] += xmit.dmanw;   /* and address */
-	  pncstat |= PNCNSRCVINT;             /* set recv interrupt bit */
+	  pncstat |= PNCNSRCVINT;             /* set recv interrupt */
 	  rcv.state = PNCBSIDLE;              /* no longer ready to recv */
 	} else {
 	  xmitstat |= PNCXSWACK;              /* no receive, wack it */
@@ -1105,7 +1100,6 @@ int devpnc (int class, int func, int device) {
       }
       pncstat |= PNCNSXMITINT;       /* set xmit interrupt */
       pncstat |= PNCNSTOKEN;         /* and token seen */
-      gvp->inhcount += 10;           /* make sure PNCDIM flags get set */
       devpoll[device] = 10;          /* quick poll following xmit */
 
     } else if (func == 016) {   /* set interrupt vector */
@@ -1131,7 +1125,7 @@ int devpnc (int class, int func, int device) {
     time(&timenow);
     pncaccept(timenow);   /* accept 1 new connection each poll */
     pncconnect(timenow);  /* try to connect to a disconnected node */
-    if (rcv.state = PNCBSRDY)
+    if (rcv.state == PNCBSRDY)
       pncrecv(timenow);     /* try to read from a node */
 
     /* set default repoll and take any pending interrupt */
