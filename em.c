@@ -6628,12 +6628,18 @@ d_bdx:  /* 0140734 */
       if (delayusec > 1000) {
 	if (gettimeofday(&tv0, NULL) != 0)
 	  fatal("em: gettimeofday 0 failed");
+
+	/* NOTE: on OSX, a signal (sigio for pnc) will interrupt usleep */
+
 	usleep(delayusec);
 	if (gettimeofday(&tv1, NULL) != 0)
 	  fatal("em: gettimeofday 1 failed");
 	actualmsec = (tv1.tv_sec-tv0.tv_sec-1)*1000 + (tv1.tv_usec+1000000-tv0.tv_usec)/1000;
-	// TRACEA(" BDX loop at %o/%o, remainder=%d, owner=%o, utempl=%d, wanted %d us, got %d ms\n", gvp->prevpc>>16, gvp->prevpc&0xffff, crs[X], crs[OWNERL], utempl, delayusec, actualusec);
-
+#if 0
+	if (actualmsec > delayusec*1.2/1000) {
+	  TRACEA(" BDX loop at %o/%o, remainder=%d, owner=%o, utempl=%d, wanted %d ms, got %d ms\n", gvp->prevpc>>16, gvp->prevpc&0xffff, crs[X], crs[OWNERL], utempl, delayusec/1000, actualmsec);
+	}
+#endif
 	/* do timer bookkeeping that would have occurred if we had 
 	   actually looped on BDX utempl times */
 

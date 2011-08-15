@@ -189,7 +189,7 @@
 
 #ifndef HOBBY
 
-/* PNC poll rate is 1/10th of a second */
+/* PNC poll rate in ms, mostly for connecting to new nodes */
 
 #define PNCPOLL 100
 
@@ -304,6 +304,15 @@ typedef struct {
 } t_dma;
 static t_dma rcv, xmit;
 
+static int sawsigio=0, olddevpoll;
+
+void pnchavedata(int s) {
+  if (sawsigio) return;
+  olddevpoll = devpoll[7];
+  devpoll[7] = 1;
+  sawsigio = 1;
+}
+
 /* return pointer to a hex-formatted uid */
 
 char * pnchexuid(char * uid) {
@@ -371,14 +380,22 @@ pncinitfd(int fd) {
     perror("unable to get ts flags for PNC");
     fatal(NULL);
   }
-  fdflags |= O_NONBLOCK;
+  optval = MAXPKTBYTES;
+  if (setsockopt(fd, SOL_SOCKET, SO_SNDLOWAT, &optval, sizeof(optval))) {
+    perror("setsockopt 2 failed for PNC");
+    fatal(NULL);
+  }
+  if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &optval, sizeof(optval))) {
+    perror("setsockopt 3 failed for PNC");
+    fatal(NULL);
+  }
+  fdflags |= O_NONBLOCK+O_ASYNC;
   if (fcntl(fd, F_SETFL, fdflags) == -1) {
     perror("unable to set fdflags for PNC");
     fatal(NULL);
   }
-  optval = MAXPKTBYTES;
-  if (setsockopt(fd, SOL_SOCKET, SO_SNDLOWAT, &optval, sizeof(optval))) {
-    perror("setsockopt failed for PNC");
+  if (fcntl(fd, F_SETOWN, getpid()) == -1) {
+    perror("unable to SETOWN for PNC");
     fatal(NULL);
   }
 }
@@ -872,6 +889,10 @@ int devpnc (int class, int func, int device) {
       perror("setsockopt failed for PNC listen");
       fatal(NULL);
     }
+    if (setsockopt(pncfd, SOL_SOCKET, SO_NOSIGPIPE, &optval, sizeof(optval))) {
+      perror("setsockopt 1 failed for PNC");
+      fatal(NULL);
+    }
     addr.sin_family = AF_INET;
     addr.sin_port = htons(nport);
     addr.sin_addr.s_addr = INADDR_ANY;
@@ -885,6 +906,12 @@ int devpnc (int class, int func, int device) {
     }
     TRACE(T_RIO, "PNC configured\n");
     devpoll[device] = PNCPOLL*gvp->instpermsec;
+#ifdef ASYNCIO
+    if (signal(SIGIO, pnchavedata) == SIG_ERR) {
+      perror("installing SIGIO handler");
+      fatal(NULL);
+    }
+#endif
     return 0;
 
   case 0:
@@ -1122,10 +1149,19 @@ int devpnc (int class, int func, int device) {
 
   case 4:
     TRACE(T_RIO, " POLL '%02o%02o\n", func, device);
-    devpoll[device] = PNCPOLL*gvp->instpermsec;
-    time(&timenow);
-    pncaccept(timenow);   /* accept 1 new connection each poll */
-    pncconnect(timenow);  /* try to connect to a disconnected node */
+
+    /* on SIGPIPE, reset to the previous poll time and just do reads;
+       otherwise, a regularly scheduled poll */
+
+    if (sawsigio) {
+      devpoll[device] = olddevpoll;
+      sawsigio = 0;
+    } else {
+      devpoll[device] = PNCPOLL*gvp->instpermsec;
+      time(&timenow);
+      pncaccept(timenow);   /* accept 1 new connection each poll */
+      pncconnect(timenow);  /* try to connect to a disconnected node */
+    }
 
 intrexit:
     if (rcv.state == PNCBSRDY)
