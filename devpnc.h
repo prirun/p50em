@@ -884,6 +884,7 @@ int devpnc (int class, int func, int device) {
       fatal(NULL);
     }
     TRACE(T_RIO, "PNC configured\n");
+    devpoll[device] = PNCPOLL*gvp->instpermsec;
     return 0;
 
   case 0:
@@ -1037,7 +1038,7 @@ int devpnc (int class, int func, int device) {
       IOSKIP;
       rcvstat = PNCRSBUSY;        /* set receive busy */
       pncinitdma(&rcv, "rcv");
-      devpoll[device] = 10;     /* quick poll following recv */
+      goto intrexit;              /* try read & maybe interrupt */
 
     } else if (func == 015) {   /* initiate xmit, dma chan in A */
       if (!(pncstat & PNCNSCONNECTED)) {
@@ -1100,7 +1101,7 @@ int devpnc (int class, int func, int device) {
       }
       pncstat |= PNCNSXMITINT;       /* set xmit interrupt */
       pncstat |= PNCNSTOKEN;         /* and token seen */
-      devpoll[device] = 10;          /* quick poll following xmit */
+      goto intrexit;                 /* rcv & interrupt following xmit */
 
     } else if (func == 016) {   /* set interrupt vector */
       pncvec = crs[A];
@@ -1121,16 +1122,14 @@ int devpnc (int class, int func, int device) {
 
   case 4:
     TRACE(T_RIO, " POLL '%02o%02o\n", func, device);
-
+    devpoll[device] = PNCPOLL*gvp->instpermsec;
     time(&timenow);
     pncaccept(timenow);   /* accept 1 new connection each poll */
     pncconnect(timenow);  /* try to connect to a disconnected node */
+
+intrexit:
     if (rcv.state == PNCBSRDY)
       pncrecv(timenow);     /* try to read from a node */
-
-    /* set default repoll and take any pending interrupt */
-
-    devpoll[device] = PNCPOLL*gvp->instpermsec;
     if (enabled && (pncstat & 0xC000)) {
       if (gvp->intvec == -1)
 	gvp->intvec = pncvec;
