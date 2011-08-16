@@ -259,6 +259,7 @@
 
 static short configured = 0;      /* true if PNC configured */
 static unsigned short pncdiag=0;  /* controller diagnostic register */
+static unsigned short intstat;    /* interrupt status word */
 static unsigned short pncstat;    /* controller status word */
 static unsigned short rcvstat;    /* receive status word */
 static unsigned short xmitstat;   /* xmit status word */
@@ -800,6 +801,7 @@ int devpnc (int class, int func, int device) {
     }
 
     pncstat = 0;
+    intstat = 0;
     rcvstat = 0;
     xmitstat = 0;
     pncvec = 0;
@@ -973,7 +975,8 @@ int devpnc (int class, int func, int device) {
 
     } else if (func == 04) {    /* OCP '0407 ack xmit (clear xmit int) */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - ack xmit int\n", func, device);
-      pncstat &= ~PNCNSXMITINT;   /* clear "xmit interrupting" */
+      pncstat &= ~PNCNSXMITINT;   /* clear "xmit interrupt" */
+      intstat &= ~PNCNSXMITINT;   /* clear "xmit interrupting" */
       pncstat &= ~PNCNSTOKEN;     /* clear "token detected" */
       xmitstat = 0;               /* clear xmit busy */
 
@@ -999,7 +1002,8 @@ int devpnc (int class, int func, int device) {
     } else if (func == 014) {   /* OCP '1407 ack receive (clear rcv int) */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - ack recv int\n", func, device);
       rcvstat = 0;                /* clear recv busy */
-      pncstat &= ~PNCNSRCVINT;
+      pncstat &= ~PNCNSRCVINT;    /* clear recv interrupt */
+      intstat &= ~PNCNSRCVINT;    /* clear recv interrupting */
 
     } else if (func == 015) {   /* OCP '1507 set interrupt mask (enable int) */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - enable int\n", func, device);
@@ -1206,10 +1210,11 @@ rcvexit:
       pncrecv(timenow);     /* try to read from a node */
 
 intrexit:
-    if (enabled && (pncstat & 0xC000)) {
-      if (gvp->intvec == -1)
+    if (enabled && ((pncstat & 0xC000) | intstat) != intstat) {
+      if (gvp->intvec == -1) {
 	gvp->intvec = pncvec;
-      else
+	intstat |= (pncstat & 0xC000);
+      } else
 	devpoll[device] = 100;
     }
     break;
