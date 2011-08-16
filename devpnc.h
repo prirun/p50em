@@ -191,7 +191,7 @@
 
 /* PNC poll rate in ms, mostly for connecting to new nodes */
 
-#define PNCPOLL 100
+#define PNCPOLL 1000
 
 /* PNC network status bits
 
@@ -416,11 +416,7 @@ pncinitfd(int fd) {
     perror("setsockopt 3 failed for PNC");
     fatal(NULL);
   }
-#ifdef ASYNCIO
   fdflags |= O_NONBLOCK+O_ASYNC;
-#else
-  fdflags |= O_NONBLOCK;
-#endif
   if (fcntl(fd, F_SETFL, fdflags) == -1) {
     perror("unable to set fdflags for PNC");
     fatal(NULL);
@@ -959,12 +955,10 @@ int devpnc (int class, int func, int device) {
     }
     TRACE(T_RIO, "PNC configured\n");
     devpoll[device] = PNCPOLL*gvp->instpermsec;
-#ifdef ASYNCIO
     if (signal(SIGIO, pnchavedata) == SIG_ERR) {
       perror("installing SIGIO handler");
       fatal(NULL);
     }
-#endif
     if (gettimeofday(&tv0, NULL) != 0)
       fatal("pnc gettimeofday 1 failed");
     tv0ts = tv0.tv_sec + tv0.tv_usec/1000000.0;
