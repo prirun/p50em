@@ -247,7 +247,7 @@
   //#define PNCXSRETRIES   0x0007  /* retry count (3 bits) */
 
 #define MINACCEPTTIME 1      /* wait 1 second before accepting new connections */
-#define MAXACCEPTTIME 5      /* only wait 5 seconds to receive uid */
+#define MAXACCEPTTIME 15     /* only wait 15 seconds to receive uid */
 #define MINCONNTIME 30       /* wait 30 seconds between connects to 1 node */
 #define MAXPNCBYTES 2048     /* max of 2048 byte packets */
 #define MAXPNCWORDS 1024     /* that's 1024 words */
@@ -351,6 +351,7 @@ char * pncdumppkt(unsigned char * pkt, int len) {
   double ts;
   struct timeval tv1;
 
+#ifndef NOTRACE
   if (!gvp->traceflags & T_RIO) return;
 
   if (len > MAXPKTBYTES)
@@ -383,6 +384,7 @@ char * pncdumppkt(unsigned char * pkt, int len) {
     fatal("pnc gettimeofday 3 failed");
   ts = (tv1.tv_sec + tv1.tv_usec/1000000.0) - tv0ts;
   TRACE(T_RIO, " @ %10.2f: %s\n", ts, hexpkt);
+#endif
 }
 
 /* disconnect from a node */
@@ -562,34 +564,43 @@ pncauth1(int nodeid, time_t timenow) {
   pncdisc(nodeid);
 }
 
-/* connect to the next unconnected node.  We only try to connect to a
-   remote system once: if they aren't up, we assume they will try to
-   connect to us when they come up */
+/* connect to the next unconnected node.  Ideally, we should only try
+   to connect to a remote system once: if they aren't up, we assume
+   they will try to connect to us when they come up.  For now, keep
+   trying every 30 seconds.
+
+   This is buggy for big rings: it tries to connect to each node
+   first, then comes back around and does authorization.  With a 1
+   second poll time and 250 nodes, it'll take 250 seconds to do all
+   the connects, and then 250 seconds to authorize.  None of the
+   authorizations will work because the uid has to be received within
+   MAXACCEPTTIME seconds.  It's fine for the 5-6 node case though.
+ */
 
 pncconnect(time_t timenow) {
   static int prevnode=MAXNODEID;
-  int i, nodeid;
+  int nodeid;
 
   if (myid == 0)
     return;
-  i = prevnode;
+  nodeid = prevnode;
   while (1) {
-    i = (i % MAXNODEID) + 1;
-    if (i == myid)          /* don't connect to myself */
+    nodeid = (nodeid % MAXNODEID) + 1;
+    if (nodeid == myid)          /* don't connect to myself */
       continue;
-    if (ni[i].cstate == PNCCSCONN) {
-      pncauth1(i, timenow);
+    if (ni[nodeid].cstate == PNCCSCONN) {
+      pncauth1(nodeid, timenow);
       break;
     }
-    //TRACE(T_RIO, "pncconnect: node %d, state %d, timenow %d, conntime %d\n", i, ni[i].cstate, timenow, ni[i].conntime);
-    if (ni[i].cstate == PNCCSDISC && timenow - ni[i].conntime > MINCONNTIME) {
-      pncconn1(i, timenow);
+    //TRACE(T_RIO, "pncconnect: node %d, state %d, timenow %d, conntime %d\n", nodeid, ni[nodeid].cstate, timenow, ni[nodeid].conntime);
+    if (ni[nodeid].cstate == PNCCSDISC && timenow - ni[nodeid].conntime > MINCONNTIME) {
+      pncconn1(nodeid, timenow);
       break;
     }
-    if (i == prevnode)      /* went round once? */
+    if (nodeid == prevnode)      /* went round once? */
       break;
   }
-  prevnode = i;
+  prevnode = nodeid;
 }
 
 /* initialize a dma transfer */
@@ -670,7 +681,7 @@ unsigned short pncxmit(t_dma *iob) {
    1 connection has a complete packet, then return that packet to the
    Prime */
 
-pncrecv(time_t timenow) {
+pncrecv() {
   static int prevnode=MAXNODEID;
   static struct timeval timeout = {0, 0};
   int nodeid, n, fd;
@@ -1222,7 +1233,7 @@ int devpnc (int class, int func, int device) {
 
 rcvexit:
     if (rcv.state == PNCBSRDY)
-      pncrecv(timenow);     /* try to read from a node */
+      pncrecv();            /* try to read from any node */
 
 intrexit:
     if (enabled && ((pncstat & 0xC000) | intstat) != intstat) {
