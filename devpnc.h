@@ -670,28 +670,48 @@ unsigned short pncxmit(t_dma *iob) {
   return xstat;
 }
 
-/* do socket reads on all connections until 1 connection has a
-   complete packet, then return that packet to the Prime */
+/* do socket reads on all active connections with data available until
+   1 connection has a complete packet, then return that packet to the
+   Prime */
 
 pncrecv(time_t timenow) {
   static int prevnode=MAXNODEID;
-  int i, nodeid;
+  static struct timeval timeout = {0, 0};
+  int nodeid, n, fd;
+  fd_set fds;
+
+  /* if connected with id 0, don't do reads */
 
   if (myid == 0)
     return;
-  i = prevnode;
+
+  /* do a select on all active nodes to see if there's any data available */
+
+  FD_ZERO(&fds);
+  for (nodeid=0; nodeid<=MAXNODEID; nodeid++)
+    if (ni[nodeid].cstate == PNCCSAUTH)
+      FD_SET(ni[nodeid].fd, &fds);
+  n = select(nodeid, &fds, NULL, NULL, &timeout);
+  if (n == -1) {
+    perror("unable to do read select on PNC fds");
+    fatal(NULL);
+  }
+  if (n == 0) {
+    TRACE(T_RIO, " pncrecv: no data\n");
+    return 0;
+  }
+
+  nodeid = prevnode;
   while (1) {
-    i = (i % MAXNODEID) + 1;
-    if (i == myid)          /* don't read from myself */
-      continue;
-    if (ni[i].cstate == PNCCSAUTH) {
-      if (pncrecv1(i))
+    nodeid = (nodeid % MAXNODEID) + 1;
+    fd = ni[nodeid].fd;
+    if (fd >= 0 && FD_ISSET(fd, &fds))
+      if (pncrecv1(nodeid))
 	break;
-    }
-    if (i == prevnode)      /* went round once? */
+    if (nodeid == prevnode)      /* went round once? */
       break;
   }
-  prevnode = i;
+  prevnode = nodeid;
 }
 
 /* try to read a complete packet from a node.  On entry, the receive
@@ -704,7 +724,7 @@ pncrecv(time_t timenow) {
 pncrecv1(int nodeid) {
   int pktlen, nw;
 
-  TRACE(T_RIO, " pncrecv1: reading from node %d\n", nodeid);
+  TRACE(T_RIO, " pncrecv1: read node %d\n", nodeid);
   if (ni[nodeid].rcvlen < 2) {
     if (!pncread(nodeid, 2 - ni[nodeid].rcvlen))
       return 0;
@@ -726,7 +746,7 @@ pncrecv1(int nodeid) {
 
   /* send completed packet to the Prime */
 
-  TRACE(T_RIO, " pncrecv1: pkt complete\n");
+  TRACE(T_RIO, " pncrecv1: store pkt\n");
   pncdumppkt(ni[nodeid].rcvpkt, ni[nodeid].rcvlen);
   nw = (pktlen-4)/2;
   if (nw > rcv.dmanw) {
@@ -736,7 +756,6 @@ pncrecv1(int nodeid) {
   }
 
   /* modify to/from word to allow me to be in multiple rings */
-
   
   *(unsigned short *)(ni[nodeid].rcvpkt+2) = (myid<<8) | nodeid;
   memcpy(rcv.memp, ni[nodeid].rcvpkt+2, nw*2);
