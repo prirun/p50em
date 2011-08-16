@@ -351,6 +351,8 @@ char * pncdumppkt(unsigned char * pkt, int len) {
   double ts;
   struct timeval tv1;
 
+  if (!gvp->traceflags & T_RIO) return;
+
   if (len > MAXPKTBYTES)
     len = MAXPKTBYTES;
 #if 0
