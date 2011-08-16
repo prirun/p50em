@@ -194,9 +194,6 @@
 #define PNCPOLL 100
 
 /* PNC network status bits
-     ACK = the node the packet was addressed to saw the packet correctly
-     WACK = same as ACK, but the node couldn't accept the packet (no recv active)
-     NAK = the packet was corrupt when some (any) node saw it
 
    NOTE: many fields are commented out since they can't occur in the
    emulator implementation; they're specified as documentation */
@@ -224,7 +221,17 @@
 #define PNCRSBUSY      0x0040  /* receive busy */
 #define PNCRSEOR       0x0020  /* EOR before end of message */
 
-/* xmit status word: first 8 bits are the "ACK byte" */
+/* xmit status word: first 8 bits are the "ACK byte"
+
+     ACK = the node the packet was addressed to saw the packet correctly
+     WACK = same as ACK, but the node couldn't accept the packet (no recv active)
+     NAK = the packet was corrupt when some (any) node saw it
+
+   I initially thought a packet addressed to an inactive node would be
+   returned with no bits set in the ACK byte; but T&M prmnt1 indicates
+   that the NAK bit is set, so I'm guessing the local PNC sets this
+   bit.
+*/
 
 #define PNCXSACK       0x8000  /* ACK'd */
   //#define PNCXSMACK      0x4000  /* multiple ACK */
@@ -306,6 +313,8 @@ static t_dma rcv, xmit;
 
 static int sawsigio=0, olddevpoll;
 
+static double tv0ts;
+
 void pnchavedata(int s) {
   if (sawsigio) return;
   olddevpoll = devpoll[7];
@@ -336,12 +345,15 @@ char * pnchexuid(char * uid) {
 }
 
 char * pncdumppkt(unsigned char * pkt, int len) {
-  static char hexpkt[MAXPKTBYTES*2 + 1];
+  static unsigned char hexpkt[MAXPKTBYTES*2 + 1];
   unsigned int i, ch;
+  double ts;
+  struct timeval tv1;
 
-  return;
   if (len > MAXPKTBYTES)
     len = MAXPKTBYTES;
+#if 0
+  /* hex dump */
   for (i=0; i<len; i++) {
     ch = pkt[i] >> 4;
     if (0 <= ch  && ch <= 9)
@@ -355,7 +367,19 @@ char * pncdumppkt(unsigned char * pkt, int len) {
       hexpkt[i*2+1] = ch - 10 + 'a';
   }
   hexpkt[len*2] = 0;
-  TRACE(T_RIO, " pncdumppkt: %s\n", hexpkt);
+#else
+  /* ascii dump */
+  for (i=0; i<len; i++)
+    if (pkt[i])
+      hexpkt[i] = pkt[i] & 0x7f;
+    else
+      hexpkt[i] = '_';
+  hexpkt[len] = 0;
+#endif
+  if (gettimeofday(&tv1, NULL) != 0)
+    fatal("pnc gettimeofday 3 failed");
+  ts = (tv1.tv_sec + tv1.tv_usec/1000000.0) - tv0ts;
+  TRACE(T_RIO, " @ %10.2f: %s\n", ts, hexpkt);
 }
 
 /* disconnect from a node */
@@ -389,7 +413,11 @@ pncinitfd(int fd) {
     perror("setsockopt 3 failed for PNC");
     fatal(NULL);
   }
+#ifdef ASYNCIO
   fdflags |= O_NONBLOCK+O_ASYNC;
+#else
+  fdflags |= O_NONBLOCK;
+#endif
   if (fcntl(fd, F_SETFL, fdflags) == -1) {
     perror("unable to set fdflags for PNC");
     fatal(NULL);
@@ -753,6 +781,8 @@ int devpnc (int class, int func, int device) {
   int n, linenum;
   int tempid, tempport, cfgerrs;
   char temphost[MAXHOSTLEN+1];
+  struct timeval tv0,tv1;
+  double pollts;
 
   //gvp->traceflags = ~T_MAP;
 
@@ -912,6 +942,10 @@ int devpnc (int class, int func, int device) {
       fatal(NULL);
     }
 #endif
+    if (gettimeofday(&tv0, NULL) != 0)
+      fatal("pnc gettimeofday 1 failed");
+    tv0ts = tv0.tv_sec + tv0.tv_usec/1000000.0;
+    
     return 0;
 
   case 0:
@@ -970,6 +1004,7 @@ int devpnc (int class, int func, int device) {
     } else if (func == 015) {   /* OCP '1507 set interrupt mask (enable int) */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - enable int\n", func, device);
       enabled = 1;
+      goto intrexit;
 
     } else if (func == 016) {   /* OCP '1607 clear interrupt mask (disable int) */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - disable int\n", func, device);
@@ -1065,7 +1100,7 @@ int devpnc (int class, int func, int device) {
       IOSKIP;
       rcvstat = PNCRSBUSY;        /* set receive busy */
       pncinitdma(&rcv, "rcv");
-      goto intrexit;              /* try read & maybe interrupt */
+      goto rcvexit;               /* try read & maybe interrupt */
 
     } else if (func == 015) {   /* initiate xmit, dma chan in A */
       if (!(pncstat & PNCNSCONNECTED)) {
@@ -1128,7 +1163,7 @@ int devpnc (int class, int func, int device) {
       }
       pncstat |= PNCNSXMITINT;       /* set xmit interrupt */
       pncstat |= PNCNSTOKEN;         /* and token seen */
-      goto intrexit;                 /* rcv & interrupt following xmit */
+      goto rcvexit;                  /* rcv & interrupt following xmit */
 
     } else if (func == 016) {   /* set interrupt vector */
       pncvec = crs[A];
@@ -1148,7 +1183,10 @@ int devpnc (int class, int func, int device) {
     break;
 
   case 4:
-    TRACE(T_RIO, " POLL '%02o%02o\n", func, device);
+    if (gettimeofday(&tv1, NULL) != 0)
+      fatal("pnc gettimeofday 2 failed");
+    pollts = (tv1.tv_sec + tv1.tv_usec/1000000.0) - tv0ts;
+    TRACE(T_RIO, " POLL '%02o%02o @ %10.2f\n", func, device, pollts);
 
     /* on SIGPIPE, reset to the previous poll time and just do reads;
        otherwise, a regularly scheduled poll */
@@ -1163,9 +1201,11 @@ int devpnc (int class, int func, int device) {
       pncconnect(timenow);  /* try to connect to a disconnected node */
     }
 
-intrexit:
+rcvexit:
     if (rcv.state == PNCBSRDY)
       pncrecv(timenow);     /* try to read from a node */
+
+intrexit:
     if (enabled && (pncstat & 0xC000)) {
       if (gvp->intvec == -1)
 	gvp->intvec = pncvec;
