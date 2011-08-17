@@ -999,6 +999,9 @@ int devpnc (int class, int func, int device) {
     } else if (func == 02) {    /* OCP '0207 inject a token */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - inject token\n", func, device);
 
+    } else if (func == 03) {    /* OCP '0307 simulate a token */
+      TRACE(T_INST|T_RIO, " OCP '%02o%02o - simulate token\n", func, device);
+
     } else if (func == 04) {    /* OCP '0407 ack xmit (clear xmit int) */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - ack xmit int\n", func, device);
       pncstat &= ~PNCNSXMITINT;   /* clear "xmit interrupt" */
