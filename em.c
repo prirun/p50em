@@ -4438,7 +4438,6 @@ main (int argc, char **argv) {
     perror("Unable to open trace.log");
     exit(1);
   }
-  setlinebuf(gvp->tracefile);
 #endif
 
   /* initialize dispatch tables */
@@ -4631,6 +4630,8 @@ main (int argc, char **argv) {
 	  gvp->traceflags |= T_GET;
 	else if (strcmp(argv[i],"all") == 0)
 	  gvp->traceflags = ~0;
+	else if (strcmp(argv[i],"flush") == 0)
+	  setlinebuf(gvp->tracefile);
 	else if (isdigit(argv[i][0]) && strlen(argv[i]) <= 2 && sscanf(argv[i],"%d", &templ) == 1)
 	  gvp->traceuser = 0100000 | (templ<<6);   /* form OWNERL for user # */
 	else if (isdigit(argv[i][0]) && sscanf(argv[i],"%d", &templ) == 1)
