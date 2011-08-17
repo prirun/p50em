@@ -862,7 +862,7 @@ int devpnc (int class, int func, int device) {
 	len = strlen(buf);
 	linenum++;
 	if (buf[len-1] != '\n') {
-	  fprintf(stderr,"Line %d of ring.cfg: line too long, can't parse file\n", linenum);
+	  fprintf(stderr,"Line %d of ring.cfg ignored: line too long, can't parse file\n", linenum);
 	  return -1;
 	}
 	buf[len-1] = 0;
@@ -870,38 +870,45 @@ int devpnc (int class, int func, int device) {
 	  continue;
 
 	if ((p=strtok(buf, DELIM)) == NULL) {
-	  fprintf(stderr,"Line %d of ring.cfg: node id missing\n", linenum);
+	  fprintf(stderr,"Line %d of ring.cfg ignored: node id missing\n", linenum);
 	  continue;
 	}
 	tempid = atoi(p);
 	if (tempid < 1 || tempid > 247) {
-	  fprintf(stderr,"Line %d of ring.cfg: node id is out of range 1-247\n", linenum);
+	  fprintf(stderr,"Line %d of ring.cfg ignored: node id is out of range 1-247\n", linenum);
 	  continue;
 	}
 	if (ni[tempid].cstate != PNCCSNONE) {
-	  fprintf(stderr,"Line %d of ring.cfg: node id occurs more than once\n", linenum);
+	  fprintf(stderr,"Line %d of ring.cfg ignored: node id occurs more than once\n", linenum);
 	  continue;
 	}
 
 	if ((p=strtok(NULL, DELIM)) == NULL) {
-	  fprintf(stderr,"Line %d of ring.cfg: host address missing\n", linenum);
+	  fprintf(stderr,"Line %d of ring.cfg ignored: host address missing\n", linenum);
 	  continue;
 	}
 	if (strlen(p) > MAXHOSTLEN) {
-	  fprintf(stderr,"Line %d of ring.cfg: IP address too long\n", linenum);
+	  fprintf(stderr,"Line %d of ring.cfg ignored: IP address too long\n", linenum);
 	  continue;
 	}
 	strcpy(temphost, p);
 
 	if ((p=strtok(NULL, DELIM)) == NULL) {
-	  fprintf(stderr,"Line %d of ring.cfg: unique id/password missing\n", linenum);
+	  fprintf(stderr,"Line %d of ring.cfg ignored: unique id/password missing\n", linenum);
 	  continue;
 	}
 	if (strlen(p) > MAXUIDLEN) {
-	  fprintf(stderr,"Line %d of ring.cfg: unique id/password too long\n", linenum);
+	  fprintf(stderr,"Line %d of ring.cfg ignored: unique id/password too long\n", linenum);
 	  continue;
 	}
 	bzero(ni[tempid].uid, sizeof(ni[tempid].uid));
+	for (i=0; i<=MAXNODEID; i++)
+	  if (strcmp(p, ni[i].uid) == 0) {
+	    fprintf(stderr,"Line %d of ring.cfg ignored: unique id/password is not unique\n", linenum);
+	    break;
+	  }
+        if (i <= MAXNODEID)
+	  continue;
 	strcpy(ni[tempid].uid, p);
 
 	/* parse the port number from the IP address */
@@ -912,11 +919,11 @@ int devpnc (int class, int func, int device) {
 	  if ((p=strtok(NULL, PDELIM)) != NULL) {
 	    tempport = atoi(p);
 	    if (tempport < 1 || tempport > 65000)
-	      fprintf(stderr,"Line %d of ring.cfg: port number out of range 1-65000\n", linenum);
+	      fprintf(stderr,"Line %d of ring.cfg ignored: port number out of range 1-65000\n", linenum);
 	  }
 	}
 	if (tempport <= 0) {
-	  fprintf(stderr, "Line %d of ring.cfg: can't parse port number from %s\n", linenum, temphost);
+	  fprintf(stderr, "Line %d of ring.cfg ignored: can't parse port number from %s\n", linenum, temphost);
 	  continue;
 	}
 	ni[tempid].cstate = PNCCSDISC;
