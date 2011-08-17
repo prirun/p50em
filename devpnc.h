@@ -47,19 +47,32 @@
   the Primenet config node-to-node password becomes redundant and
   should probably be left blank for ease in configuration. Cool, eh?
 
-  Prior to rev 19.3, each node sends periodic "timer" messages to all
-  nodes it knows about.  If the message returns ACK'd, the remote node
-  is up.  Otherwise, the remote node must be down.  This is not very
-  efficient, so beginning with 19.3, a broadcast timer message is sent
-  every 10 seconds to let all nodes know that a machine is up.  On a
-  100-node network, instead of sending 100*99=9900 timer messages,
-  only 100 are required.  Unfortunately, the emulated PNC does not
-  have the efficient broadcast mechanism of a physical token ring, so
-  broadcasts must be simulated by sending packets to each node.  It
+  UNIMPLEMENTED IDEA 1: the IP address in ring.cfg could be specified
+  as 0.0.0.0:0 or --- to mean "this node is incoming only, don't try
+  to connect to it, but let it connect to me".  This might be useful
+  for nodes that are usually offline, to keep devpnc from sending them
+  connect packets every 30 seconds.
+
+  UNIMPLEMENTED IDEA 2: when a connect comes in, we could/should check
+  that the IP address in ring.cfg matches the IP address of the
+  connect.  Then again, that means you can't network an emulator when
+  away from your home location.
+
+  Prior to rev 19.3, each Primenet node sends periodic "timer"
+  messages to all nodes it knows about.  If the message returns ACK'd,
+  the remote node is up.  Otherwise, the remote node must be down.
+  This is not very efficient, so beginning with 19.3, a broadcast
+  timer message is sent every 10 seconds to let all nodes know that a
+  machine is up.  On a 100-node network, instead of sending
+  100*99=9900 timer messages, only 100 are required.  Unfortunately,
+  the emulated PNC does not have the efficient broadcast mechanism of
+  a physical token ring, so broadcasts must be simulated by sending
+  packets to each node, getting us back to the inefficient method.  It
   would be possible to store the first broadcast timer message
   received from each node, and simply loop them all back within each
   emulator every 10 seconds as long as the TCP/IP connection is up.
-  Not sure it's worth the trouble though...
+  Not sure it's worth the trouble though...  At later revs, the timer
+  message has important version information.
 
   In early version of Primos, PNC ring buffers (physical packets) are
   256 words, with later versions of Primos also supporting 512, and
@@ -391,7 +404,8 @@ char * pncdumppkt(unsigned char * pkt, int len) {
 
 unsigned short pncdisc(nodeid) {
   if (ni[nodeid].cstate > PNCCSDISC) {
-    fprintf(stderr, "devpnc: disconnect from node %d\n", nodeid);
+    if (ni[nodeid].cstate > PNCCSCONN)
+      fprintf(stderr, "devpnc: disconnect from node %d\n", nodeid);
     TRACE(T_RIO, " pncdisc: disconnect from node %d\n", nodeid);
     close(ni[nodeid].fd);
     ni[nodeid].cstate = PNCCSDISC;
