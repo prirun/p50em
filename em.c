@@ -3049,7 +3049,11 @@ static pcl (ea_t ecbea) {
     }
 #endif
 
-#ifndef NOTRACE
+    /* this crap was to trace tsrc$$ failing in Prime Information.
+       Information uses FP math on pathname lengths, and the rounding
+       was causing problems */
+
+#if 0
     if (((ecbea & 0xFFFFFFF) == tsrc_ea)) {
       ea_t eatemp;
       int utempl;
