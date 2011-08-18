@@ -268,6 +268,7 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
    T_FAULT      Faults
    T_PX         Process exchange
    T_LM         License manager
+   T_TLB        STLB and IOTLB changes
 */
 
 #define T_EAR   0x00000001
@@ -289,6 +290,7 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 #define T_PUT   0x00010000
 #define T_GET   0x00020000
 #define T_EAS   0x00040000
+#define T_TLB   0x00080000
 
 #define BITMASK16(b) (0x8000 >> ((b)-1))
 #define BITMASK32(b) ((unsigned int)(0x80000000) >> ((b)-1))
@@ -1014,6 +1016,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       stlbp->ppa = ppa;
       stlbp->pmep = MEM+pmaddr;
 #ifndef NOTRACE
+      TRACE(T_TLB, "stlb[%d] loaded at %o/%o for %o/%o, ppn=%d\n", stlbix, RPH, RPL, seg, ea&0xFFFF, ppa>>10);
       stlbp->load_ic = gvp->instcount;
 #endif
 
@@ -1027,6 +1030,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
 	iotlbix = (ea & 0x3FFFF) >> 10;
 	gvp->iotlb[iotlbix].valid = 1;
 	gvp->iotlb[iotlbix].ppa = ppa;
+	TRACE(T_TLB, "iotlb[%d] loaded at %o/%o for %o/%o, ppn=%d\n", stlbix, RPH, RPL, seg, ea&0xFFFF, ppa>>10);
       }
     }
 #if 0
@@ -4596,6 +4600,8 @@ main (int argc, char **argv) {
 	  gvp->traceflags |= T_EAV;
 	else if (strcmp(argv[i],"eai") == 0)
 	  gvp->traceflags |= T_EAI;
+	else if (strcmp(argv[i],"eas") == 0)
+	  gvp->traceflags |= T_EAS;
 	else if (strcmp(argv[i],"inst") == 0)
 	  gvp->traceflags |= T_INST;
 	else if (strcmp(argv[i],"flow") == 0)
@@ -4632,6 +4638,8 @@ main (int argc, char **argv) {
 	  gvp->traceflags = ~0;
 	else if (strcmp(argv[i],"flush") == 0)
 	  setlinebuf(gvp->tracefile);
+	else if (strcmp(argv[i],"tlb") == 0)
+	  gvp->traceflags |= T_TLB;
 	else if (isdigit(argv[i][0]) && strlen(argv[i]) <= 2 && sscanf(argv[i],"%d", &templ) == 1)
 	  gvp->traceuser = 0100000 | (templ<<6);   /* form OWNERL for user # */
 	else if (isdigit(argv[i][0]) && sscanf(argv[i],"%d", &templ) == 1)
@@ -6065,7 +6073,7 @@ d_liot:  /* 000044 */
   ea = apea(NULL);
   utempa = STLBIX(ea);
   gvp->stlb[utempa].seg = 0xFFFF;
-  TRACE(T_INST, " invalidated STLB index %d\n", utempa);
+  TRACE(T_TLB, "stlb[%d] invalidated at %o/%o for liot\n", utempa, RPH, RPL);
   mapva(ea, RP, RACC, &access);
   TRACE(T_INST, " loaded STLB for %o/%o\n", ea>>16, ea&0xffff);
   invalidate_brp();
@@ -6077,8 +6085,10 @@ d_ptlb:  /* 000064 */
   RESTRICT();
   utempl = *(unsigned int *)(crs+L);
   for (utempa = 0; utempa < STLBENTS; utempa++)
-    if ((utempl & 0x80000000) || gvp->stlb[utempa].ppa == (utempl << 10))
+    if ((utempl & 0x80000000) || gvp->stlb[utempa].ppa == (utempl << 10)) {
+      TRACE(T_TLB, "stlb[%d] invalidated at %o/%o for ptlb\n", utempa, RPH, RPL);
       gvp->stlb[utempa].seg = 0xFFFF;
+    }
   invalidate_brp();
   goto fetch;
 
@@ -6097,13 +6107,15 @@ d_itlb:  /* 000615 */
   if (utempl == 0x10000) {
     for (utempa = 0; utempa < STLBENTS; utempa++)
       gvp->stlb[utempa].seg = 0xFFFF;
-    TRACE(T_INST, " purged entire STLB\n");
+    TRACE(T_TLB, "stlb purged at %o/%o by ITLB\n", RPH, RPL);
   } else {
     utempa = STLBIX(utempl);
     gvp->stlb[utempa].seg = 0xFFFF;
-    TRACE(T_INST, " invalidated STLB index %d\n", utempa);
-    if (((utempl >> 16) & 07777) < 4)
+    TRACE(T_TLB, "stlb[%d] invalidated at %o/%o by ITLB for %o/%o\n", utempa, RPH, RPL, utempl>>16, utempl&0xFFFF);
+    if (((utempl >> 16) & 07777) < 4) {
       gvp->iotlb[(utempl >> 10) & 0xFF].valid = 0;
+      TRACE(T_TLB, "iotlb[%d] invalidated at %o/%o by ITLB for %o/%o\n", utempa, RPH, RPL, utempl>>16, utempl&0xFFFF);
+    }
   }
   invalidate_brp();
   goto fetch;
