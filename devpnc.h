@@ -318,7 +318,8 @@ typedef struct {
   short toid, fromid;
   short state;
   short pktsize;           /* size of packet in bytes */
-  unsigned short dmachan, dmareg, dmaaddr;
+  unsigned short dmachan, dmareg;
+  unsigned int dmaaddr;
   short dmanw;
   unsigned short *memp;      /* ptr to Prime memory */
   unsigned char iobuf[MAXPKTBYTES];
@@ -464,9 +465,8 @@ pncaccept(time_t timenow) {
       return;
     }
     if (!(pncstat & PNCNSCONNECTED)) {
-      close(fd);
       TRACE(T_RIO, " not connected, closed new PNC connection, fd %d\n", fd);
-      return;
+      goto disc;
     }
     TRACE(T_RIO, " new PNC connection, fd %d\n", fd);
   }
@@ -628,9 +628,9 @@ pncinitdma(t_dma *iob, char *iotype) {
   if ((*iob).dmanw > MAXPNCWORDS)
     (*iob).dmanw = MAXPNCWORDS;      /* clamp it */
   (*iob).dmaaddr = ((regs.sym.regdmx[(*iob).dmareg] & 3)<<16) | regs.sym.regdmx[(*iob).dmareg+1];
+  TRACE(T_RIO, " pncinitdma: %s dmachan=%o, dmareg=%o, [dmaregs]=%o|%o, dmaaddr=%o/%o, dmanw=%d\n", iotype, (*iob).dmachan, (*iob).dmareg, regs.sym.regdmx[(*iob).dmareg], regs.sym.regdmx[(*iob).dmareg+1], (*iob).dmaaddr>>16, (*iob).dmaaddr&0xFFFF, (*iob).dmanw);
   (*iob).memp = MEM + mapio((*iob).dmaaddr);
   (*iob).state = PNCBSRDY;
-  TRACE(T_RIO, " pncinitdma: %s dmachan=%o, dmareg=%o, dmaaddr=%o, dmanw=%d\n", iotype, (*iob).dmachan, (*iob).dmareg, (*iob).dmaaddr, (*iob).dmanw);
 }
 
 
@@ -714,6 +714,8 @@ pncrecv() {
       FD_SET(ni[nodeid].fd, &fds);
   n = select(nodeid, &fds, NULL, NULL, &timeout);
   if (n == -1) {
+    if (errno == EINTR || errno == EAGAIN)
+      return 0;
     perror("unable to do read select on PNC fds");
     fatal(NULL);
   }
