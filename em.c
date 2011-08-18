@@ -4640,7 +4640,7 @@ main (int argc, char **argv) {
 	  setlinebuf(gvp->tracefile);
 	else if (strcmp(argv[i],"tlb") == 0)
 	  gvp->traceflags |= T_TLB;
-	else if (isdigit(argv[i][0]) && strlen(argv[i]) <= 2 && sscanf(argv[i],"%d", &templ) == 1)
+	else if (isdigit(argv[i][0]) && strlen(argv[i]) <= 3 && sscanf(argv[i],"%d", &templ) == 1)
 	  gvp->traceuser = 0100000 | (templ<<6);   /* form OWNERL for user # */
 	else if (isdigit(argv[i][0]) && sscanf(argv[i],"%d", &templ) == 1)
 	  gvp->traceinstcount = templ;
