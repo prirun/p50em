@@ -6068,13 +6068,11 @@ d_liot:  /* 000044 */
   TRACE(T_INST, " invalidated STLB index %d\n", utempa);
   mapva(ea, RP, RACC, &access);
   TRACE(T_INST, " loaded STLB for %o/%o\n", ea>>16, ea&0xffff);
-
-  /* invalidate the instruction translation cache mechanism */
-
   invalidate_brp();
   goto fetch;
 
 d_ptlb:  /* 000064 */
+  /* XXX: What about the IOTLB?  Should it be purged too? */
   TRACE(T_FLOW, " PTLB\n");
   RESTRICT();
   utempl = *(unsigned int *)(crs+L);
@@ -6089,10 +6087,12 @@ d_itlb:  /* 000615 */
   RESTRICT();
   utempl = *(unsigned int *)(crs+L);
 
-  /* NOTE: Primos substitutes an ITLB loop for PTLB, and the ITLB
-     segno is 1, ie, it looks like using segment 1 invalidates all
-     pages that match, ignoring segment number??  Instead of doing
-     that, we purge the STLB whenever address 1/0 is invalidated. */
+  /* NOTE: on older systems w/o PTLB, Primos substitutes an ITLB loop
+     for PTLB and the ITLB segno is 1, ie, it looks like using segment
+     1 invalidates all pages that match, ignoring segment number??
+     Instead of doing that, we purge the STLB whenever address 1/0 is
+     invalidated.
+  */
 
   if (utempl == 0x10000) {
     for (utempa = 0; utempa < STLBENTS; utempa++)
@@ -6105,9 +6105,6 @@ d_itlb:  /* 000615 */
     if (((utempl >> 16) & 07777) < 4)
       gvp->iotlb[(utempl >> 10) & 0xFF].valid = 0;
   }
-
-  /* invalidate the instruction translation cache mechanism */
-
   invalidate_brp();
   goto fetch;
 
