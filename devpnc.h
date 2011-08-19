@@ -232,7 +232,7 @@
   //#define PNCRSABCE      0x0100  /* ack byte check error */
   //#define PNCRSRBPE      0x0080  /* receive buffer parity error */
 #define PNCRSBUSY      0x0040  /* receive busy */
-#define PNCRSEOR       0x0020  /* EOR before end of message */
+  //#define PNCRSEOR       0x0020  /* EOR before end of message */
 
 /* xmit status word: first 8 bits are the "ACK byte"
 
@@ -337,28 +337,6 @@ void pnchavedata(int s) {
   sawsigio = 1;
 }
 
-/* return pointer to a hex-formatted uid */
-
-char * pnchexuid(char * uid) {
-  static char hexuid[MAXUIDLEN*2+1];
-  int i, ch;
-
-  for (i=0; i<MAXUIDLEN; i++) {
-    ch = uid[i] >> 4;
-    if (0 <= ch  && ch <= 9)
-      hexuid[i*2] = ch + '0';
-    else
-      hexuid[i*2] = ch - 10 + 'a';
-    ch = uid[i] & 0xF;
-    if (0 <= ch && ch <= 9)
-      hexuid[i*2+1] = ch + '0';
-    else
-      hexuid[i*2+1] = ch - 10 + 'a';
-  }
-  hexuid[MAXUIDLEN*2] = 0;
-  return hexuid;
-}
-
 char * pncdumppkt(unsigned char * pkt, int len) {
   static unsigned char hexpkt[MAXPKTBYTES*2 + 1];
   unsigned int i, ch;
@@ -408,7 +386,7 @@ unsigned short pncdisc(nodeid) {
     if (ni[nodeid].cstate > PNCCSCONN)
       fprintf(stderr, "devpnc: disconnect from node %d\n", nodeid);
     TRACE(T_RIO, " pncdisc: disconnect from node %d\n", nodeid);
-    close(ni[nodeid].fd);
+    shutdown(ni[nodeid].fd, SHUT_RDWR);
     ni[nodeid].cstate = PNCCSDISC;
     ni[nodeid].rcvlen = 0;
     ni[nodeid].fd = -1;
@@ -493,7 +471,7 @@ pncaccept(time_t timenow) {
     fprintf(stderr, "devpnc: error reading uid, expected %d bytes, got %d\n", MAXUIDLEN, n);
     goto disc;
   }
-  TRACE(T_RIO, " uid is %s for new PNC fd %d\n", pnchexuid(uid), fd);
+  TRACE(T_RIO, " uid is %s for new PNC fd %d\n", uid, fd);
 
   /* look up the uid in our ring.cfg array to determine the node id
      we'll use for this remote emulator */
@@ -503,6 +481,10 @@ pncaccept(time_t timenow) {
       break;
   if (i > MAXNODEID) {
     fprintf(stderr, "devpnc: couldn't find uid %s\n", uid);
+    goto disc;
+  }
+  if (ni[i].cstate == PNCCSNONE) {
+    TRACE(T_RIO, " devpnc: node %d is disabled\n", i);
     goto disc;
   }
   if (ni[i].cstate > PNCCSDISC) {
@@ -563,7 +545,7 @@ pncauth1(int nodeid, time_t timenow) {
   int n;
 
   n = write(ni[nodeid].fd, ni[myid].uid, MAXUIDLEN);
-  TRACE(T_RIO, "sent my uid %s, hex %s, to node %d, fd %d, %d bytes\n", ni[myid].uid, pnchexuid(ni[myid].uid), nodeid, ni[nodeid].fd, n);
+  TRACE(T_RIO, "sent my uid %s, to node %d, fd %d, %d bytes\n", ni[myid].uid, nodeid, ni[nodeid].fd, n);
   if (n == MAXUIDLEN) {
     ni[nodeid].cstate = PNCCSAUTH;
     return;
@@ -751,12 +733,16 @@ pncrecv1(int nodeid) {
       return 0;
   }
   pktlen = *(short *)(ni[nodeid].rcvpkt);
-  if (pktlen > MAXPKTBYTES) {
-    fprintf(stderr, "devpnc: packet > max from node %d\n", nodeid);
+  nw = (pktlen-4)/2;
+  TRACE(T_RIO, " pncrecv1: have %d of %d bytes\n", ni[nodeid].rcvlen, pktlen);
+  if (nw > rcv.dmanw) {
+    fprintf(stderr, "devpnc: packet size %d > max %d words from node %d\n", nw, rcv.dmanw, nodeid);
+    fprintf(stderr, "devpnc: disabling node %d until reboot\n", nodeid);
     pncdisc(nodeid);
+    ni[nodeid].cstate = PNCCSNONE;
+    bzero(ni[nodeid].uid, sizeof(ni[nodeid].uid));
     return 0;
   }
-  TRACE(T_RIO, " pncrecv1: have %d of %d\n", ni[nodeid].rcvlen, pktlen);
   if (!pncread(nodeid, pktlen - ni[nodeid].rcvlen))
     return 0;
   if (pktlen != *(short *)(ni[nodeid].rcvpkt+pktlen-2)) {
@@ -769,12 +755,6 @@ pncrecv1(int nodeid) {
 
   TRACE(T_RIO, " pncrecv1: store pkt\n");
   pncdumppkt(ni[nodeid].rcvpkt, ni[nodeid].rcvlen);
-  nw = (pktlen-4)/2;
-  if (nw > rcv.dmanw) {
-    fprintf(stderr, "devpnc: node %d, packet truncated: %d > %d\n", nodeid, nw, rcv.dmanw);
-    nw = rcv.dmanw;
-    rcvstat |= PNCRSEOR;
-  }
 
   /* modify to/from word to allow me to be in multiple rings */
   
@@ -794,6 +774,8 @@ pncread (int nodeid, int nbytes) {
   int n;
 
   n = read(ni[nodeid].fd, ni[nodeid].rcvpkt+ni[nodeid].rcvlen, nbytes);
+  if (n == 0)
+    pncdisc(nodeid);
   if (n == -1) {
     if (errno != EWOULDBLOCK && errno != EINTR && errno != EAGAIN) {
       if (errno != EPIPE)
@@ -942,7 +924,7 @@ int devpnc (int class, int func, int device) {
 	}
 	ni[tempid].cstate = PNCCSDISC;
 	ni[tempid].port = tempport;
-	TRACE(T_RIO, "Line %d: id=%d, host=\"%s\", port=%d, uid=%s, hex=%s\n", linenum, tempid, temphost, tempport, ni[tempid].uid, pnchexuid(ni[tempid].uid));
+	TRACE(T_RIO, "Line %d: id=%d, host=\"%s\", port=%d, uid=%s\n", linenum, tempid, temphost, tempport, ni[tempid].uid);
 	configured = 1;
       }
       if (!feof(ringfile)) {
@@ -1001,13 +983,8 @@ int devpnc (int class, int func, int device) {
 
     if (func == 00) {    /* OCP '0007 - disconnect */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - disconnect\n", func, device);
-      for (i=0; i<=MAXNODEID; i++) {
-	fd = ni[i].fd;
-	if (fd >= 0) {
-	  close(fd);
-	  ni[i].fd = -1;
-	}
-      }
+      for (i=0; i<=MAXNODEID; i++)
+	pncdisc(i);
       rcv.state = PNCBSIDLE;
       rcvstat = PNCRSBUSY;
       xmitstat = PNCXSBUSY;
