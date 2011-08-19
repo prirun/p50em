@@ -1,5 +1,3 @@
-#define EMULATOR_VERSION 104
-
 /* Pr1me Computer emulator, Jim Wilcoxson (prirun@gmail.com), April 4, 2005
    Copyright (C) 2005-2007, Jim Wilcoxson.  All Rights Reserved.
 
@@ -4381,7 +4379,7 @@ main (int argc, char **argv) {
   struct timeval boot_tv;
   struct timezone tz;
 
-  printf("[Prime Emulator ver %d %s]\n", EMULATOR_VERSION, __DATE__);
+  printf("[Prime Emulator ver %s %s]\n", REV, __DATE__);
   if (argc > 1 && (strcmp(argv[1],"--version") == 0)) {
     exit(0);
   }

@@ -1,40 +1,51 @@
 # makefile to create various emulator builds
-# Targets:  em  debug  trace  hobby  dongle  lmserver  magrst
 # Note: -arch ppc requires /Developer/SDKs/MacOSX10.4u.sdk
 
-em:
-	cc -arch ppc -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+REV=${shell hg id -n}
+
+.PHONY:	em debug trace fixed hobby dongle lmserver magrst
+
+em:     # production
+
+	cc -arch ppc -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	strip em
 	rm em.o
 
 
-debug:
-	cc -arch ppc -DNOREGS -g -O0 -DNOTRACE -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+debug:  # gdb
+
+	cc -arch ppc -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOTRACE -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 
-trace:
-	cc -arch ppc -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+trace:  # tracing + gdb
+
+	cc -arch ppc -DREV=\"${REV}\" -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
-fixed:
-	cc -arch ppc -DFIXEDCLOCK -DNOIDLE -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+fixed:  # fixed clock rate, gdb
+
+	cc -arch ppc -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 
-hobby:
-	cc -arch ppc -DHOBBY -DNOTRACE -DFAST -O em.c -fobey-inline -mdynamic-no-pic -o em
+hobby:  # hobby (limited: no amlc, 1 disk drive up to 160MB, no PNC)
+
+	cc -arch ppc -DREV=\"${REV}\" -DHOBBY -DNOTRACE -DFAST -O em.c -fobey-inline -mdynamic-no-pic -o em
 	strip em
 
 
-dongle:
-	cc -arch ppc -c dongle.c -I../dongle/mx/ppc/api;g++ -arch ppc -o dongle dongle.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+dongle: # utility to program a dongle
+
+	cc -arch ppc -DREV=\"${REV}\" -c dongle.c -I../dongle/mx/ppc/api;g++ -arch ppc -o dongle dongle.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm dongle.o
 
 
-lmserver:
-	cc -arch ppc -c lmserver.c -I../dongle/mx/ppc/api;g++ -arch ppc lmserver.o -o lmserver ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+lmserver: # license server
+
+	cc -arch ppc -DREV=\"${REV}\" -c lmserver.c -I../dongle/mx/ppc/api;g++ -arch ppc lmserver.o -o lmserver ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm lmserver.o
 
-magrst:
-	cc -arch ppc -o magrst magrst.c istext.c
+magrst: # Unix version of Prime's magrst
+
+	cc -arch ppc -DREV=\"${REV}\" -o magrst magrst.c istext.c
