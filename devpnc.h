@@ -678,7 +678,7 @@ unsigned short pncxmit(t_dma *iob) {
   short  i;
   unsigned short xstat;
 
-  xstat = PNCXSNAK;
+  xstat = 0;
   if ((*iob).toid == 255) {
     for (i=1; i<=MAXNODEID; i++)
       if (i != myid)
@@ -686,8 +686,6 @@ unsigned short pncxmit(t_dma *iob) {
   } else {
     xstat |= pncxmit1((*iob).toid, iob);
   }
-  if (xstat != PNCXSNAK)    /* if anyone modified it, don't NAK */
-    xstat &= ~PNCXSNAK;
   return xstat;
 }
 
