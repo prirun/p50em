@@ -261,10 +261,10 @@
 
 #define MINACCEPTTIME 1      /* wait 1 second before accepting new connections */
 #define MAXACCEPTTIME 15     /* only wait 15 seconds to receive uid */
-#define MINCONNTIME 30       /* wait 30 seconds between connects to 1 node */
-#define MAXPNCBYTES 2048     /* max of 2048 byte packets */
-#define MAXPNCWORDS 1024     /* that's 1024 words */
-#define MAXPKTBYTES (MAXPNCBYTES+4)     /* adds 16-bit length word to each end */
+#define MINCONNTIME 30       /* wait 30 seconds between connects to a node */
+#define MAXPNCWORDS 1024     /* max packet size in 16-bit words */
+#define MAXPNCBYTES MAXPNCWORDS*2     /* same in bytes */
+#define MAXPKTBYTES (MAXPNCBYTES+4)   /* adds 16-bit length word to each end */
 
 #define MAXNODEID 254        /* 0 is a dummy, 255 is broadcast */
 #define MAXHOSTLEN 64        /* max length of remote host name */
@@ -386,7 +386,7 @@ unsigned short pncdisc(nodeid) {
     if (ni[nodeid].cstate > PNCCSCONN)
       fprintf(stderr, "devpnc: disconnect from node %d\n", nodeid);
     TRACE(T_RIO, " pncdisc: disconnect from node %d\n", nodeid);
-    shutdown(ni[nodeid].fd, SHUT_RDWR);
+    close(ni[nodeid].fd);
     ni[nodeid].cstate = PNCCSDISC;
     ni[nodeid].rcvlen = 0;
     ni[nodeid].fd = -1;
@@ -494,6 +494,7 @@ pncaccept(time_t timenow) {
     else
       pncdisc(i);
   }
+  TRACE(T_RIO, " devpnc: node %d authorized, fd %d\n", i, fd);
   ni[i].cstate = PNCCSAUTH;
   ni[i].rcvlen = 0;
   ni[i].fd = fd;
