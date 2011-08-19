@@ -740,7 +740,6 @@ pncrecv1(int nodeid) {
     fprintf(stderr, "devpnc: disabling node %d until reboot\n", nodeid);
     pncdisc(nodeid);
     ni[nodeid].cstate = PNCCSNONE;
-    bzero(ni[nodeid].uid, sizeof(ni[nodeid].uid));
     return 0;
   }
   if (!pncread(nodeid, pktlen - ni[nodeid].rcvlen))
