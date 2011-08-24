@@ -241,15 +241,15 @@
      NAK = the packet was corrupt when some (any) node saw it
 
    I initially thought a packet addressed to an inactive node would be
-   returned with no bits set in the ACK byte; but T&M prmnt1 indicates
-   that the NAK bit is set, so I'm guessing the local PNC sets this
-   bit.
+   returned with no bits set in the ACK byte, but T&M prmnt1 indicates
+   that the NAK bit is set.  When I tried that, it caused Primenet to
+   keep retrying the packet.  So I changed it back to no NAK.
 */
 
 #define PNCXSACK       0x8000  /* ACK'd */
   //#define PNCXSMACK      0x4000  /* multiple ACK */
 #define PNCXSWACK      0x2000  /* WACK'd */
-#define PNCXSNAK       0x1000  /* NAK'd (no node ack'd packet) */
+  //#define PNCXSNAK       0x1000  /* NAK'd (no node ack'd packet) */
   //#define PNCXSABPE      0x0200  /* ack byte parity error */
   //#define PNCXSABCE      0x0100  /* ack byte check error */
   //#define PNCXSXBPE      0x0080  /* transmit buffer parity error */
