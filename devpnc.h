@@ -1249,8 +1249,10 @@ intrexit:
   default:
     fatal("Bad func in devpcn");
   }
+}
 
 #else
 int devpnc (int class, int func, int device) {
   return -1;
+}
 #endif
