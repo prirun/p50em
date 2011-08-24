@@ -1,0 +1,287 @@
+Results of running old T&M's with the Prime emulator:
+Jim Wilcoxson, August 10, 2011
+
+CPUT1:  ../src/em -boot tmrun/cput1 100000
+======================================================================
+If run with SS1 up, this T&M halts on each pass.  If run with no
+sense switches, it will halt at 1002 and 1004 to test the HLT and NOP
+instructions, then loop continuously.
+
+[Prime Emulator ver 104 Aug  8 2011]
+
+CPU halt, instruction #2 at 0/1002 : 0 1
+A='0/0  B='0/0  L='0/0  X=0/0
+Press Enter to continue, h to halt... 
+
+
+CPU halt, instruction #4 at 0/1004 : 0 1
+A='0/0  B='0/0  L='0/0  X=0/0
+Press Enter to continue, h to halt... 
+
+
+CPU halt, instruction #32135 at 0/1004 : 0 1
+A='0/0  B='0/0  L='0/0  X=1/1
+Press Enter to continue, h to halt... 
+
+
+CPU halt, instruction #64266 at 0/1004 : 0 1
+A='0/0  B='0/0  L='0/0  X=1/1
+Press Enter to continue, h to halt... 
+
+
+CPU halt, instruction #96397 at 0/1004 : 0 1
+A='0/0  B='0/0  L='0/0  X=1/1
+Press Enter to continue, h to halt... 
+
+
+CPU halt, instruction #128528 at 0/1004 : 0 1
+A='0/0  B='0/0  L='0/0  X=1/1
+Press Enter to continue, h to halt... h
+
+
+Fatal error: CPU halt
+instruction #128528 at 0/1003 : 0 1
+A='0/0  B='0/0  L='0/0  X=1/1
+owner=0 , keys=120100, modals=0
+
+
+CPUT2:  ../src/em -boot tmrun/cput2
+======================================================================
+Sizes memory, then runs a small test loop in all sectors of the first
+32K of memory.  Prints a message after each pass, which can be rather
+long compared to CPUT1: a couple of minutes for this test vs a few
+seconds for CPUT1.  Use Ctrl-\ to kill the emulator and the test.
+
+$ ../src/em -boot tmrun/cput2 0
+[Prime Emulator ver 104 Aug  8 2011]
+
+CPUT2  REV 7  MAY 76
+MEM 077777
+EOP 000001
+EOP 000002Quit
+
+
+CPUT3:  ../src/em -boot tmrun/cput3
+======================================================================
+Very fast test of HSA (High Speed Arithmetic).  Use Ctrl-\ to kill the
+emulator and the test.  Sense switch 14 (value 4) causes the pass to
+be displayed as the test executes.
+
+$ ../src/em -boot tmrun/cput3 4n
+[Prime Emulator ver 104 Aug  8 2011]
+
+
+CPUT3  REV. 6 
+
+SYSTEM CONFIGURED WITH HSA
+PASS ---  000000  000001
+PASS ---  000000  000002
+PASS ---  000000  000003
+...
+Quit
+
+
+CPUT4:  ../src/em -boot tmrun/cput4 10000
+======================================================================
+Sense switch 10000 skips XEC interruptibility test.  The XEC test uses
+real-time clock functions such as memory cell increment that are not
+implemented on the emulator.  Unlike a real Prime, the emulator never
+handles interrupts while an instruction is executing.
+
+---
+
+CPU halt, instruction #400166 at 0/4335 : 0 140204
+A='56565/23925  B='70707/29127  L='13535270707/1567977927  X=177777/-1
+
+CPU halt, instruction #400169 at 0/4340 : 0 100000
+A='70707/29127  B='0/0  L='16161600000/1908867072  X=177777/-1
+
+-cpuid 5 (P750) is necessary because the emulator implements the more
+modern arrangement of the flt. pt. registers, where the 3 mantissa
+words are followed by the exponent word, ie, the DP register format
+and memory format are the same.  On older systems, P500 and below, the
+DP register format is M1, M2, E1, M3.
+
+---
+
+CPU halt, instruction #461175 at 0/7753 : 0 140204
+A='70000/28672  B='10475/4413  L='16000010475/1879052605  X=0/0
+
+Loads -1 into the SB% register using LDLR, then EAFA 1,SB%,* to
+transfer SB to FAR1.  The emulator doesn't preserve the fault and
+E-bit in this case.  According to Prime docs, these bits should always
+be zero for a FAR.  Or, maybe they are "don't care" bits and the
+emulator should save them on store but ignore them on reference.  But
+later, this T&M also expects LFLI to clear the 0 bits of the field
+length register, so at least in that case they were not treated as
+"don't care".
+
+I tried changing the emulator to store the ea into the FAR without
+masking off the fault and E bit.  It then passes this test and the
+failure at 10061, but fails at 10001.  In that case, the test expected
+the E-bit *not* to be set in the FAR, even though the eff. addr. of
+the EAFA instruction that loaded it did have the E-bit set, and had a
+bit offset.
+
+Made another change to apea to not set the e-bit, and all tests pass.
+But, not sure if the emulator still passes the DIAG tests with these
+changes; these quirks could have been model-specific nits.  If the
+DIAG tests are equally picky about model-specific fiddly things like
+this, there probably is no "right" way to do it.  For the most part,
+I've tried to avoid adding model-specific behavior to the emulator.
+
+---
+
+CPU halt, instruction #461226 at 0/10061 : 0 13404
+A='252/170  B='10521/4433  L='52410521/11145553  X=0/0
+
+Another case where CPUT4 expects the E-bit to be set in FAR:
+
+0/10047: 1310		A='0/0 B='707/455 L='707/455 E='0/0 X=0/0 Y=123/83 EQ K=14100 M=0
+ EAFA 1
+    get32: cached 0/10050 [RPBR]
+ AP ibr=5400, br=3, i=1, bit=0, a=10507
+ AP ea = 0/10516  
+    get32: cached 0/10516 [UNBR]
+    get16: cached 0/10520 [UNBR]
+ After indirect, AP ea = 10252/10521, bit=6  
+ APEA: 10252/10521-6 
+ FAR1=252/10521, eabit=6, FLR=5d7561c7
+
+			#461224 [ 0] IT=0 SB: 177777/177777 LB: 0/4  XB: 0/7
+0/10052: 13404		A='0/0 B='707/455 L='707/455 E='0/0 X=0/0 Y=123/83 EQ K=14100 M=0
+ opcode=00500, i=0, x=0
+ 2-word format, a=12
+ new opcode=00501, y=0, br=0, ixy=0, xok=1
+ EA: 0/12  
+ LDLR '000012
+
+			#461225 [ 0] IT=0 SB: 177777/177777 LB: 0/4  XB: 0/7
+0/10054: 23414		A='252/170 B='10521/4433 L='52410521/11145553 E='0/0 X=0/0 Y=123/83 EQ K=14100 M=0
+ opcode=01100, i=0, x=0
+ 2-word format, a=10516
+ new opcode=01103, y=0, br=0, ixy=0, xok=1
+ EA: 0/10516  
+ CLS
+ [ea]='2052410521/+279581009/279581009 '10252/'10521
+
+			#461226 [ 0] IT=0 SB: 177777/177777 LB: 0/4  XB: 0/7
+0/10060: 0		A='252/170 B='10521/4433 L='52410521/11145553 E='0/0 X=0/0 Y=123/83 LT K=14200 M=0
+ HLT
+    get16: cached 0/10060 [PBBR]
+    get16: cached 0/10061 [PBBR]
+
+---
+
+CPU halt, instruction #461276 at 0/10203 : 0 100000
+A='12/10  B='2525/1365  L='2402525/656725  X=0/0
+
+LFLI failure.  Document FDR3059 shows the layout of the Field Address
+and Field Length registers.  The FL register has the length value
+separated into 2 fields, and it was not clear how to combine these two
+fields.  Initially, I assumed you jamb the two fields together to get
+the length.  This caused CPUT4 to fail here, because bits 33-48 of the
+FALR are the low-order bits, and bits 60-64 are the high-order bits of
+the length.
+
+The macros GETFLR and PUTFLR were corrected to pass this test.
+
+---
+
+CPU halt, instruction #461288 at 0/10227 : 0 100000
+A='25/21  B='1252/682  L='5201252/1376938  X=0/0
+
+Same as above.
+
+---
+
+CPU halt, instruction #461309 at 0/10273 : 0 140204
+A='50036/20510  B='174046/-2010  L='12007574046/1344206886  X=0/0
+
+Same as above.
+
+---
+
+CPU halt, instruction #461312 at 0/10300 : 0 120512
+A='174046/-2010  B='0/0  L='37011400000/-131727360  X=0/0
+
+Same as above.
+
+---
+
+Emulator seg faulted after LPSW near label RXM in CPUT4.
+
+The reason is that this test activates Ring 3 by loading the ring bits
+of the program counter.  However, it does not enable segmentation, so
+we're still accessing memory by physical location - no address mapping
+occurs.  mapva used the entire 32-bit program counter as an offset in
+the MEM array (physical memory), and because of the ring bits, this
+caused a Unix seg fault.
+
+mapva was changed to only use 28 bits of the address when VA mapping
+is disabled.  Technically, a more accurate mask should be applied
+based on the CPU model.  For example, a P750 could only access 8MB of
+memory.
+
+---
+
+CPU halt, instruction #463156 at 0/15033 : 0 66
+A='12530/5464  B='23375/9981  L='2526023375/358098685  X=12524/5460
+
+CPUT4 verifies that LPID faults from ring 3, but the emulator didn't
+implement LPID at all so an unexpected UII fault occurred.
+
+Changed emulator to recognize LPID as restricted, then fault w/UII.
+
+---
+
+CPU halt, instruction #463401 at 0/12712 : 0 100000
+A='12674/5564  B='23375/9981  L='2557023375/364652285  X=12604/5508
+
+Supposed to be limited to 8 levels of indirect, then generate a
+restricted instruction fault, but the emulator did not have a limit.
+This indirect restriction is not documented anywhere I have seen,
+though I had wondered whether it was possible to hang a Prime with
+this method.  Now I know it's wasn't!  But I still wonder about two
+XEC instructions that execute each other...
+
+Changed emulator to have an indirect limit to pass this test.
+
+---
+
+CPU halt, instruction #463465 at 0/13170 : 0 140304
+A='13043/5667  B='13042/5666  L='2610613042/371398178  X=333/219
+(repeated below also) 
+
+CPU halt, instruction #463469 at 0/13046 : 0 104712
+A='13045/5669  B='13042/5666  L='2611213042/371529250  X=333/219
+
+CPU halt, instruction #463492 at 0/13055 : 0 104714
+A='13054/5676  B='13051/5673  L='2613013051/371988009  X=333/219
+
+CPU halt, instruction #463515 at 0/13064 : 0 104716
+A='13063/5683  B='13060/5680  L='2614613060/372446768  X=333/219
+
+CPU halt, instruction #463538 at 0/13073 : 0 104720
+A='13072/5690  B='13067/5687  L='2616413067/372905527  X=333/219
+
+CPU halt, instruction #463563 at 0/13104 : 0 104721
+A='13103/5699  B='13100/5696  L='2620613100/373495360  X=333/219
+
+CPU halt, instruction #463586 at 0/13116 : 0 104722
+A='13115/5709  B='13112/5706  L='2623213112/374150730  X=333/219
+
+CPU halt, instruction #463609 at 0/13130 : 0 104551
+A='13127/5719  B='13124/5716  L='2625613124/374806100  X=333/219
+
+The -cpuid 5 (P750) option can/should with CPUT4 because the
+emulator's FP register layout is the modern version: m1 m2 m3 e1.  But
+apparently, when an arithmetic fault occurred, the P750 recorded the
+program counter for the faulting instruction (backed) rather than the
+already-advanced program counter.  On a P750/550/650, the code in
+CPUT4 wants the saved PC to to be 1 or 2 less than the usual value, so
+this series of halts occurs because the emulator always uses the
+current (advanced) PC for an arithmetic fault.
+
+If CPUT4 is run w/o the -cpuid 5 option, this series of halts don't
+occur.

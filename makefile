@@ -3,7 +3,7 @@
 
 REV=${shell hg id -n}
 
-.PHONY:	em debug trace fixed hobby dongle lmserver magrst
+.PHONY:	em debug trace fixed hobby dongle lmserver magrst parts smad smag
 
 em:     # production
 
@@ -49,3 +49,18 @@ lmserver: # license server
 magrst: # Unix version of Prime's magrst
 
 	cc -arch ppc -DREV=\"${REV}\" -o magrst magrst.c istext.c
+
+
+parts: # Unix utility to determine parttions in a drive file
+
+	cc -arch ppc -DREV=\"${REV}\" -o parts parts.c
+
+
+smad: # Unix utility to decode Prime pdev
+
+	cc -arch ppc -DREV=\"${REV}\" -o smad smad.c
+
+smag: # Unix create Prime pdev
+
+	cc -arch ppc -DREV=\"${REV}\" -o smag smag.c
+
