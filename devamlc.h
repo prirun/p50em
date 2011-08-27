@@ -128,6 +128,7 @@ int devamlc (int class, int func, int device) {
      
 #define CT_SOCKET 1
 #define CT_SERIAL 2
+#define CT_DEDIP 3
 
   /* terminal states needed to process telnet connections */
 
@@ -142,7 +143,7 @@ int devamlc (int class, int func, int device) {
   static char ttymsg[1024];
   static int ttymsglen = 0;
   static int tsfd;                      /* socket fd for terminal server */
-
+  static int haveob = 0;                /* true if there are outbound socket lines */
   static struct {
     unsigned short deviceid;            /* this board's device ID */
     unsigned short dmcchan;             /* DMC channel (for input) */
@@ -162,6 +163,8 @@ int devamlc (int class, int func, int device) {
     unsigned short room[16];            /* room (chars) left in input buffer */
     unsigned short lconf[16];           /* line configuration word */
     unsigned short ctype[16];           /* connection type for each line */
+    unsigned int   obhost[16];          /* outbound telnet host */
+    unsigned short obport[16];          /* outbound telnet port */
     unsigned short modemstate[16];      /* Unix modem state bits (serial) */
     unsigned short recvlx;              /* next line to check for recv data */
     unsigned short pclock;              /* programmable clock */
@@ -182,7 +185,7 @@ int devamlc (int class, int func, int device) {
   int fd;
   unsigned int addrlen;
   unsigned char buf[1024];      /* max size of DMQ buffer */
-  int i, n, maxn, n2, nw;
+  int i, j, n, maxn, n2, nw;
   fd_set fds;
   struct timeval timeout;
   unsigned char ch;
@@ -201,6 +204,11 @@ int devamlc (int class, int func, int device) {
   int modemstate;
   int maxxmit;
   int tcpoptval;
+  int tempport;
+  unsigned int ipaddr;
+  char ipstring[16];
+  char *p;
+  struct hostent* host;
 
   /* save this board's device id in the dc[] array so we can tell
      what order the boards should be in.  This is necessary to find
@@ -263,7 +271,7 @@ int devamlc (int class, int func, int device) {
 	 a zero, it is assumed to be octal.  If no zero, then decimal.
       */
 
-      if ((cfgfile = fopen("amlc", "r")) == NULL) {
+      if ((cfgfile = fopen("amlc.cfg", "r")) == NULL) {
 	if (errno != ENOENT)
 	  printf("em: error opening amlc config file: %s", strerror(errno));
       } else {
@@ -271,6 +279,9 @@ int devamlc (int class, int func, int device) {
 	while (fgets(line, sizeof(line), cfgfile) != NULL) {
 	  lc++;
 	  line[sizeof(devname)] = 0;   /* don't let sscanf overwrite anything */
+	  line[strlen(line)-1] = 0;    /* remove trailing nl */
+	  if (strcmp(line,"") == 0 || line[0] == ';')
+	    continue;
 	  if (line[0] == '0')
 	    n = sscanf(line, "%o %s", &i, devname);
 	  else
@@ -286,19 +297,49 @@ int devamlc (int class, int func, int device) {
 	  //printf("devamlc: lc=%d, line '%o (%d) set to device %s\n", lc, i, i, devname);
 	  dx2 = i/16;
 	  lx = i & 0xF;
-#if 1
-	  if ((fd = open(devname, O_RDWR | O_NONBLOCK | O_EXLOCK)) == -1) {
-#else
-	  if ((fd = open(devname, O_RDWR | O_NONBLOCK)) == -1) {
-#endif
-	    printf("em: error connecting AMLC line '%o (%d) to device %s: %s\n", i, i, devname, strerror(errno));
-	    continue;
+	  if (devname[0] == '/') {      /* USB serial port */
+	    if ((fd = open(devname, O_RDWR | O_NONBLOCK | O_EXLOCK)) == -1) {
+	      printf("em: error connecting AMLC line '%o (%d) to device %s: %s\n", i, i, devname, strerror(errno));
+	      continue;
+	    }
+	    printf("em: connected AMLC line '%o (%d) to device %s\n", i, i, devname);
+	    dc[dx2].fd[lx] = fd;
+	    dc[dx2].connected |= BITMASK16(lx+1);
+	    dc[dx2].dedicated |= BITMASK16(lx+1);
+	    dc[dx2].ctype[lx] = CT_SERIAL;
+	  } else {
+
+	    /* might be IP address:port for outbound telnet (printers) */
+
+	    if (strlen(devname) > MAXHOSTLEN) {
+	      fprintf(stderr,"Line %d of amlc.cfg ignored: IP address too long\n", lc);
+	      continue;
+	    }
+	    
+	    /* break out host and port number; no port means this is
+	       incoming dedicated line: no connects out */
+
+	    if ((p=strtok(devname, PDELIM)) != NULL) {
+	      host = gethostbyname(p);
+	      if (host == NULL) {
+		fprintf(stderr,"Line %d of amlc.cfg ignored: can't resolve IP address %s\n", lc, p);
+		continue;
+	      }
+	      if ((p=strtok(NULL, DELIM)) != NULL) {
+		tempport = atoi(p);
+		if (tempport < 1 || tempport > 65000) {
+		  fprintf(stderr,"Line %d of amlc.cfg ignored: port number %d out of range 1-65000\n", tempport, lc);
+		  continue;
+		}
+	      } else
+		tempport = 0;
+	      dc[dx2].obhost[lx] = *(unsigned int *)host->h_addr;
+	      dc[dx2].obport[lx] = tempport;
+	      dc[dx2].ctype[lx] = CT_DEDIP;
+	      haveob = 1;
+	      //printf("Dedicated socket, host=%x, port=%d, cont=%d, line=%d\n", dc[dx2].obhost[lx], tempport, dx2, lx);
+	    }
 	  }
-	  printf("em: connected AMLC line '%o (%d) to device %s\n", i, i, devname);
-	  dc[dx2].fd[lx] = fd;
-	  dc[dx2].connected |= BITMASK16(lx+1);
-	  dc[dx2].dedicated |= BITMASK16(lx+1);
-	  dc[dx2].ctype[lx] = CT_SERIAL;
 	}
 	fclose(cfgfile);
       }
@@ -476,6 +517,7 @@ int devamlc (int class, int func, int device) {
       switch (dc[dx].ctype[lx]) {
 
       case CT_SOCKET:
+      case CT_DEDIP:
 	if (!(crs[A] & 0x400) && dc[dx].fd[lx] >= 0) {  /* if DTR drops, disconnect */
 	  AMLC_CLOSE_LINE;
 	}
@@ -681,24 +723,38 @@ int devamlc (int class, int func, int device) {
 	perror("accept error for AMLC");
       }
     } else {
+      ipaddr = ntohl(addr.sin_addr.s_addr);
+      snprintf(ipstring, sizeof(ipstring), "%d.%d.%d.%d", (ipaddr&0xFF000000)>>24, (ipaddr&0x00FF0000)>>16, 
+	       (ipaddr&0x0000FF00)>>8, (ipaddr&0x000000FF));
+      printf("Connect from IP %x\n", ipaddr);
+
+      /* if there are dedicated AMLC lines (specific IP address), we
+	 have to make 2 passes: the first pass checks for IP address
+	 matches; if none match, the second pass looks for a free
+	 line.  If there are no dedicated AMLC lines (haveob is 0),
+	 don't do this pass (j starts at 1) */
+
       allbusy = 1;
-      for (i=0; dc[i].deviceid && i<MAXBOARDS; i++)
-	for (lx=0; lx<16; lx++) {
-	  /* NOTE: don't allow connections on clock line */
-	  if (lx == 15 && (i+1 == MAXBOARDS || !dc[i+1].deviceid))
-	      break;
-	  if (dc[i].fd[lx] < 0 && dc[i].ctype[lx] == CT_SOCKET) {
-	    allbusy = 0;
-	    dc[i].dss |= BITMASK16(lx+1);
-	    dc[i].connected |= BITMASK16(lx+1);
-	    dc[i].fd[lx] = fd;
-	    dc[i].tstate[lx] = TS_DATA;
-	    dc[i].room[lx] = MAXROOM;
-	    dc[i].ctype[lx] = CT_SOCKET;
-	    //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, dc[i].deviceid, lx);
-	    goto endconnect;
+      for (j=!haveob; j<2; j++)
+	for (i=0; dc[i].deviceid && i<MAXBOARDS; i++)
+	  for (lx=0; lx<16; lx++) {
+	    /* NOTE: don't allow connections on clock line */
+	    if (lx == 15 && (i+1 == MAXBOARDS || !dc[i+1].deviceid))
+		break;
+	    if ((j == 0 && dc[i].ctype[lx] == CT_DEDIP && dc[i].obhost[lx] == ipaddr) ||
+		(j == 1 && dc[i].ctype[lx] == CT_SOCKET && dc[i].fd[lx] < 0)) {
+	      allbusy = 0;
+	      if (dc[i].fd[lx] >= 0)
+		close(dc[i].fd[lx]);
+	      dc[i].dss |= BITMASK16(lx+1);
+	      dc[i].connected |= BITMASK16(lx+1);
+	      dc[i].fd[lx] = fd;
+	      dc[i].tstate[lx] = TS_DATA;
+	      dc[i].room[lx] = MAXROOM;
+	      //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, dc[i].deviceid, lx);
+	      goto endconnect;
+	    }
 	  }
-	}
 endconnect:
       if (allbusy) {
 	warn("No free AMLC connection");
@@ -957,7 +1013,7 @@ endconnect:
 	      ch = buf[i];
 	      switch (state) {
 	      case TS_DATA:
-		if (ch == 255 && dc[dx].ctype[lx] == CT_SOCKET)
+		if (ch == 255 && (dc[dx].ctype[lx] == CT_SOCKET || dc[dx].ctype[lx] == CT_DEDIP))
 		  state = TS_IAC;
 		else {
     storech:
