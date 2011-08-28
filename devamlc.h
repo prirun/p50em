@@ -103,7 +103,7 @@ int devamlc (int class, int func, int device) {
      The max AMLC output queue size is 1023 (octal 2000), so a poll
      rate of 33 (1000/33 = 30 times per second) will generate about
      31,000 chars per second.  This rate may be further boosted if
-     there are lines DMQ buffers with 255 or more characters. */
+     there are DMQ buffers with 255 or more characters. */
 
 #define AMLCPOLL 100
 
@@ -130,7 +130,9 @@ int devamlc (int class, int func, int device) {
 #define CT_SERIAL 2
 #define CT_DEDIP 3
 
-  /* terminal states needed to process telnet connections */
+  /* terminal states needed to process telnet connections.
+     Ref: http://support.microsoft.com/kb/231866
+     Ref: http://www.iana.org/assignments/telnet-options */
 
 #define TS_DATA 0      /* data state, looking for IAC */
 #define TS_IAC 1       /* have seen initial IAC */
@@ -156,7 +158,7 @@ int devamlc (int class, int func, int device) {
     unsigned short ctinterrupt;         /* 1 bit per line */
     unsigned short dss;                 /* 1 bit per line */
     unsigned short connected;           /* 1 bit per line */
-    unsigned short dedicated;           /* 1 bit per line */
+    unsigned short serial;              /* true if any CT_SERIAL lines */
     unsigned short dsstime;             /* countdown to dss poll */
              short fd[16];              /* Unix fd, 1 per line */
     unsigned short tstate[16];          /* telnet state */
@@ -249,26 +251,46 @@ int devamlc (int class, int func, int device) {
 
       for (dx2=0; dx2<MAXBOARDS; dx2++) {
 	dc[dx2].deviceid = 0;
+	dc[dx2].connected = 0;
+	dc[dx2].serial = 0;
 	for (lx = 0; lx < 16; lx++) {
-	  dc[dx2].connected = 0;
-	  dc[dx2].dedicated = 0;
-	  for (lx = 0; lx < 16; lx++) {
-	    dc[dx2].fd[lx] = -1;
-	    dc[dx2].tstate[lx] = TS_DATA;
-	    dc[dx2].room[lx] = 64;
-	    dc[dx2].lconf[lx] = 0;
-	    dc[dx2].ctype[lx] = CT_SOCKET;
-	    dc[dx2].modemstate[lx] = 0;
-	  }
-	  dc[dx2].recvlx = 0;
+	  dc[dx2].fd[lx] = -1;
+	  dc[dx2].tstate[lx] = TS_DATA;
+	  dc[dx2].room[lx] = 64;
+	  dc[dx2].lconf[lx] = 0;
+	  dc[dx2].ctype[lx] = CT_SOCKET;
+	  dc[dx2].modemstate[lx] = 0;
 	}
+	dc[dx2].recvlx = 0;
       }
 
-      /* read the AMLC file, to see if any lines should be connected to
-	 real serial devices.  This file has the format:
-	   <line #> <Unix device name>
-         The entries can be in any order.  If the line number begins with
+      /* read the amlc.cfg file.  This file has 3 uses:
+
+         1. maps Prime async lines to real serial devices, like host
+            serial ports or USB serial boxes.  
+
+            Format: <line #> /dev/<Unix usb device name>
+
+	 2. maps incoming telnet connections from a specific IP
+            address to a specific Prime async line.  This is used for
+            serial device servers with a serial port + serial device
+            on one side and TCP/IP on the other.  When the serial
+            device is turned on, the SDS initiates a telnet connection
+            to the Prime, then serial data flows back and forth.
+
+	    Format: <line #> tcpaddr         NOTE: no port number!
+
+         3. specify Prime async lines that should be connected at all
+            times to a specific IP address:port.  This is used for
+            network printers for example.  If the connection dies, the
+            emulator will try to reconnect periodically.
+
+	    Format: <line #> tcpaddr:port    NOTE: has port number!
+
+         Entries can be in any order.  If the line number begins with
 	 a zero, it is assumed to be octal.  If no zero, then decimal.
+	 Lines specified in amlc.cfg will not be used by the
+	 emulator's built-in terminal server.
       */
 
       if ((cfgfile = fopen("amlc.cfg", "r")) == NULL) {
@@ -305,7 +327,7 @@ int devamlc (int class, int func, int device) {
 	    printf("em: connected AMLC line '%o (%d) to device %s\n", i, i, devname);
 	    dc[dx2].fd[lx] = fd;
 	    dc[dx2].connected |= BITMASK16(lx+1);
-	    dc[dx2].dedicated |= BITMASK16(lx+1);
+	    dc[dx2].serial = 1;
 	    dc[dx2].ctype[lx] = CT_SERIAL;
 	  } else {
 
@@ -317,7 +339,8 @@ int devamlc (int class, int func, int device) {
 	    }
 	    
 	    /* break out host and port number; no port means this is
-	       incoming dedicated line: no connects out */
+	       an incoming dedicated line: no connects out.  With a
+	       port means we need to connect to it. */
 
 	    if ((p=strtok(devname, PDELIM)) != NULL) {
 	      host = gethostbyname(p);
@@ -450,8 +473,8 @@ int devamlc (int class, int func, int device) {
        turning on bit 0100, but are turning on 0x0100. */
 #define TIOCM_CD 0x0100    
 
-    if (func == 00) {              /* input Data Set Sense (carrier) */
-      if (dc[dx].dedicated) {      /* any serial connections? */
+    if (func == 00) {             /* input Data Set Sense (carrier) */
+      if (dc[dx].serial) {        /* any serial connections? */
 	if (--dc[dx].dsstime == 0) {
 	  dc[dx].dsstime = DSSCOUNTDOWN;
 	  for (lx = 0; lx < 16; lx++) {  /* yes, poll them */
@@ -726,7 +749,7 @@ int devamlc (int class, int func, int device) {
       ipaddr = ntohl(addr.sin_addr.s_addr);
       snprintf(ipstring, sizeof(ipstring), "%d.%d.%d.%d", (ipaddr&0xFF000000)>>24, (ipaddr&0x00FF0000)>>16, 
 	       (ipaddr&0x0000FF00)>>8, (ipaddr&0x000000FF));
-      printf("Connect from IP %x\n", ipaddr);
+      //printf("Connect from IP %s\n", ipstring);
 
       /* if there are dedicated AMLC lines (specific IP address), we
 	 have to make 2 passes: the first pass checks for IP address
