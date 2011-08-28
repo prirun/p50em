@@ -1091,18 +1091,11 @@ endconnect:
 		  tstate = TS_IAC;
 		break;
 	      case TS_OPTION:
-#if 0
 		//printf("\nReceived option %d\n", ch);
                 if (toper == TN_WILL) {
-		  if (ch == TN_SGA || ch == TN_BINARY)
+		  if (ch == TN_BINARY)
 		    ;
-		  else if (ch == TN_KERMIT) {
-		    buf[0] = TN_IAC;
-		    buf[1] =   TN_DO;
-		    buf[2] =   ch;
-		    //printf("Sending DO %d\n", ch);
-		    write(fd, buf, 3);
-		  } else {
+		  else {
 		    buf[0] = TN_IAC;
 		    buf[1] =   TN_DONT;
 		    buf[2] =   ch;
@@ -1110,25 +1103,18 @@ endconnect:
 		    write(fd, buf, 3);
 		  }
 		} else if (toper == TN_DO) {
-		    if (toper == TN_ECHO)
-		      ;
-		    else if (0 && ch == TN_KERMIT) {
-		      buf[0] = TN_IAC;
-		      buf[1] =   TN_WILL;
-		      buf[2] =   ch;
-		      //printf("Sending WILL %d\n", ch);
-		      write(fd, buf, 3);
-		    } else {
-		      buf[0] = TN_IAC;
-		      buf[1] =   TN_WONT;
-		      buf[2] =   ch;
-		      //printf("Sending WONT %d\n", ch);
-		      write(fd, buf, 3);
-		    }
+		  if (toper == TN_ECHO || toper == TN_SGA)
+		    ;
+		  else {
+		    buf[0] = TN_IAC;
+		    buf[1] =   TN_WONT;
+		    buf[2] =   ch;
+		    //printf("Sending WONT %d\n", ch);
+		    write(fd, buf, 3);
+		  }
 		}
 		tstate = TS_DATA;
 		break;
-#endif
 	      default:
 		tstate = TS_DATA;
 	      }
