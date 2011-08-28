@@ -130,30 +130,12 @@ int devamlc (int class, int func, int device) {
 #define CT_SERIAL 2
 #define CT_DEDIP 3
 
-  /* terminal states needed to process telnet connections.
-     Ref: http://support.microsoft.com/kb/231866
-     Ref: http://www.iana.org/assignments/telnet-options */
+  /* terminal states needed to process telnet connections */
 
 #define TS_DATA 0      /* data state, looking for IAC */
 #define TS_IAC 1       /* have seen initial IAC */
 #define TS_SUBOPT 2    /* inside a suboption */
 #define TS_OPTION 3    /* inside an option */
-
-  /* telnet protocol special characters */
-
-#define TN_IAC 255
-#define TN_WILL 251
-#define TN_WONT 252
-#define TN_DO 253
-#define TN_DONT 254
-
-  /* telnet options */
-
-#define TN_BINARY 0
-#define TN_ECHO 1
-#define TN_SGA 3      /* means this is a full-duplex connection */
-#define TN_KERMIT 47
-#define TN_SUBOPT 250
 
   static short inited = 0;
   static int pollspeedup = 1;
@@ -174,7 +156,7 @@ int devamlc (int class, int func, int device) {
     unsigned short ctinterrupt;         /* 1 bit per line */
     unsigned short dss;                 /* 1 bit per line */
     unsigned short connected;           /* 1 bit per line */
-    unsigned short isserial;            /* 1 bit per line */
+    unsigned short dedicated;           /* 1 bit per line */
     unsigned short dsstime;             /* countdown to dss poll */
              short fd[16];              /* Unix fd, 1 per line */
     unsigned short tstate[16];          /* telnet state */
@@ -207,7 +189,7 @@ int devamlc (int class, int func, int device) {
   fd_set fds;
   struct timeval timeout;
   unsigned char ch;
-  int tstate, toper;
+  int state;
   int msgfd;
   int allbusy;
   unsigned short qtop, qbot, qtemp;
@@ -269,7 +251,7 @@ int devamlc (int class, int func, int device) {
 	dc[dx2].deviceid = 0;
 	for (lx = 0; lx < 16; lx++) {
 	  dc[dx2].connected = 0;
-	  dc[dx2].isserial = 0;
+	  dc[dx2].dedicated = 0;
 	  for (lx = 0; lx < 16; lx++) {
 	    dc[dx2].fd[lx] = -1;
 	    dc[dx2].tstate[lx] = TS_DATA;
@@ -323,7 +305,7 @@ int devamlc (int class, int func, int device) {
 	    printf("em: connected AMLC line '%o (%d) to device %s\n", i, i, devname);
 	    dc[dx2].fd[lx] = fd;
 	    dc[dx2].connected |= BITMASK16(lx+1);
-	    dc[dx2].isserial |= BITMASK16(lx+1);
+	    dc[dx2].dedicated |= BITMASK16(lx+1);
 	    dc[dx2].ctype[lx] = CT_SERIAL;
 	  } else {
 
@@ -469,7 +451,7 @@ int devamlc (int class, int func, int device) {
 #define TIOCM_CD 0x0100    
 
     if (func == 00) {              /* input Data Set Sense (carrier) */
-      if (dc[dx].isserial) {      /* any serial connections? */
+      if (dc[dx].dedicated) {      /* any serial connections? */
 	if (--dc[dx].dsstime == 0) {
 	  dc[dx].dsstime = DSSCOUNTDOWN;
 	  for (lx = 0; lx < 16; lx++) {  /* yes, poll them */
@@ -744,7 +726,7 @@ int devamlc (int class, int func, int device) {
       ipaddr = ntohl(addr.sin_addr.s_addr);
       snprintf(ipstring, sizeof(ipstring), "%d.%d.%d.%d", (ipaddr&0xFF000000)>>24, (ipaddr&0x00FF0000)>>16, 
 	       (ipaddr&0x0000FF00)>>8, (ipaddr&0x000000FF));
-      //printf("Connect from IP %s\n", ipstring);
+      printf("Connect from IP %x\n", ipaddr);
 
       /* if there are dedicated AMLC lines (specific IP address), we
 	 have to make 2 passes: the first pass checks for IP address
@@ -800,15 +782,15 @@ endconnect:
 	   methods, this stuff might be better off in a very thin
 	   connection server */
 	
-	buf[0] = TN_IAC;
-	buf[1] =   TN_WILL;
-	buf[2] =   TN_ECHO;
-	buf[3] = TN_IAC;
-	buf[4] =   TN_DO;
-	buf[5] =   TN_SGA;
-	buf[6] = TN_IAC;
-	buf[7] =   TN_DO;
-	buf[8] =   TN_BINARY;
+	buf[0] = 255;   /* IAC */
+	buf[1] = 251;   /* will */
+	buf[2] = 1;     /* echo */
+	buf[3] = 255;   /* IAC */
+	buf[4] = 251;   /* will */
+	buf[5] = 3;     /* supress go ahead */
+	buf[6] = 255;   /* IAC */
+	buf[7] = 253;   /* do */
+	buf[8] = 0;     /* binary mode */
 	write(fd, buf, 9);
 
 	/* send out the ttymsg greeting */
@@ -1026,13 +1008,13 @@ endconnect:
 
 	  if (n > 0) {
 	    //printf("devamlc: RECV dx=%d, lx=%d, b=%d, tried=%d, read=%d\n", dx, lx, dc[dx].bufnum, n2, n);
-	    tstate = dc[dx].tstate[lx];
+	    state = dc[dx].tstate[lx];
 	    for (i=0; i<n; i++) {
 	      ch = buf[i];
-	      switch (tstate) {
+	      switch (state) {
 	      case TS_DATA:
-		if (ch == TN_IAC && (dc[dx].ctype[lx] == CT_SOCKET || dc[dx].ctype[lx] == CT_DEDIP))
-		  tstate = TS_IAC;
+		if (ch == 255 && (dc[dx].ctype[lx] == CT_SOCKET || dc[dx].ctype[lx] == CT_DEDIP))
+		  state = TS_IAC;
 		else {
     storech:
 		  utempa = lx<<12 | 0x0200 | ch;
@@ -1044,74 +1026,32 @@ endconnect:
 		break;
 	      case TS_IAC:
 		switch (ch) {
-		case TN_IAC:
-		  tstate = TS_DATA;
+		case 255:
+		  state = TS_DATA;
 		  goto storech;
-		case TN_WILL:
-		case TN_WONT:
-		case TN_DO:
-		case TN_DONT:
-		  //printf("\nReceived command %d\n", ch);
-		  tstate = TS_OPTION;
-		  toper = ch;
+		case 251:   /* will */
+		case 252:   /* won't */
+		case 253:   /* do */
+		case 254:   /* don't */
+		  state = TS_OPTION;
 		  break;
-		case TN_SUBOPT:
-		  //printf("\nReceived SUBOPT command\n");
-		  tstate = TS_SUBOPT;
+		case 250:   /* begin suboption */
+		  state = TS_SUBOPT;
 		  break;
 		default:    /* ignore other chars after IAC */
-		  //printf("\nReceived unknown IAC command %d\n", ch);
-		  tstate = TS_DATA;
+		  state = TS_DATA;
 		}
 		break;
 	      case TS_SUBOPT:
-		//printf("\nsubopt received %d\n", ch);
-		if (ch == TN_IAC)
-		  tstate = TS_IAC;
+		if (ch == 255)
+		  state = TS_IAC;
 		break;
 	      case TS_OPTION:
-		//printf("\nReceived option %d\n", ch);
-                if (toper == TN_WILL) {
-		  if (ch == TN_SGA || ch == TN_BINARY)
-		    ;
-		  else if (ch == TN_KERMIT) {
-		    buf[0] = TN_IAC;
-		    buf[1] =   TN_DO;
-		    buf[2] =   ch;
-		    //printf("Sending DO %d\n", ch);
-		    write(fd, buf, 3);
-		  } else {
-		    buf[0] = TN_IAC;
-		    buf[1] =   TN_DONT;
-		    buf[2] =   ch;
-		    //printf("Sending DONT %d\n", ch);
-		    write(fd, buf, 3);
-		  }
-		} else if (toper == TN_DO) {
-		    if (toper == TN_ECHO)
-		      ;
-		    else if (0 && ch == TN_KERMIT) {
-		      buf[0] = TN_IAC;
-		      buf[1] =   TN_WILL;
-		      buf[2] =   ch;
-		      //printf("Sending WILL %d\n", ch);
-		      write(fd, buf, 3);
-		    } else {
-		      buf[0] = TN_IAC;
-		      buf[1] =   TN_WONT;
-		      buf[2] =   ch;
-		      //printf("Sending WONT %d\n", ch);
-		      write(fd, buf, 3);
-		    }
-		}
-		tstate = TS_DATA;
-		break;
 	      default:
-		printf ("Default taken!\n");
-		tstate = TS_DATA;
+		state = TS_DATA;
 	      }
 	    }
-	    dc[dx].tstate[lx] = tstate;
+	    dc[dx].tstate[lx] = state;
 	  }
 	}
 	lx = (lx+1) & 0xF;
