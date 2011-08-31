@@ -3,7 +3,7 @@
 
 REV=${shell hg id -n}
 
-.PHONY:	em debug trace fixed hobby dongle lmserver magrst parts smad smag
+.PHONY:	em debug trace fixed hobby dongle lmserver magrst parts smad smag mtread mtwrite
 
 em:     # production
 
@@ -45,6 +45,16 @@ lmserver: # license server
 
 	cc -arch ppc -DREV=\"${REV}\" -c lmserver.c -I../dongle/mx/ppc/api;g++ -arch ppc lmserver.o -o lmserver ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm lmserver.o
+
+mtread: # Dump a tape to a .tap disk file (Linux only)
+
+	cc -o mtread mtread.c
+
+
+mtwrite: # write a physical tape from a .tap file (Linux only)
+
+	cc -o mtwrite mtwrite.c
+
 
 magrst: # Unix version of Prime's magrst
 
