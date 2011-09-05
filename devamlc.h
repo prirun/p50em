@@ -74,6 +74,25 @@
   OCP '15xx/'16xx
   - enable/disable interrupts
   - emulator stores in a structure
+
+AMLC status word (from AMLCT5):
+
+     BITS                 DESCRIPTION
+  
+      1                   END OF RANGE INTERRUPT
+      2                   CLOCK RUNNING
+      3-6                 LINE # OF LINE WHOSE DATA SET STATUS HAS CHANGED
+                          (VALID ONLY WHEN BIT 7 IS SET)
+      7                   AMLC INTERRUPTING BECAUSE DATA SET STATUS HAS CHANGED
+      8                   0 = AMLC RECEIVING INTO FIRST BUFFER
+                          1 = AMLC RECEIVING INTO SECOND BUFFER
+      9                   CHARACTER TIME INTRP INDICATION #1
+      10                  MULTIPLE LINES HAD CHAR TIME INTERRUPT
+      11                  INTERRUPTS ENABLED
+      12                  0 = CONTROLLER IN DMT MODE
+                          1 = CONTROLLER IN DMQ MODE
+      13-16               LINE # OF LINE CAUSING CHARACTER TIME INTRP.
+
 */
 
 /* this macro closes an AMLC connection - used in several places */
@@ -97,7 +116,7 @@ int devamlc (int class, int func, int device) {
 
 #define MAXLINES 128
 #define MAXBOARDS 8
-#define MAXROOM 1024
+#define MAXREAD 64
 
   /* AMLC poll rate (ms).  Max data rate = queue size*1000/AMLCPOLL
      The max AMLC output queue size is 1023 (octal 2000), so a poll
@@ -106,6 +125,7 @@ int devamlc (int class, int func, int device) {
      there are DMQ buffers with 255 or more characters. */
 
 #define AMLCPOLL 100
+#define AMLCPOLL 50
 
   /* DSSCOUNTDOWN is the number of carrier status requests that should
      occur before polling real serial devices.  Primos does a carrier
@@ -113,12 +133,6 @@ int devamlc (int class, int func, int device) {
      logged-out terminals, so we poll the real status every 5 seconds. */
 
 #define DSSCOUNTDOWN 25
-
-#if 1
-  #define QAMLC 020000   /* this is to enable QAMLC/DMQ functionality */
-#else
-  #define QAMLC 0
-#endif
 
   /* connection types for each line.  This _doesn't_ imply the line is
      actually connected, ie, an AMLC line may be tied to a specific 
@@ -178,7 +192,6 @@ int devamlc (int class, int func, int device) {
     unsigned short dsstime;             /* countdown to dss poll */
              short fd[16];              /* Unix fd, 1 per line */
     unsigned short tstate[16];          /* telnet state */
-    unsigned short room[16];            /* room (chars) left in input buffer */
     unsigned short lconf[16];           /* line configuration word */
     unsigned short ctype[16];           /* connection type for each line */
     unsigned int   obhost[16];          /* outbound telnet host */
@@ -186,7 +199,6 @@ int devamlc (int class, int func, int device) {
     unsigned short modemstate[16];      /* Unix modem state bits (serial) */
     unsigned short recvlx;              /* next line to check for recv data */
     unsigned short pclock;              /* programmable clock */
-    char dmqmode;                       /* 0=DMT, 1=DMQ */
     char bufnum;                        /* 0=1st input buffer, 1=2nd */
     char eor;                           /* 1=End of Range on input */
   } dc[MAXBOARDS];
@@ -202,7 +214,7 @@ int devamlc (int class, int func, int device) {
   struct sockaddr_in addr;
   int fd;
   unsigned int addrlen;
-  unsigned char buf[1024];      /* max size of DMQ buffer */
+  char buf[1024];      /* max size of DMQ buffer */
   int i, j, n, maxn, n2, nw;
   fd_set fds;
   struct timeval timeout;
@@ -213,7 +225,6 @@ int devamlc (int class, int func, int device) {
   unsigned short qtop, qbot, qtemp;
   unsigned short qseg, qmask, qents;
   ea_t qentea;
-  char line[100];
   int lc;
   FILE *cfgfile;
   char devname[32];
@@ -272,7 +283,6 @@ int devamlc (int class, int func, int device) {
 	for (lx = 0; lx < 16; lx++) {
 	  dc[dx2].fd[lx] = -1;
 	  dc[dx2].tstate[lx] = TS_DATA;
-	  dc[dx2].room[lx] = 64;
 	  dc[dx2].lconf[lx] = 0;
 	  dc[dx2].ctype[lx] = CT_SOCKET;
 	  dc[dx2].modemstate[lx] = 0;
@@ -314,22 +324,22 @@ int devamlc (int class, int func, int device) {
 	  printf("em: error opening amlc config file: %s", strerror(errno));
       } else {
 	lc = 0;
-	while (fgets(line, sizeof(line), cfgfile) != NULL) {
+	while (fgets(buf, sizeof(buf), cfgfile) != NULL) {
 	  lc++;
-	  line[sizeof(devname)] = 0;   /* don't let sscanf overwrite anything */
-	  line[strlen(line)-1] = 0;    /* remove trailing nl */
-	  if (strcmp(line,"") == 0 || line[0] == ';')
+	  buf[sizeof(devname)] = 0;   /* don't let sscanf overwrite anything */
+	  buf[strlen(buf)-1] = 0;    /* remove trailing nl */
+	  if (strcmp(buf,"") == 0 || buf[0] == ';')
 	    continue;
-	  if (line[0] == '0')
-	    n = sscanf(line, "%o %s", &i, devname);
+	  if (buf[0] == '0')
+	    n = sscanf(buf, "%o %s", &i, devname);
 	  else
-	    n = sscanf(line, "%d %s", &i, devname);
+	    n = sscanf(buf, "%d %s", &i, devname);
 	  if (n != 2) {
-	    printf("em: Can't parse amlc config file line #%d: %s\n", lc, line);
+	    printf("em: Can't parse amlc config file buf #%d: %s\n", lc, buf);
 	    continue;
 	  }
 	  if (i < 0 || i >= MAXLINES) {
-	    printf("em: amlc line # '%o (%d) out of range in amlc config file at line #%d: %s\n", i, i, lc, line);
+	    printf("em: amlc line # '%o (%d) out of range in amlc config file at line #%d: %s\n", i, i, lc, buf);
 	    continue;
 	  }
 	  //printf("devamlc: lc=%d, line '%o (%d) set to device %s\n", lc, i, i, devname);
@@ -434,10 +444,10 @@ int devamlc (int class, int func, int device) {
     //printf(" OCP '%02o%02o\n", func, device);
 
     if (func == 012) {            /* set normal (DMT) mode */
-      dc[dx].dmqmode = 0;
+      fatal("AMLC DMT mode not supported");
 
-    } else if (func == 013 && QAMLC) {     /* set diagnostic (DMQ) mode */
-      dc[dx].dmqmode = 1;
+    } else if (func == 013) {     /* set diagnostic (DMQ) mode */
+      ;
 
     } else if (func == 015) {     /* enable interrupts */
       dc[dx].intenable = 1;
@@ -458,7 +468,6 @@ int devamlc (int class, int func, int device) {
       dc[dx].dss = 0;      /* NOTE: 1=asserted in emulator, 0=asserted on Prime */
       dc[dx].dsstime = DSSCOUNTDOWN;
       dc[dx].pclock = 0;
-      dc[dx].dmqmode = 0;
       dc[dx].bufnum = 0;
       dc[dx].eor = 0;
 
@@ -514,7 +523,7 @@ int devamlc (int class, int func, int device) {
       IOSKIP;
 
     } else if (func == 07) {       /* input AMLC status */
-      crs[A] = 040000 | (dc[dx].bufnum<<8) | (dc[dx].intenable<<5) | (dc[dx].dmqmode<<4);
+      crs[A] = 040000 | (dc[dx].bufnum<<8) | (dc[dx].intenable<<5) | (1<<4);
       if (dc[dx].eor) {
 	crs[A] |= 0100000;
 	dc[dx].eor = 0;
@@ -529,7 +538,7 @@ int devamlc (int class, int func, int device) {
       IOSKIP;
 
     } else if (func == 011) {      /* input ID */
-      crs[A] = QAMLC | 054;
+      crs[A] = 020000 | 054;       /* 020000 = QAMLC */
       IOSKIP;
 
     } else {
@@ -706,24 +715,17 @@ int devamlc (int class, int func, int device) {
       AMLC_SET_POLL;
       IOSKIP;
 
-    } else if (func == 03) {      /* set room in input buffer */
-      lx = (crs[A]>>12);
-      dc[dx].room[lx] = crs[A] & 0xFFF;
-      //printf("OTA '03%02o: AMLC line %d, room=%d, A=0x%04x\n", device, lx, dc[dx].room[lx], crs[A]);
-      IOSKIP;
-
     } else if (func == 014) {      /* set DMA/C channel (for input) */
       dc[dx].dmcchan = crs[A] & 0x7ff;
-      //printf("OTA '14%02o: AMLC chan = %o\n", device, dc[dx].dmcchan);
       if (!(crs[A] & 0x800))
 	fatal("Can't run AMLC in DMA mode!");
-#if 0
-	    dmcea = dc[dx].dmcchan;
-	  dmcpair = get32io(dmcea);
-	  dmcbufbegea = dmcpair>>16;
-	  dmcbufendea = dmcpair & 0xffff;
-	  dmcnw = dmcbufendea - dmcbufbegea + 1;
-	  printf("AMLC: dmcnw=%d\n", dmcnw);
+#if 1
+      dmcea = dc[dx].dmcchan;
+      dmcpair = get32io(dmcea);
+      dmcbufbegea = dmcpair>>16;
+      dmcbufendea = dmcpair & 0xffff;
+      dmcnw = dmcbufendea - dmcbufbegea + 1;
+      printf("OTA '14%02o: AMLC chan=%o, DMC begin=%o, end=%o, nw=%d\n", device, dc[dx].dmcchan, dmcbufbegea, dmcbufendea, dmcnw);
 #endif
       IOSKIP;
 
@@ -755,10 +757,9 @@ int devamlc (int class, int func, int device) {
     /* check for 1 new telnet connection on each AMLC poll */
 
     addrlen = sizeof(addr);
-    while ((fd = accept(tsfd, (struct sockaddr *)&addr, &addrlen)) == -1 && errno == EINTR)
-      ;
+    fd = accept(tsfd, (struct sockaddr *)&addr, &addrlen);
     if (fd == -1) {
-      if (errno != EWOULDBLOCK) {
+      if (errno != EWOULDBLOCK && errno != EINTR) {
 	perror("accept error for AMLC");
       }
     } else {
@@ -789,7 +790,6 @@ int devamlc (int class, int func, int device) {
 	      dc[i].connected |= BITMASK16(lx+1);
 	      dc[i].fd[lx] = fd;
 	      dc[i].tstate[lx] = TS_DATA;
-	      dc[i].room[lx] = MAXROOM;
 	      //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, dc[i].deviceid, lx);
 	      goto endconnect;
 	    }
@@ -863,55 +863,41 @@ endconnect:
 
 	if (dc[dx].xmitenabled & BITMASK16(lx+1)) {
 	  n = 0;
-	  if (dc[dx].dmqmode) {
-	    qcbea = dc[dx].baseaddr + lx*4;
-	    if (dc[dx].connected & BITMASK16(lx+1)) {
+	  qcbea = dc[dx].baseaddr + lx*4;
+	  if (dc[dx].connected & BITMASK16(lx+1)) {
 
-	      /* this line is connected, determine max chars to write
-	         XXX: maxn should scale, depending on the actual line
-		 throughput and AMLC poll rate */
+	    /* this line is connected, determine max chars to write
+	       XXX: maxn should scale, depending on the actual line
+	       throughput and AMLC poll rate */
 
-	      qtop = get16io(qcbea);
-	      qbot = get16io(qcbea+1);
-	      if (qtop == qbot)
-		continue;        /* queue is empty, try next line */
-	      qseg = get16io(qcbea+2);
-	      qmask = get16io(qcbea+3);
-	      qents = (qbot-qtop) & qmask;
-	      maxn = sizeof(buf);
-	      /* XXX: for FTDI USB->serial chip, optimal request size
-		 is a multiple of 62 bytes, ie, 992 bytes, not 1K */
-	      if (qents < maxn)
-		maxn = qents;
-	      qentea = MAKEVA(qseg & 0xfff, qtop);
+	    qtop = get16io(qcbea);
+	    qbot = get16io(qcbea+1);
+	    if (qtop == qbot)
+	      continue;        /* queue is empty, try next line */
+	    qseg = get16io(qcbea+2);
+	    qmask = get16io(qcbea+3);
+	    qents = (qbot-qtop) & qmask;
+	    maxn = sizeof(buf);
+	    /* XXX: for FTDI USB->serial chip, optimal request size
+	       is a multiple of 62 bytes, ie, 992 bytes, not 1K */
+	    if (qents < maxn)
+	      maxn = qents;
+	    qentea = MAKEVA(qseg & 0xfff, qtop);
 
-	      /* pack DMQ characters into a buffer & fix parity
-		 XXX: turning off the high bit at this low level
-		 precludes the use of TTY8BIT mode... */
+	    /* pack DMQ characters into a buffer & fix parity
+	       XXX: turning off the high bit at this low level
+	       precludes the use of TTY8BIT mode... */
 
-	      n = 0;
-	      for (i=0; i < maxn; i++) {
-		utempa = MEM[qentea];
-		qentea = (qentea & ~qmask) | ((qentea+1) & qmask);
-		//printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
-		buf[n++] = utempa & 0x7F;
-	      }
-	    } else {         /* no line connected, just drain queue */
-	      //printf("Draining output queue on line %d\n", lx);
-	      put16io(get16io(qcbea), qcbea+1);
+	    n = 0;
+	    for (i=0; i < maxn; i++) {
+	      utempa = MEM[qentea];
+	      qentea = (qentea & ~qmask) | ((qentea+1) & qmask);
+	      //printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
+	      buf[n++] = utempa & 0x7F;
 	    }
-	  } else {  /* DMT */
-	    utempa = get16io(dc[dx].baseaddr + lx);
-	    if (utempa != 0) {
-	      if ((utempa & 0x8000) && (dc[dx].connected & BITMASK16(lx+1))) {
-		//printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
-		buf[n++] = utempa & 0x7F;
-	      }
-	    }
-
-	    /* would need to setup DMT xmit poll here, and/or look for
-	       char time interrupt.  In practice, DMT isn't used when
-	       the AMLC device is configured as a QAMLC */
+	  } else {         /* no line connected, just drain queue */
+	    //printf("Draining output queue on line %d\n", lx);
+	    put16io(get16io(qcbea), qcbea+1);
 	  }
 
 	  /* n chars have been packed into buf; see how many we can send */
@@ -923,8 +909,7 @@ endconnect:
 	    if (nw > 0) {
 
 	      /* nw chars were sent; for DMQ, update the queue head
-		 top to reflect nw dequeued entries.  For DMT, clear
-		 the dedicated cell (only writes 1 char at a time).
+		 top to reflect nw dequeued entries.
 
 		 XXX: Might be good to keep write stats here, to
 		 decide how many chars to dequeue above and/or how
@@ -932,11 +917,8 @@ endconnect:
 		 buffers are used and Unix buffers get full so writes
 		 can't complete */
 
-	      if (dc[dx].dmqmode) {
-		qtop = (qtop & ~qmask) | ((qtop+nw) & qmask);
-		put16io(qtop, qcbea);
-	      } else
-		put16io(0, dc[dx].baseaddr + lx);
+	      qtop = (qtop & ~qmask) | ((qtop+nw) & qmask);
+	      put16io(qtop, qcbea);
 	      if (nw > maxxmit)
 		maxxmit = nw;
 	    } else if (nw == -1)
@@ -965,6 +947,31 @@ endconnect:
       }
     }
 
+    /* the largest DMQ buffer size is 1023 chars.  If any line's DMQ
+       buffer is getting filled completely, then we need to poll
+       faster to increase throughput.  If the max queue size falls
+       below 256, then decrease the interrupt rate.  Anywhere between
+       256-1022, leave the poll rate alone.
+
+       XXX NOTE: polling faster only causes AMLDIM to fill buffers
+       faster for the last AMLC board (with ctinterrupt set).
+    */
+
+#if 1
+    if (maxxmit >= 1023) {
+      if (pollspeedup < 8) {
+	pollspeedup++;
+	//printf("%d ", pollspeedup);
+	//fflush(stdout);
+      }
+    } else if (pollspeedup > 1 && maxxmit < 256) {
+      pollspeedup--;
+      //printf("%d ", pollspeedup);
+      //fflush(stdout);
+    }
+
+#endif
+
     /* process input, but only as much as will fit into the DMC
        buffer.  
 
@@ -977,31 +984,21 @@ endconnect:
        The AMLC tumble tables should never overflow, because we only
        read as many characters from the socket buffers as will fit in
        the tumble tables. However, the tty line buffers may overflow,
-       causing data from the terminal to be dropped. To help avoid
-       this, a new OTA "set room left" has been implemented.  If there
-       is no room left in the tty input buffer, don't read any more
-       characters from the socket for that line.  In case Primos has
-       not been modified to use the room left feature, it is
-       initialized to MAXROOM for each line, so that at most MAXROOM
-       characters are read from a line during a poll.  If MAXROOM is
-       small, like 64, this also makes overflow less likely if the
-       line input buffer is set to '200 or so with AMLBUF.  To
-       optimize transfers to the Prime over AMLC lines, MAXROOM is set
-       much higher, to 1024 */
+       causing data from the terminal to be dropped. */
 
     if (!dc[dx].eor) {
       if (dc[dx].bufnum)
-	dmcea = dc[dx].dmcchan ^ 2;
+	dmcea = dc[dx].dmcchan + 2;
       else
 	dmcea = dc[dx].dmcchan;
       dmcpair = get32io(dmcea);
       dmcbufbegea = dmcpair>>16;
       dmcbufendea = dmcpair & 0xffff;
       dmcnw = dmcbufendea - dmcbufbegea + 1;
+      //printf("AMLC: dmcnw=%d\n", dmcnw);
       lx = dc[dx].recvlx;
       for (lcount = 0; lcount < 16 && dmcnw > 0; lcount++) {
-	if ((dc[dx].connected & dc[dx].recvenabled & BITMASK16(lx+1))
-	    && dc[dx].room[lx] >= 8) {
+	if ((dc[dx].connected & dc[dx].recvenabled & BITMASK16(lx+1))) {
 
 	  /* dmcnw is the # of characters left in the dmc buffer, but
 	     there may be further size/space restrictions for this line */
@@ -1009,10 +1006,8 @@ endconnect:
 	  n2 = dmcnw;
 	  if (n2 > sizeof(buf))
 	    n2 = sizeof(buf);
-	  if (n2 > dc[dx].room[lx])
-	    n2 = dc[dx].room[lx];
-          if (n2 > MAXROOM)        /* don't let 1 line hog the resource */
-	    n2 = MAXROOM;
+          if (n2 > MAXREAD)        /* don't let 1 line hog the resource */
+	    n2 = MAXREAD;
 
 	  while ((n = read(dc[dx].fd[lx], buf, n2)) == -1 && errno == EINTR)
 	    ;
@@ -1164,31 +1159,6 @@ endconnect:
        (the last board), so it will always be polling and checking
        for new incoming connections */
 
-
-    /* the largest DMQ buffer size is 1023 chars.  If any line's DMQ
-       buffer is getting filled completely, then we need to poll
-       faster to increase throughput.  If the max queue size falls
-       below 256, then decrease the interrupt rate.  Anywhere between
-       256-1022, leave the poll rate alone.
-
-       XXX NOTE: polling faster only causes AMLDIM to fill buffers
-       faster for the last AMLC board (with ctinterrupt set).
-    */
-
-#if 1
-    if (maxxmit >= 1023) {
-      if (pollspeedup < 8) {
-	pollspeedup++;
-	//printf("%d ", pollspeedup);
-	//fflush(stdout);
-      }
-    } else if (pollspeedup > 1 && maxxmit < 256) {
-      pollspeedup--;
-      //printf("%d ", pollspeedup);
-      //fflush(stdout);
-    }
-
-#endif
     AMLC_SET_POLL;
     break;
   }
