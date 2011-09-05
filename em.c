@@ -1744,12 +1744,15 @@ static unsigned short tstq(ea_t qcbea) {
   return (qbot-qtop) & qmask;
 }
 
-
-/* I/O device map table, containing function pointers to handle device I/O */
+/* devpoll: number of instructions until device poll
+   devpollidle: true if device wants to be polled when CPU is idle */
 
 static int devpoll[64] = {0};
+static int devpollidle[64] = {0};
 
 #include "emdev.h"
+
+/* I/O device map table, containing function pointers to handle device I/O */
 
 #ifdef HOBBY
 
@@ -6622,14 +6625,20 @@ d_bdx:  /* 0140734 */
 
       stopwatch_start(&sw_idle);
       utempl = gvp->instpermsec*100;    /* limit delay to 100 msecs */
-      for (i=0; i<64; i++)              /* check device timers */
-	if (devpoll[i])                 /* poll set? */
-	  if (devpoll[i] <= 100) {      /* too fast! */
-	    utempl = 1;
-	    break;
-	  } else if (devpoll[i] < utempl)
-	    utempl = devpoll[i];
-      
+      for (i=0; i<64; i++)              /* see if any devices */
+	if (devpollidle[i]) {           /* want a poll when idle? */
+	  devpoll[i] = 1;               /* yes, force it now */
+	  utempl = 1;
+	}
+      if (utempl > 1)
+	for (i=0; i<64; i++)              /* check device timers */
+	  if (devpoll[i])                 /* poll set? */
+	    if (devpoll[i] <= 100) {      /* too fast! */
+	      utempl = 1;
+	      break;
+	    } else if (devpoll[i] < utempl)
+	      utempl = devpoll[i];
+
       /* this decrement ensures that if a device had a poll pending,
 	 we won't decrement it to zero below, ie, it'll still fire
 	 in the main loop */
