@@ -112,11 +112,17 @@ AMLC status word (from AMLCT5):
     if (devpoll[device] == 0 || devpoll[device] > AMLCPOLL*gvp->instpermsec/pollspeedup) \
       devpoll[device] = AMLCPOLL*gvp->instpermsec/pollspeedup;  /* setup another poll */
 
+
+int countbits (int v) {
+  v = v - ((v >> 1) & 0x55555555);                    // reuse input as temporary
+  v = (v & 0x33333333) + ((v >> 2) & 0x33333333);     // temp
+  return ((v + (v >> 4) & 0xF0F0F0F) * 0x1010101) >> 24; // count
+}
+
 int devamlc (int class, int func, int device) {
 
 #define MAXLINES 128
 #define MAXBOARDS 8
-#define MAXREAD 64
 
   /* AMLC poll rate (ms).  Max data rate = queue size*1000/AMLCPOLL
      The max AMLC output queue size is 1023 (octal 2000), so a poll
@@ -125,7 +131,6 @@ int devamlc (int class, int func, int device) {
      there are DMQ buffers with 255 or more characters. */
 
 #define AMLCPOLL 100
-#define AMLCPOLL 50
 
   /* DSSCOUNTDOWN is the number of carrier status requests that should
      occur before polling real serial devices.  Primos does a carrier
@@ -172,8 +177,6 @@ int devamlc (int class, int func, int device) {
   static short inited = 0;
   static int pollspeedup = 1;
   static int baudtable[16] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200};
-  static char ttymsg[1024];
-  static int ttymsglen = 0;
   static int tsfd;                      /* socket fd for terminal server */
   static int haveob = 0;                /* true if there are outbound socket lines */
   static struct {
@@ -203,7 +206,7 @@ int devamlc (int class, int func, int device) {
     char eor;                           /* 1=End of Range on input */
   } dc[MAXBOARDS];
 
-  int dx, dx2, lx, lcount;
+  int dx, dx2, lx, lcount, activelines;
   unsigned short utempa;
   unsigned int utempl;
   ea_t qcbea, dmcea, dmcbufbegea, dmcbufendea;
@@ -216,11 +219,9 @@ int devamlc (int class, int func, int device) {
   unsigned int addrlen;
   char buf[1024];      /* max size of DMQ buffer */
   int i, j, n, maxn, n2, nw;
-  fd_set fds;
   struct timeval timeout;
   unsigned char ch;
   int tstate, toper;
-  int msgfd;
   int allbusy;
   unsigned short qtop, qbot, qtemp;
   unsigned short qseg, qmask, qents;
@@ -313,10 +314,10 @@ int devamlc (int class, int func, int device) {
 
 	    Format: <line #> tcpaddr:port    NOTE: has port number!
 
-         Entries can be in any order.  If the line number begins with
-	 a zero, it is assumed to be octal.  If no zero, then decimal.
-	 Lines specified in amlc.cfg will not be used by the
-	 emulator's built-in terminal server.
+         Entries can be in any order, comment lines begin with # or
+	 semi-colon.  If the line number begins with a zero, it is
+	 assumed to be octal, otherwise decimal.  Lines in amlc.cfg
+	 will not be used by the emulator's built-in terminal server.
       */
 
       if ((cfgfile = fopen("amlc.cfg", "r")) == NULL) {
@@ -328,14 +329,14 @@ int devamlc (int class, int func, int device) {
 	  lc++;
 	  buf[sizeof(devname)] = 0;   /* don't let sscanf overwrite anything */
 	  buf[strlen(buf)-1] = 0;    /* remove trailing nl */
-	  if (strcmp(buf,"") == 0 || buf[0] == ';')
+	  if (strcmp(buf,"") == 0 || buf[0] == ';' || buf[0] == '#')
 	    continue;
 	  if (buf[0] == '0')
 	    n = sscanf(buf, "%o %s", &i, devname);
 	  else
 	    n = sscanf(buf, "%d %s", &i, devname);
 	  if (n != 2) {
-	    printf("em: Can't parse amlc config file buf #%d: %s\n", lc, buf);
+	    printf("em: can't parse amlc config file line #%d: %s\n", lc, buf);
 	    continue;
 	  }
 	  if (i < 0 || i >= MAXLINES) {
@@ -536,6 +537,8 @@ int devamlc (int class, int func, int device) {
       dc[dx].interrupting = 0;
       //printf("INA '07%02o returns 0x%x\n", device, crs[A]);
       IOSKIP;
+      if (crs[A] & 0100000)
+	goto dorecv;
 
     } else if (func == 011) {      /* input ID */
       crs[A] = 020000 | 054;       /* 020000 = QAMLC */
@@ -719,14 +722,6 @@ int devamlc (int class, int func, int device) {
       dc[dx].dmcchan = crs[A] & 0x7ff;
       if (!(crs[A] & 0x800))
 	fatal("Can't run AMLC in DMA mode!");
-#if 1
-      dmcea = dc[dx].dmcchan;
-      dmcpair = get32io(dmcea);
-      dmcbufbegea = dmcpair>>16;
-      dmcbufendea = dmcpair & 0xffff;
-      dmcnw = dmcbufendea - dmcbufbegea + 1;
-      printf("OTA '14%02o: AMLC chan=%o, DMC begin=%o, end=%o, nw=%d\n", device, dc[dx].dmcchan, dmcbufbegea, dmcbufendea, dmcnw);
-#endif
       IOSKIP;
 
     } else if (func == 015) {      /* set DMT/DMQ base address (for output) */
@@ -752,97 +747,94 @@ int devamlc (int class, int func, int device) {
 
     maxxmit = 0;
 
-    //printf("poll device '%o, cti=%x, xmit=%x, recv=%x, dss=%x\n", device, dc[dx].ctinterrupt, dc[dx].xmitenabled, dc[dx].recvenabled, dc[dx].dss);
+    //printf("poll device '%o, speedup=%d, cti=%x, xmit=%x, recv=%x, dss=%x\n", device, pollspeedup, dc[dx].ctinterrupt, dc[dx].xmitenabled, dc[dx].recvenabled, dc[dx].dss);
     
-    /* check for 1 new telnet connection on each AMLC poll */
+    /* check for 1 new telnet connection on each AMLC poll of the clock line */
 
-    addrlen = sizeof(addr);
-    fd = accept(tsfd, (struct sockaddr *)&addr, &addrlen);
-    if (fd == -1) {
-      if (errno != EWOULDBLOCK && errno != EINTR) {
-	perror("accept error for AMLC");
-      }
-    } else {
-      ipaddr = ntohl(addr.sin_addr.s_addr);
-      snprintf(ipstring, sizeof(ipstring), "%d.%d.%d.%d", (ipaddr&0xFF000000)>>24, (ipaddr&0x00FF0000)>>16, 
-	       (ipaddr&0x0000FF00)>>8, (ipaddr&0x000000FF));
-      //printf("Connect from IP %s\n", ipstring);
-
-      /* if there are dedicated AMLC lines (specific IP address), we
-	 have to make 2 passes: the first pass checks for IP address
-	 matches; if none match, the second pass looks for a free
-	 line.  If there are no dedicated AMLC lines (haveob is 0),
-	 don't do this pass (j starts at 1) */
-
-      allbusy = 1;
-      for (j=!haveob; j<2; j++)
-	for (i=0; dc[i].deviceid && i<MAXBOARDS; i++)
-	  for (lx=0; lx<16; lx++) {
-	    /* NOTE: don't allow connections on clock line */
-	    if (lx == 15 && (i+1 == MAXBOARDS || !dc[i+1].deviceid))
-		break;
-	    if ((j == 0 && dc[i].ctype[lx] == CT_DEDIP && dc[i].obhost[lx] == ipaddr) ||
-		(j == 1 && dc[i].ctype[lx] == CT_SOCKET && dc[i].fd[lx] < 0)) {
-	      allbusy = 0;
-	      if (dc[i].fd[lx] >= 0)
-		close(dc[i].fd[lx]);
-	      dc[i].dss |= BITMASK16(lx+1);
-	      dc[i].connected |= BITMASK16(lx+1);
-	      dc[i].fd[lx] = fd;
-	      dc[i].tstate[lx] = TS_DATA;
-	      //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, dc[i].deviceid, lx);
-	      goto endconnect;
-	    }
-	  }
-endconnect:
-      if (allbusy) {
-	warn("No free AMLC connection");
-	write(fd, "\rAll AMLC lines are in use!\r\n", 29);
-	close(fd);
+    if (dc[dx].ctinterrupt) {
+      addrlen = sizeof(addr);
+      fd = accept(tsfd, (struct sockaddr *)&addr, &addrlen);
+      if (fd == -1) {
+	if (errno != EWOULDBLOCK && errno != EINTR) {
+	  perror("accept error for AMLC");
+	}
       } else {
+	ipaddr = ntohl(addr.sin_addr.s_addr);
+	snprintf(ipstring, sizeof(ipstring), "%d.%d.%d.%d", (ipaddr&0xFF000000)>>24, (ipaddr&0x00FF0000)>>16, 
+		 (ipaddr&0x0000FF00)>>8, (ipaddr&0x000000FF));
+	//printf("Connect from IP %s\n", ipstring);
 
-	if ((tsflags = fcntl(fd, F_GETFL)) == -1) {
-	  perror("unable to get ts flags for AMLC line");
-	}
-	tsflags |= O_NONBLOCK;
-	if (fcntl(fd, F_SETFL, tsflags) == -1) {
-	  perror("unable to set ts flags for AMLC line");
-	}
+	/* if there are dedicated AMLC lines (specific IP address), we
+	   have to make 2 passes: the first pass checks for IP address
+	   matches; if none match, the second pass looks for a free
+	   line.  If there are no dedicated AMLC lines (haveob is 0),
+	   don't do this pass (j starts at 1) */
 
-#if 0
-	tcpoptval = 1;
-	if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &tcpoptval, sizeof(tcpoptval)) == -1)
-	  perror("unable to set TCP_NODELAY");
-#endif
-
-	/* these Telnet commands put the connecting telnet client
-	   into character-at-a-time mode and binary mode.  Since
-	   these probably display garbage for other connection
-	   methods, this stuff might be better off in a very thin
-	   connection server */
-	
-	buf[0] = TN_IAC;
-	buf[1] =   TN_WILL;
-	buf[2] =   TN_ECHO;
-	buf[3] = TN_IAC;
-	buf[4] =   TN_WILL;
-	buf[5] =   TN_SGA;
-	buf[6] = TN_IAC;
-	buf[7] =   TN_DO;
-	buf[8] =   TN_BINARY;
-	write(fd, buf, 9);
-
-	/* send out the ttymsg greeting */
-
-	if ((msgfd = open("ttymsg", O_RDONLY, 0)) >= 0) {
-	  ttymsglen = read(msgfd, ttymsg, sizeof(ttymsg)-1);
-	  if (ttymsglen >= 0) {
-	    ttymsg[ttymsglen] = 0;
-	    write(fd, ttymsg, ttymsglen);
+	allbusy = 1;
+	for (j=!haveob; j<2; j++)
+	  for (i=0; dc[i].deviceid && i<MAXBOARDS; i++)
+	    for (lx=0; lx<16; lx++) {
+	      /* NOTE: don't allow connections on clock line */
+	      if (lx == 15 && (i+1 == MAXBOARDS || !dc[i+1].deviceid))
+		  break;
+	      if ((j == 0 && dc[i].ctype[lx] == CT_DEDIP && dc[i].obhost[lx] == ipaddr) ||
+		  (j == 1 && dc[i].ctype[lx] == CT_SOCKET && dc[i].fd[lx] < 0)) {
+		allbusy = 0;
+		if (dc[i].fd[lx] >= 0)
+		  close(dc[i].fd[lx]);
+		dc[i].dss |= BITMASK16(lx+1);
+		dc[i].connected |= BITMASK16(lx+1);
+		dc[i].fd[lx] = fd;
+		dc[i].tstate[lx] = TS_DATA;
+		devpoll[dc[i].deviceid] = AMLCPOLL*gvp->instpermsec;
+		//printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, dc[i].deviceid, lx);
+		goto endconnect;
+	      }
+	    }
+  endconnect:
+	if (allbusy) {
+	  warn("No free AMLC connection");
+	  write(fd, "\rAll AMLC lines are in use!\r\n", 29);
+	  close(fd);
+	} else {
+	  if ((tsflags = fcntl(fd, F_GETFL)) == -1) {
+	    perror("unable to get ts flags for AMLC line");
 	  }
-	  close(msgfd);
-	} else if (errno != ENOENT) {
-	  perror("Unable to open ttymsg file");
+	  tsflags |= O_NONBLOCK;
+	  if (fcntl(fd, F_SETFL, tsflags) == -1) {
+	    perror("unable to set ts flags for AMLC line");
+	  }
+	  tcpoptval = 1;
+	  if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &tcpoptval, sizeof(tcpoptval)) == -1)
+	    perror("unable to set TCP_NODELAY");
+
+	  /* these Telnet commands put the connecting telnet client
+	     into character-at-a-time mode and binary mode.  Since
+	     these probably display garbage for other connection
+	     methods, this stuff might be better off in a very thin
+	     connection server */
+
+	  buf[0] = TN_IAC;
+	  buf[1] =   TN_WILL;
+	  buf[2] =   TN_ECHO;
+	  buf[3] = TN_IAC;
+	  buf[4] =   TN_WILL;
+	  buf[5] =   TN_SGA;
+	  buf[6] = TN_IAC;
+	  buf[7] =   TN_DO;
+	  buf[8] =   TN_BINARY;
+	  write(fd, buf, 9);
+
+	  /* send out the ttymsg greeting */
+
+	  if ((fd = open("ttymsg", O_RDONLY, 0)) >= 0) {
+	    n = read(fd, buf, sizeof(buf));
+	    if (n > 0)
+	      write(fd, buf, n);
+	    close(fd);
+	  } else if (errno != ENOENT) {
+	    perror("Unable to open ttymsg file");
+	  }
 	}
       }
     }
@@ -858,7 +850,7 @@ endconnect:
        output buffer from the previous terminal session will be
        displayed to the new user. */
 
-    if (dc[dx].connected || dc[dx].xmitenabled) {
+    if (dc[dx].xmitenabled) {
       for (lx = 0; lx < 16; lx++) {
 
 	if (dc[dx].xmitenabled & BITMASK16(lx+1)) {
@@ -904,8 +896,7 @@ endconnect:
 
 	  if (n > 0) {
 	    nw = write(dc[dx].fd[lx], buf, n);
-	    if (nw != n) printf("devamlc: tried %d, wrote %d on line %d\n", n, nw, lx);
-	    //printf("devamlc: XMIT tried %d, wrote %d\n", n, nw);
+	    //if (nw != n) printf("devamlc: XMIT tried %d, wrote %d\n", n, nw);
 	    if (nw > 0) {
 
 	      /* nw chars were sent; for DMQ, update the queue head
@@ -952,9 +943,6 @@ endconnect:
        faster to increase throughput.  If the max queue size falls
        below 256, then decrease the interrupt rate.  Anywhere between
        256-1022, leave the poll rate alone.
-
-       XXX NOTE: polling faster only causes AMLDIM to fill buffers
-       faster for the last AMLC board (with ctinterrupt set).
     */
 
 #if 1
@@ -986,7 +974,9 @@ endconnect:
        the tumble tables. However, the tty line buffers may overflow,
        causing data from the terminal to be dropped. */
 
-    if (!dc[dx].eor) {
+dorecv:
+    activelines = countbits(dc[dx].connected & dc[dx].recvenabled);
+    if (activelines && !dc[dx].eor) {
       if (dc[dx].bufnum)
 	dmcea = dc[dx].dmcchan + 2;
       else
@@ -1000,17 +990,16 @@ endconnect:
       for (lcount = 0; lcount < 16 && dmcnw > 0; lcount++) {
 	if ((dc[dx].connected & dc[dx].recvenabled & BITMASK16(lx+1))) {
 
-	  /* dmcnw is the # of characters left in the dmc buffer, but
-	     there may be further size/space restrictions for this line */
+	  /* dmcnw is the # of characters left in the dmc buffer (each
+	     character occupies 2 bytes or 1 16-bit word) */
 
-	  n2 = dmcnw;
+	  n2 = dmcnw / activelines;
 	  if (n2 > sizeof(buf))
 	    n2 = sizeof(buf);
-          if (n2 > MAXREAD)        /* don't let 1 line hog the resource */
-	    n2 = MAXREAD;
+	  activelines -= 1;
+	  fd = dc[dx].fd[lx];
+	  n = read(fd, buf, n2);
 
-	  while ((n = read(dc[dx].fd[lx], buf, n2)) == -1 && errno == EINTR)
-	    ;
 	  //printf("processing recv on device %o, line %d, b#=%d, n2=%d, n=%d\n", device, lx, dc[dx].bufnum, n2, n);
 
 	  /* zero length read means the fd has been closed */
@@ -1021,7 +1010,7 @@ endconnect:
 	  }
 	  if (n == -1) {
 	    n = 0;
-	    if (errno == EAGAIN || errno == EWOULDBLOCK)
+	    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
 	      ;
 	    else if (errno == EPIPE || errno == ECONNRESET || errno == ENXIO) {
 	      AMLC_CLOSE_LINE;
@@ -1098,7 +1087,7 @@ endconnect:
 		    write(fd, buf, 3);
 		  }
 		} else if (toper == TN_DO) {
-		  if (toper == TN_ECHO || toper == TN_SGA)
+		  if (ch == TN_ECHO || ch == TN_SGA)
 		    ;
 		  else {
 		    buf[0] = TN_IAC;
