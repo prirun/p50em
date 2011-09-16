@@ -36,7 +36,7 @@
     is why normal interactive typing works: no EOR occurs for single
     characters; they are read periodically when CTI occurs
 
-  - the AMLDIM processes needs the periodic clock line CTI interrupts
+  - the AMLDIM process needs the periodic clock line CTI interrupts
     to cause it to run periodically, but does not rely on the frequency
     of the interrupts for timing; it uses the Primos clock process
     timers for real-time activities.  This allows the emulator the
@@ -189,7 +189,7 @@ int devamlc (int class, int func, int device) {
      actually connected, ie, an AMLC line may be tied to a specific 
      serial device (like a USB->serial gizmo), but the USB device may
      not be plugged in.  The connection type would be CT_SERIAL but
-     the line's fd would be zero and the "connected" bit would be 0 */
+     the line's fd would be -1 and the "connected" bit would be 0 */
      
 #define CT_SOCKET 1
 #define CT_SERIAL 2
@@ -598,7 +598,7 @@ int devamlc (int class, int func, int device) {
       }
 
     } else if (func == 011) {      /* input ID */
-      crs[A] = 020000 | 054;       /* 020000 = QAMLC */
+      crs[A] = 020054;             /* 020000 = QAMLC */
       IOSKIP;
 
     } else {
@@ -679,10 +679,10 @@ int devamlc (int class, int func, int device) {
 	     the emulator.  Bit 6 is the state of DTR.  The values for
 	     bits 5-7 are:
 
-	     0x0 - no low-level flow control, like the Prime
-	     0x1 - xon/xoff flow control (2413 becomes 3413)
-	     1x0 - cts/rts flow control (2413 becomes 6413)
-	     1x1 - dsr/dtr flow control (2413 becomes 7413)
+	     0_0 - no low-level flow control, like the Prime
+	     0_1 - xon/xoff flow control (2413 becomes 3413)
+	     1_0 - cts/rts flow control (2413 becomes 6413)
+	     1_1 - dsr/dtr flow control (2413 becomes 7413)
 
 	     NOTE: bit 11 also appears to be free, but Primos doesn't 
 	     let it flow through to the AMLC controller. :(
@@ -772,8 +772,9 @@ int devamlc (int class, int func, int device) {
 	dc[dx].recvenabled |= BITMASK16(lx+1);
       else
 	dc[dx].recvenabled &= ~BITMASK16(lx+1);
-      if (dc[dx].ctinterrupt)
+      if (dc[dx].ctinterrupt) {
 	AMLC_SET_POLL;
+      }
       IOSKIP;
 
       /* this is a new "experimental" OTA */
@@ -823,9 +824,7 @@ int devamlc (int class, int func, int device) {
 	}
       } else {
 	ipaddr = ntohl(addr.sin_addr.s_addr);
-	snprintf(ipstring, sizeof(ipstring), "%d.%d.%d.%d", (ipaddr&0xFF000000)>>24, (ipaddr&0x00FF0000)>>16, 
-		 (ipaddr&0x0000FF00)>>8, (ipaddr&0x000000FF));
-	//printf("Connect from IP %s\n", ipstring);
+	//snprintf(ipstring, sizeof(ipstring), "%d.%d.%d.%d", (ipaddr&0xFF000000)>>24, (ipaddr&0x00FF0000)>>16, (ipaddr&0x0000FF00)>>8, (ipaddr&0x000000FF)); printf("Connect from IP %s\n", ipstring);
 
 	/* if there are dedicated AMLC lines (specific IP address), we
 	   have to make 2 passes: the first pass checks for IP address
@@ -903,7 +902,7 @@ int devamlc (int class, int func, int device) {
 
     /* do a transmit scan loop for every line.  This loop is fairly
        efficient because Primos turns off xmitenable on DMQ lines
-       after a short time w/o any output.
+       after a short time (5 seconds) w/o any output.
 
        NOTE: it's important to do xmit processing even if a line is
        not currently connected, to drain the tty output buffer.
@@ -1008,14 +1007,15 @@ int devamlc (int class, int func, int device) {
 
        Because the size of the AMLC tumble tables is limited, this
        could pose a denial of service issue.  Input is processed in a
-       round to be more fair with this limited resource.  Better yet,
-       the tumble table space could be apportioned for each line with
-       data waiting to be read.
+       round to be more fair with this limited resource.
+
+       Update 9/16/2011: the tumble table space is apportioned for
+       each line with data waiting to be read.
 
        The AMLC tumble tables should never overflow, because we only
        read as many characters from the socket buffers as will fit in
-       the tumble tables. However, the tty line buffers may overflow,
-       causing data from the terminal to be dropped. */
+       the tumble tables. However, the user input ring buffer may
+       overflow, causing data from the terminal to be dropped. */
 
 dorecv:
     neweor = 0;
