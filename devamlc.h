@@ -268,7 +268,7 @@ int devamlc (int class, int func, int device) {
   int optval;
   int tsflags;
   struct sockaddr_in addr;
-  int fd;
+  int fd, ttyfd;
   unsigned int addrlen;
   char buf[1024];      /* max size of DMQ buffer */
   int i, j, n, maxn, n2, nw;
@@ -888,11 +888,11 @@ int devamlc (int class, int func, int device) {
 
 	  /* send out the ttymsg greeting */
 
-	  if ((fd = open("ttymsg", O_RDONLY, 0)) >= 0) {
-	    n = read(fd, buf, sizeof(buf));
+	  if ((ttyfd = open("ttymsg", O_RDONLY, 0)) >= 0) {
+	    n = read(ttyfd, buf, sizeof(buf));
 	    if (n > 0)
 	      write(fd, buf, n);
-	    close(fd);
+	    close(ttyfd);
 	  } else if (errno != ENOENT) {
 	    perror("Unable to open ttymsg file");
 	  }
