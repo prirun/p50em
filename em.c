@@ -647,7 +647,7 @@ static unsigned short physmem[MEMSIZE]; /* system's physical memory */
 #define POINTERFAULT  077
 #define LASTFAULT     077
 
-static ea_t tnoua_ea=0, tnou_ea=0, tsrc_ea=0;
+//static ea_t tnoua_ea=0, tnou_ea=0, tsrc_ea=0;
 static int domemdump;                       /* -memdump arg */
 
 static int tport;                           /* -tport option (incoming terminals) */
@@ -768,7 +768,14 @@ int readlicense(int first) {
    match; if the address isn't found exactly, the index returned
    will be the address lower than the requested address, or -1
    if the symbol table is empty or the requested address is
-   lower than any in the symbol table */
+   lower than any in the symbol table 
+
+   Symbol types:
+     e = address of ecb
+     p = address of proc start
+     l = address of linkage start - '400 (LB% is loaded w/this)
+     x = other symbol (ENT in PMA, FTN COMMON)
+*/
 
 int findsym(ea_t addr, char type) {
   int low, high, mid, saveix;
@@ -842,13 +849,15 @@ readloadmap(char *filename, int showerr) {
       addsym(sym, ecbseg, ecbword, 'e');
       addsym(sym, pbseg, pbword, 'p');
       addsym(sym, lbseg, lbword, 'l');
-      //printf("adding proc symbol, line=%s\n", line);
+#if 0
+      printf("adding proc symbol, line=%s\n", line);
       if (tnou_ea == 0 && strcmp(sym,"TNOU") == 0)
 	tnou_ea = MAKEVA(ecbseg, ecbword);
       if (tnoua_ea == 0 && strcmp(sym,"TNOUA") == 0)
 	tnoua_ea = MAKEVA(ecbseg, ecbword);
       if (tsrc_ea == 0 && strcmp(sym,"TSRC$$") == 0)
 	tsrc_ea = MAKEVA(ecbseg, ecbword);
+#endif
     } else if (sscanf(line, "%s %o %o", sym, &segno, &wordno) == 3) {
       addsym(sym, segno, wordno, 'x');
       //printf("adding symbol, line=%s\n", line);
@@ -1851,6 +1860,8 @@ static void fatal(char *msg) {
 
   if (fatal_called) {
     printf("Nested call to fatal()\n");
+    if (msg)
+      printf("%s\n", msg);
     exit(1);
   }
 
@@ -6607,7 +6618,7 @@ d_bdx:  /* 0140734 */
       struct timeval tv0,tv1;
       long delayusec, actualmsec;
 
-      /* for BDX *-1 loop (backstop process mainly), we want to change
+      /* for BDX * loop (backstop process mainly), we want to change
 	 this to a long sleep so that the emulation host's CPU isn't 
 	 pegged the whole time the emulator is running.
 
