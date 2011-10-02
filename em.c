@@ -81,12 +81,36 @@ PRIMOS II is being phased out.  To boot PRIMOS return to CP mode.
 OK: 
    ---------------
 
-   Instruction details are spewed to trace.log depending on the trace flags.
+TRACING:
+
+The emulator by default is built with tracing code included.
+Instruction details are spewed to trace.log depending on the trace
+flags, set with -trace.  If -trace is not used, only TRACEA (trace
+all) traces are enabled.
+
+To activate more tracing, use -trace followed by flags to indicate
+which parts you want to trace, for example -trace map will activate
+all T_MAP traces.
+
+The "flush" trace flag turns on line-by-line trace file flushing.
+This is useful if the emulator itself is crashing, eg, with a (Unix)
+seg fault.
+
+The "off" trace flag can be added to initially disable tracing.
+Ctrl-t at the console will toggle tracing on or off.  To trace only a
+particular instruction, use "off", then do gvp->traceflags =
+gvp->savedtraceflags at the beginning of the instruction emulation.
+To trace from an instruction forward, do the previous and add
+gvp->tracetriggered = 1; this simulates the Ctrl-t.
+
+-DNOTRACE disables tracing altogether and increases performance.
+
+   ---------------
 
    IMPORTANT NOTE: this only runs on a big-endian machine, like the Prime.
 
-   NOTE: basic and dbasic execute R-mode instructions from the register file 
-   with TRACE ON!
+   NOTE: basic and dbasic execute R-mode instructions from the Prime
+   register file with the basic statement TRACE ON!
 
 */
 
@@ -541,11 +565,11 @@ typedef struct {
   FILE *tracefile;              /* trace.log file */
   int traceflags;               /* each bit is a trace flag */
   int savetraceflags;
-  short traceuser;              /* OWNERL to trace */
+  unsigned short traceuser;     /* OWNERL to trace */
   short traceseg;               /* RPH segment # to trace */
   short numtraceprocs;          /* # of procedures we're tracing */
   unsigned long traceinstcount; /* only trace if instcount > this */
-  short tracetriggered;         /* Ctrl-T toggles tracing */
+  short tracetriggered;         /* Ctrl-T on console toggles tracing */
   short tracerpqx;              /* rpq index to store next RP */
   unsigned int tracerpq[MAXRPQ];/* last 16 locations executed */
 #endif
@@ -2483,6 +2507,23 @@ static memdump(int start, int end) {
 }
 
 
+static dumpregs() {
+  int rs, i;
+  unsigned int val;
+  unsigned short v1, v2;
+
+  TRACEA("\nREGISTER DUMP:\n");
+  for (rs=0; rs<REGSETS; rs++) {
+    TRACEA("Register set %d:\n", rs);
+    for (i=0; i<32; i++) {
+      val = regs.rs[rs][i];
+      v1 = val >> 16;
+      v2 = val & 0xFFFF;
+      TRACEA("'%02o: %06o %06o  %04x %04x\n", i, v1, v2, v1, v2);
+    }
+  }
+}
+
 static dumpsegs() {
   short seg,nsegs,i,page,segno;
   unsigned short pte,xxx;
@@ -3030,7 +3071,7 @@ static pcl (ea_t ecbea) {
      occurs while accessing the arguments here, it will return to ARGT
      in the main emulator loop and nothing will be logged. */
 
-#ifndef NOTRACE
+#if 0
     if (TRACEUSER && ((ecbea & 0xFFFFFFF) == tnou_ea || (ecbea & 0xFFFFFFF) == tnoua_ea)) {
       ea = *(unsigned int *)(crs+SB) + ecb[4];
       utempa = get16(get32(ea));       /* 1st arg: userid */
@@ -3772,7 +3813,7 @@ static lpsw() {
   unsigned short m;
 
   TRACE(T_PX, "\n%o/%o: LPSW issued\n", RPH, RPL);
-  TRACE(T_PX, "LPSW: before load, RPH=%o, RPL=%o, keys=%o, modals=%o\n", RPH, RPL, crs[KEYS], crs[MODALS]);
+  TRACE(T_PX, "LPSW: before load, RPH=%o, RPL=%o, keys=%o, modals=%o, owner=%o/%o\n", RPH, RPL, crs[KEYS], crs[MODALS], crs[OWNERH], crs[OWNERL]);
   TRACE(T_PX, "LPSW: crs=%d, ownerl[2]=%o, keys[2]=%o, modals[2]=%o, ownerl[3]=%o, keys[3]=%o, modals[3]=%o\n", crs==regs.rs16[2]? 2:3, regs.rs16[2][OWNERL], regs.rs16[2][KEYS], regs.rs16[2][MODALS], regs.rs16[3][OWNERL], regs.rs16[3][KEYS], regs.rs16[3][MODALS]);
 
   ea = apea(NULL);
@@ -3780,18 +3821,33 @@ static lpsw() {
   RPL = get16(INCVA(ea,1));
   newkeys(get16(INCVA(ea,2)));
   m = get16(INCVA(ea,3));
+#if 0
+
+  /* NOTE: rev 18 changes the register set to 010.  On old Primes,
+     there are 2 user register sets, numbered 000 (0) and 010 (2).  I
+     think 010 is the initial register set, so it works okay, but in
+     the emulator, register sets are numbered 0-7, and register set 2
+     is the 3rd register set.  On old Primes, there are only 2
+     register sets initialized, so using RS 3 in the emulator bombs
+     because the dtar registers aren't initialized by Primos.  So I
+     commented the register switch code out.  This might cause a diag
+     to fail - not sure.  But the Prime instruction set guide says not
+     to change the current register set field in the modals; only the
+     dispatcher (microcode / emulator) is supposed to fiddle this. */
+
   if ((m & 0340) != (crs[MODALS] & 0340)) {
     TRACE(T_PX, "LPSW: WARNING: changed current register set: current modals=%o, new modals=%o\n", crs[MODALS], m);
     /* not sure about doing this... */
     printf("WARNING: LPSW changed current register set: current modals=%o, new modals=%o\n", crs[MODALS], m);
     crsl = regs.sym.userregs[(m & 0340) >> 5];
   }
+#endif
   invalidate_brp();
 
   crs[MODALS] = m;
   gvp->inhcount = 1;
 
-  TRACE(T_PX, "LPSW:    NEW RPH=%o, RPL=%o, keys=%o, modals=%o\n", RPH, RPL, crs[KEYS], crs[MODALS]);
+  TRACE(T_PX, "LPSW:    NEW RPH=%o, RPL=%o, keys=%o, modals=%o, owner=%o/%o\n", RPH, RPL, crs[KEYS], crs[MODALS], crs[OWNERH], crs[OWNERL]);
   TRACE(T_PX, "LPSW: crs=%d, ownerl[2]=%o, keys[2]=%o, modals[2]=%o, ownerl[3]=%o, keys[3]=%o, modals[3]=%o\n", crs==regs.rs16[2]? 2:3, regs.rs16[2][OWNERL], regs.rs16[2][KEYS], regs.rs16[2][MODALS], regs.rs16[3][OWNERL], regs.rs16[3][KEYS], regs.rs16[3][MODALS]);
   if (crs[MODALS] & 020)
     TRACE(T_PX, "Mapped I/O enabled\n");
@@ -4714,7 +4770,7 @@ main (int argc, char **argv) {
   else
     TRACEA("Tracing enabled for all users\n");
   if (gvp->traceinstcount != 0)
-    TRACEA("Tracing enabled after instruction %u\n", gvp->traceinstcount);
+    TRACEA("Tracing enabled after instruction %lu\n", gvp->traceinstcount);
   for (i=0; i<gvp->numtraceprocs; i++) {
     for (j=0; j<numsyms; j++) {
       if (strcasecmp(mapsym[j].symname, traceprocs[i].name) == 0 && mapsym[j].symtype == 'e') {

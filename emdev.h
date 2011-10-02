@@ -1376,10 +1376,21 @@ int devmt (int class, int func, int device) {
 /* initclock sets Primos' real-time clock variable */
 
 initclock(ea_t datnowea) {
+  short olddatnow;
   int datnow, i;
   time_t unixtime;
   struct tm *tms;
 
+  /* for older processors (before 9950), don't set DATNOW initially.
+     This has to be done with the SE(TTIME) command on the console
+     after a coldstart to release users waiting on CLDSEM in older
+     versions of Primos */
+
+  if (cpuid < 15) {
+    olddatnow = get32r0(datnowea);
+    if (olddatnow == 0)
+      return;
+  }
   unixtime = time(NULL);
   tms = localtime(&unixtime);
   datnow = tms->tm_year<<25 | (tms->tm_mon+1)<<21 | tms->tm_mday<<16 | ((tms->tm_hour*3600 + tms->tm_min*60 + tms->tm_sec)/4);
