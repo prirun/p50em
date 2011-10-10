@@ -164,19 +164,24 @@ int devamlc (int class, int func, int device) {
 
 #define MAXLINES 128
 #define MAXBOARDS 8
-#define MAXAMLCSPEEDUP 16
 
-  /* check for new connections every .1 seconds */
+  /* check for 1 new connection every .1 seconds */
 
 #define AMLCACCEPTSECS .10
 
+  /* seconds to make outbound connections for dedicated (assigned) lines */
+
+#define AMLCCONNECT 15
+
   /* AMLC poll rate (ms).  Max data rate = queue size*1000/AMLCPOLL
      The max AMLC output queue size is 1023 (octal 2000), so a poll
-     rate of 33 (1000/33 = 30 times per second) will generate about
-     31,000 chars per second.  This rate may be further boosted if
-     there are DMQ buffers with 1023 or more characters. */
+     rate of 100 (10 times per second) will generate about 10230 chars
+     per second.  This rate may be further boosted by a factor of
+     MAXAMLCSPEEDUP if we send out a full DMQ buffer of 1023
+     characters. */
 
 #define AMLCPOLL 100
+#define MAXAMLCSPEEDUP 16
 
   /* DSSCOUNTDOWN is the number of carrier status requests that should
      occur before polling real serial devices.  Primos does a carrier
@@ -223,7 +228,8 @@ int devamlc (int class, int func, int device) {
   static int wascti = 0;
   static int anyeor = 0;
   static float pollspeedup = 1;
-  static int baudtable[16] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200};
+  //  static int baudtable[16] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200};
+  static int baudtable[16] = {300, 1200, 9600, 19200, 9600, 38400, 57600, 115200};
   static int tsfd;                      /* socket fd for terminal server */
   static int haveob = 0;                /* true if there are outbound socket lines */
   static struct timeval timeout = {0, 0};
@@ -248,49 +254,17 @@ int devamlc (int class, int func, int device) {
     unsigned short ctype[16];           /* connection type for each line */
     unsigned int   obhost[16];          /* outbound telnet host */
     unsigned short obport[16];          /* outbound telnet port */
+    unsigned int   obtimer[16];         /* outbound connect timer */
     unsigned short modemstate[16];      /* Unix modem state bits (serial) */
     unsigned short recvlx;              /* next line to check for recv data */
-    unsigned short pclock;              /* programmable clock */
     char bufnum;                        /* 0=1st input buffer, 1=2nd */
     char eor;                           /* 1=End of Range on input */
   } dc[MAXBOARDS];
 
-  struct timeval tv;
-  double ts;
-  fd_set readfds;
-  int neweor;
-  int dx, dxsave, lx, lcount, activelines;
-  unsigned short utempa;
-  unsigned int utempl;
-  ea_t qcbea, dmcea, dmcbufbegea, dmcbufendea;
-  unsigned short dmcnw;
-  int dmcpair;
-  int optval;
-  int tsflags;
-  struct sockaddr_in addr;
-  int fd, ttyfd;
-  unsigned int addrlen;
+  int dx, dxsave, lx;
   char buf[1024];      /* max size of DMQ buffer */
-  int i, j, n, maxn, n2, nw;
-  unsigned char ch;
-  int tstate, toper;
-  int allbusy;
-  unsigned short qtop, qbot, qtemp;
-  unsigned short qseg, qmask, qents;
-  ea_t qentea;
-  int lc;
-  FILE *cfgfile;
-  char devname[32];
-  int baud;
-  struct termios terminfo;
-  int modemstate;
+  int i, j;
   int maxxmit;
-  int tcpoptval;
-  int tempport;
-  unsigned int ipaddr;
-  char ipstring[16];
-  char *p;
-  struct hostent* host;
 
   /* save this board's device id in the dc[] array so we can tell
      what order the boards should be in.  This is necessary to find
@@ -327,7 +301,13 @@ int devamlc (int class, int func, int device) {
        dedicated serial line setup. */
 
     if (!inited) {
-
+      FILE *cfgfile;
+      char devname[32];
+      int lc;
+      int tempport;
+      struct hostent* host;
+      char *p;
+  
       /* initially, we don't know about any AMLC boards */
 
       for (dx=0; dx<MAXBOARDS; dx++) {
@@ -340,6 +320,7 @@ int devamlc (int class, int func, int device) {
 	  dc[dx].lconf[lx] = 0;
 	  dc[dx].ctype[lx] = CT_SOCKET;
 	  dc[dx].modemstate[lx] = 0;
+	  dc[dx].obtimer[lx] = 0;
 	}
 	dc[dx].recvlx = 0;
       }
@@ -379,6 +360,7 @@ int devamlc (int class, int func, int device) {
       } else {
 	lc = 0;
 	while (fgets(buf, sizeof(buf), cfgfile) != NULL) {
+	  int n;
 	  lc++;
 	  buf[sizeof(devname)] = 0;   /* don't let sscanf overwrite anything */
 	  buf[strlen(buf)-1] = 0;    /* remove trailing nl */
@@ -400,6 +382,7 @@ int devamlc (int class, int func, int device) {
 	  dx = i/16;
 	  lx = i & 0xF;
 	  if (devname[0] == '/') {      /* USB serial port */
+	    int fd;
 	    if ((fd = open(devname, O_RDWR | O_NONBLOCK | O_EXLOCK)) == -1) {
 	      printf("em: error connecting AMLC line '%o (%d) to device %s: %s\n", i, i, devname, strerror(errno));
 	      continue;
@@ -450,6 +433,8 @@ int devamlc (int class, int func, int device) {
       /* start listening for incoming telnet connections */
 
       if (tport != 0) {
+	int optval, tsflags;
+	struct sockaddr_in addr;
 	tsfd = socket(AF_INET, SOCK_STREAM, 0);
 	if (tsfd == -1) {
 	  perror("socket failed for AMLC");
@@ -522,7 +507,6 @@ int devamlc (int class, int func, int device) {
       dc[dx].ctinterrupt = 0;
       dc[dx].dss = 0;      /* NOTE: 1=asserted in emulator, 0=asserted on Prime */
       dc[dx].dsstime = DSSCOUNTDOWN;
-      dc[dx].pclock = 0;
       dc[dx].bufnum = 0;
       dc[dx].eor = 0;
 
@@ -559,6 +543,7 @@ int devamlc (int class, int func, int device) {
 	  dc[dx].dsstime = DSSCOUNTDOWN;
 	  for (lx = 0; lx < 16; lx++) {  /* yes, poll them */
 	    if (dc[dx].ctype[lx] == CT_SERIAL) {
+	      int modemstate;
 	      if (ioctl(dc[dx].fd[lx], TIOCMGET, &modemstate))
 		perror("devamlc: unable to get modem state");
 	      else if (modemstate & TIOCM_CD)
@@ -632,13 +617,17 @@ int devamlc (int class, int func, int device) {
 	break;
 
 	
-      case CT_SERIAL:
+      case CT_SERIAL: {
+	int fd;
 	    
 	/* setup line characteristics if they have changed (check for
 	   something other than DTR changing) */
 
 	fd = dc[dx].fd[lx];
 	if ((crs[A] ^ dc[dx].lconf[lx]) & ~02000) {
+	  int baud;
+	  struct termios terminfo;
+
 	  //printf("devamlc: serial config changed!\n");
 	  if (tcgetattr(fd, &terminfo) == -1) {
 	    fprintf(stderr, "devamlc: unable to get terminfo for device '%o line %d", device, lx);
@@ -647,7 +636,10 @@ int devamlc (int class, int func, int device) {
 	  memset(&terminfo, 0, sizeof(terminfo));
 	  cfmakeraw(&terminfo);
 	  baud = baudtable[(crs[A] >> 6) & 7];
-	  cfsetspeed(&terminfo, baud);
+	  if (cfsetspeed(&terminfo, baud) == -1)
+	    perror("em: unable to set AMLC line speed");
+	  else
+	    printf("em: AMLC line %d set to %d bps\n", dx*16 + lx, baud);
 	  terminfo.c_cflag = CREAD | CLOCAL;		// turn on READ and ignore modem control lines
 	  switch (crs[A] & 3) {              /* data bits */
 	  case 0:
@@ -728,7 +720,7 @@ int devamlc (int class, int func, int device) {
 		 terminfo.c_ispeed);
 #endif
 	  if (tcsetattr(fd, TCSANOW, &terminfo) == -1) {
-	    fprintf(stderr, "devamlc: unable to set terminal attributes for device %s\n", devname);
+	    fprintf(stderr, "devamlc: unable to set terminal attributes");
 	    perror("devamlc error");
 	  }
 	}
@@ -736,6 +728,7 @@ int devamlc (int class, int func, int device) {
 	/* set DTR high (02000) or low if it has changed */
 
 	if ((crs[A] ^ dc[dx].lconf[lx]) & 02000) {
+	  int modemstate;
 	  //printf("devamlc: DTR state changed\n");
 	  ioctl(fd, TIOCMGET, &modemstate);
 	  if (crs[A] & 02000)
@@ -747,6 +740,7 @@ int devamlc (int class, int func, int device) {
 	  ioctl(fd, TIOCMSET, &modemstate);
 	}
 	break;
+      }
 
       default:
 	fatal("devamlc: unrecognized connection type");
@@ -796,8 +790,11 @@ int devamlc (int class, int func, int device) {
       IOSKIP;
 
     } else if (func == 017) {      /* set programmable clock constant */
-      dc[dx].pclock = crs[A];
-      /* XXX: reprogram baud rate for lines that use the programmable clock */
+      baudtable[4] = 115200/(crs[A]+1);
+      printf("em: AMLC baud rates are");
+      for (i=0; i<8; i++)
+	printf(" %d", baudtable[i]);
+      printf(" bps\n");
       IOSKIP;
 
     } else {
@@ -806,15 +803,22 @@ int devamlc (int class, int func, int device) {
     }
     break;
 
-  case 4:
+  case 4: {
+    struct timeval tv;
+    double ts;
+    int neweor, activelines;
     //printf("poll device '%o, speedup=%5.2f, cti=%x, xmit=%x, recv=%x, dss=%x\n", device, pollspeedup, dc[dx].ctinterrupt, dc[dx].xmitenabled, dc[dx].recvenabled, dc[dx].dss);
     
-    /* check for 1 new telnet connection 10 times per second */
+    /* check for 1 new telnet connection every AMLCACCEPTSECS seconds
+       (10 times per second) */
 
     if (gettimeofday(&tv, NULL) != 0)
       fatal("amlc gettimeofday failed");
     ts = tv.tv_sec + tv.tv_usec/1000000.0;
     if (ts > acceptts) {
+      struct sockaddr_in addr;
+      unsigned int addrlen;
+      int fd;
       acceptts += AMLCACCEPTSECS;
       addrlen = sizeof(addr);
       fd = accept(tsfd, (struct sockaddr *)&addr, &addrlen);
@@ -823,6 +827,10 @@ int devamlc (int class, int func, int device) {
 	  perror("accept error for AMLC");
 	}
       } else {
+	int allbusy;
+	unsigned int ipaddr;
+	char ipstring[16];
+
 	ipaddr = ntohl(addr.sin_addr.s_addr);
 	//snprintf(ipstring, sizeof(ipstring), "%d.%d.%d.%d", (ipaddr&0xFF000000)>>24, (ipaddr&0x00FF0000)>>16, (ipaddr&0x0000FF00)>>8, (ipaddr&0x000000FF)); printf("Connect from IP %s\n", ipstring);
 
@@ -858,6 +866,9 @@ int devamlc (int class, int func, int device) {
 	  write(fd, "\rAll AMLC lines are in use!\r\n", 29);
 	  close(fd);
 	} else {
+	  int optval, tsflags;
+	  int ttyfd;
+
 	  if ((tsflags = fcntl(fd, F_GETFL)) == -1) {
 	    perror("unable to get ts flags for AMLC line");
 	  }
@@ -865,8 +876,8 @@ int devamlc (int class, int func, int device) {
 	  if (fcntl(fd, F_SETFL, tsflags) == -1) {
 	    perror("unable to set ts flags for AMLC line");
 	  }
-	  tcpoptval = 1;
-	  if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &tcpoptval, sizeof(tcpoptval)) == -1)
+	  optval = 1;
+	  if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval)) == -1)
 	    perror("unable to set TCP_NODELAY");
 
 	  /* these Telnet commands put the connecting telnet client
@@ -889,6 +900,7 @@ int devamlc (int class, int func, int device) {
 	  /* send out the ttymsg greeting */
 
 	  if ((ttyfd = open("ttymsg", O_RDONLY, 0)) >= 0) {
+	    int n;
 	    n = read(ttyfd, buf, sizeof(buf));
 	    if (n > 0)
 	      write(fd, buf, n);
@@ -917,6 +929,9 @@ int devamlc (int class, int func, int device) {
 	continue;
       for (lx = 0; lx < 16; lx++) {
 	if (dc[dx].xmitenabled & BITMASK16(lx+1)) {
+	  int n, maxn;
+	  unsigned short qtop, qbot, qtemp,qseg, qmask, qents;
+	  ea_t qentea, qcbea;
 	  n = 0;
 	  qcbea = dc[dx].baseaddr + lx*4;
 	  if (dc[dx].connected & BITMASK16(lx+1)) {
@@ -945,19 +960,61 @@ int devamlc (int class, int func, int device) {
 
 	    n = 0;
 	    for (i=0; i < maxn; i++) {
-	      utempa = MEM[qentea];
+	      unsigned short utemp;
+	      utemp = MEM[qentea];
 	      qentea = (qentea & ~qmask) | ((qentea+1) & qmask);
-	      //printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utempa, utempa & 0x7f);
-	      buf[n++] = utempa & 0x7F;
+	      //printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utemp, utemp & 0x7f);
+	      buf[n++] = utemp & 0x7F;
 	    }
-	  } else {         /* no line connected, just drain queue */
-	    //printf("Draining output queue on line %d\n", lx);
-	    put16io(get16io(qcbea), qcbea+1);
+	  } else {
+
+	    /* no line is connected; if this is a dedicated outbound
+	       line, try to re-connect; otherwise, just drain queue */
+
+	    if (dc[dx].ctype[lx] == CT_DEDIP) {
+	      if (dc[dx].obtimer[lx] < tv.tv_sec) {
+
+		int fd, sockflags;
+		struct sockaddr_in raddr;
+  
+		dc[dx].obtimer[lx] = tv.tv_sec + AMLCCONNECT;
+		printf("em: trying to connect to 0x%08x:%d\n", dc[dx].obhost[lx], dc[dx].obport[lx]);
+		fd = socket(AF_INET, SOCK_STREAM, 0);
+		if (fd < 0) {
+		  perror("em: unable to create socket for outbound AMLC connection");
+		  continue;
+		}
+		if ((sockflags = fcntl(fd, F_GETFL)) == -1) {
+		  perror("em: unable to get flags for outbound AMLC connection");
+		  continue;
+		}
+		sockflags |= O_NONBLOCK;
+		if (fcntl(fd, F_SETFL, sockflags) == -1) {
+		  perror("em: unable to set flags for outbound AMLC connection");
+		  continue;
+		}
+		bzero((char *) &raddr, sizeof(raddr));
+		raddr.sin_family = AF_INET;
+                raddr.sin_addr.s_addr = dc[dx].obhost[lx];
+		raddr.sin_port = dc[dx].obport[lx];
+		if (connect(fd, (struct sockaddr *)&raddr, sizeof(raddr)) < 0 && errno != EINPROGRESS) {
+		  perror("em: outbound AMLC connection failed");
+		  continue;
+		}
+		dc[dx].fd[lx] = fd;
+		dc[dx].connected |= BITMASK16(lx+1);
+		printf("em: connected to 0x%08x:%d, fd=%d\n", dc[dx].obhost[lx], dc[dx].obport[lx], fd);
+	      }
+	    } else {
+	      //printf("Draining output queue on line %d\n", lx);
+	      put16io(get16io(qcbea), qcbea+1);
+	    }
 	  }
 
 	  /* n chars have been packed into buf; see how many we can send */
 
 	  if (n > 0) {
+	    int nw;
 	    nw = write(dc[dx].fd[lx], buf, n);
 	    //if (nw != n) printf("devamlc: XMIT tried %d, wrote %d\n", n, nw);
 	    if (nw > 0) {
@@ -1020,22 +1077,25 @@ int devamlc (int class, int func, int device) {
 dorecv:
     neweor = 0;
     for (dx=0; dx<MAXBOARDS; dx++) {
+      fd_set readfds;
+      int nfds;
       if (dc[dx].deviceid == 0 || dc[dx].connected == 0 || dc[dx].eor)
 	continue;
 
       /* select to see which lines have data to be read */
 
       FD_ZERO(&readfds);
-      n = -1;
+      nfds = -1;
       for (lx = 0; lx < 16; lx++) {
+	int fd;
 	if ((dc[dx].connected & dc[dx].recvenabled & BITMASK16(lx+1))) {
 	  fd = dc[dx].fd[lx];
 	  FD_SET(fd, &readfds);
-	  if (fd > n)
-	    n = fd;
+	  if (fd > nfds)
+	    nfds = fd;
 	}
       }
-      activelines = select(n+1, &readfds, NULL, NULL, &timeout);
+      activelines = select(nfds+1, &readfds, NULL, NULL, &timeout);
       if (activelines == -1) {
 	if (errno == EINTR || errno == EAGAIN)
 	  activelines = 0;
@@ -1045,6 +1105,9 @@ dorecv:
 	}
       }
       if (activelines) {
+	int dmcpair, lcount;
+	ea_t dmcea, dmcbufbegea, dmcbufendea;
+	unsigned short dmcnw;
 	if (dc[dx].bufnum)
 	  dmcea = dc[dx].dmcchan + 2;
 	else
@@ -1056,8 +1119,10 @@ dorecv:
 	//printf("AMLC: dmcnw=%d for %o, activelines=%d\n", dmcnw, dc[dx].deviceid, activelines);
 	lx = dc[dx].recvlx;
 	for (lcount = 0; lcount < 16 && dmcnw > 0; lcount++) {
+	  int fd;
 	  fd = dc[dx].fd[lx];
 	  if (fd >= 0 && FD_ISSET(fd, &readfds)) {
+	    int n, n2;
 
 	    /* dmcnw is the # of characters left in the dmc buffer (each
 	       character occupies 2 bytes or 1 16-bit word) */
@@ -1096,19 +1161,22 @@ dorecv:
 	       state so no telnet processing occurs. */
 
 	    if (n > 0) {
+	      int tstate, toper;
 	      //printf("devamlc: RECV dx=%d, lx=%d, b=%d, tried=%d, read=%d\n", dx, lx, dc[dx].bufnum, n2, n);
 	      tstate = dc[dx].tstate[lx];
 	      for (i=0; i<n; i++) {
+		unsigned char ch;
 		ch = buf[i];
 		switch (tstate) {
 		case TS_DATA:
 		  if (ch == TN_IAC && (dc[dx].ctype[lx] == CT_SOCKET || dc[dx].ctype[lx] == CT_DEDIP))
 		    tstate = TS_IAC;
 		  else {
+		    unsigned short utemp;
       storech:
-		    utempa = lx<<12 | 0x0200 | ch;
-		    put16io(utempa, dmcbufbegea);
-		    //printf("******* stored character %o (%c) at %o\n", utempa, utempa&0x7f, dmcbufbegea);
+		    utemp = lx<<12 | 0x0200 | ch;
+		    put16io(utemp, dmcbufbegea);
+		    //printf("******* stored character %o (%c) at %o\n", utemp, utemp & 0x7f, dmcbufbegea);
 		    dmcbufbegea = INCVA(dmcbufbegea, 1);
 		    dmcnw--;
 		  }
@@ -1225,6 +1293,7 @@ dorecv:
 
     AMLC_SET_POLL;
     break;
+  }
   }
 }
 #endif
