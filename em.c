@@ -363,6 +363,7 @@ static unsigned short sswitch = 014114;     /* sense switches, set with -ss & -b
 static unsigned short dswitch = 0;          /* data (down) switches, set with -sd */
 static unsigned short bootregs = 0;         /* load regs and keys from rvec */
 static unsigned short sensorabort = 0;      /* if 1, causes a sensor check */
+static unsigned short firstbdx = 0;         /* backstop sleep flag */
 
 /* NOTE: the default cpuid is a P750: 1 MIPS, 8MB of memory
 
@@ -1777,11 +1778,9 @@ static unsigned short tstq(ea_t qcbea) {
   return (qbot-qtop) & qmask;
 }
 
-/* devpoll: number of instructions until device poll
-   devpollidle: true if device wants to be polled when CPU is idle */
+/* devpoll: number of instructions until device poll */
 
 static int devpoll[64] = {0};
-static int devpollidle[64] = {0};
 
 #include "emdev.h"
 
@@ -3548,6 +3547,7 @@ static dispatcher() {
     fatal("fault returned after process fault");    
   }
 
+  firstbdx = 1;
   return;
 
 idle:
@@ -6691,13 +6691,10 @@ d_bdx:  /* 0140734 */
       */
 
       stopwatch_start(&sw_idle);
-      utempl = gvp->instpermsec*100;    /* limit delay to 100 msecs */
-      for (i=0; i<64; i++)              /* see if any devices */
-	if (devpollidle[i]) {           /* want a poll when idle? */
-	  devpoll[i] = 1;               /* yes, force it now */
-	  utempl = 1;
-	}
-      if (utempl > 1)
+      crs[X] = 1;                         /* exit on next loop */
+      if (!firstbdx) {
+	//printf("%o ", crs[OWNERL]); fflush(stdout);
+	utempl = gvp->instpermsec*100;    /* limit delay to 100 msecs */
 	for (i=0; i<64; i++)              /* check device timers */
 	  if (devpoll[i])                 /* poll set? */
 	    if (devpoll[i] <= 100) {      /* too fast! */
@@ -6705,6 +6702,10 @@ d_bdx:  /* 0140734 */
 	      break;
 	    } else if (devpoll[i] < utempl)
 	      utempl = devpoll[i];
+      } else {
+	firstbdx = 0;
+	utempl = 1;
+      }
 
       /* this decrement ensures that if a device had a poll pending,
 	 we won't decrement it to zero below, ie, it'll still fire
@@ -6725,7 +6726,7 @@ d_bdx:  /* 0140734 */
 	actualmsec = (tv1.tv_sec-tv0.tv_sec-1)*1000 + (tv1.tv_usec+1000000-tv0.tv_usec)/1000;
 #if 0
 	if (actualmsec > delayusec*1.2/1000) {
-	  TRACEA(" BDX loop at %o/%o, remainder=%d, owner=%o, utempl=%d, wanted %d ms, got %d ms\n", gvp->prevpc>>16, gvp->prevpc&0xffff, crs[X], crs[OWNERL], utempl, delayusec/1000, actualmsec);
+	  TRACEA(" BDX loop at %o/%o, owner=%o, utempl=%d, wanted %d ms, got %d ms\n", gvp->prevpc>>16, gvp->prevpc&0xffff, crs[OWNERL], utempl, delayusec/1000, actualmsec);
 	}
 #endif
 	/* do timer bookkeeping that would have occurred if we had 
