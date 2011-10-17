@@ -3757,7 +3757,7 @@ static nfy(unsigned short inst) {
   resched = 0;
   begend = inst & 1;
   if (regs.sym.pcba != crs[OWNERL]) {
-    printf("NFY: regs.pcba = %o, but crs[OWNERL] = %o\n", regs.sym.pcba, crs[OWNERL]);
+    printf("NFY: regs.pcba = %o, but OWNERL = %o\n", regs.sym.pcba, crs[OWNERL]);
     fatal(NULL);
   }
   ea = apea(NULL);
@@ -5526,7 +5526,7 @@ d_rsav:  /* 000715 */
   savemask = 0;
   for (i = 11; i >= 0; i--) {
     if (crsl[i] != 0) {
-      TRACE(T_INST, " crsl[%d] saved, value=%o (%o/%o)\n", i, crsl[i], crsl[i]>>16, crsl[i]&0xffff);
+      TRACE(T_INST, " gr%d saved, value=%o (%o/%o)\n", i, crsl[i], crsl[i]>>16, crsl[i]&0xffff);
       put32(crsl[i], INCVA(ea,j));
       savemask |= BITMASK16(16-i);
     }
@@ -5548,7 +5548,7 @@ d_rrst:  /* 000717 */
   for (i = 11; i >= 0; i--) {
     if (savemask & BITMASK16(16-i)) {
       crsl[i] = get32(INCVA(ea,j));
-      TRACE(T_INST, " crsl[%d] restored, value=%o (%o/%o)\n", i, crsl[i], crsl[i]>>16, crsl[i]&0xffff);
+      TRACE(T_INST, " gr%d restored, value=%o (%o/%o)\n", i, crsl[i], crsl[i]>>16, crsl[i]&0xffff);
     } else {
       crsl[i] = 0;
     }
@@ -6446,13 +6446,13 @@ d_nrm:  /* 000101 */
   crs[VSC] = 0;
   if (crsl[GR2] != 0) {
     while (!((crs[A] ^ (crs[A] << 1)) & 0x8000)) {
-      TRACE(T_INST,  " step %d: crs[A]=%o, crs[B]=%o\n", crs[VSC], crs[A], crs[B]);
+      TRACE(T_INST,  " step %d: A=%o, B=%o\n", crs[VSC], crs[A], crs[B]);
       crs[B] = crs[B] << 1;
       crs[A] = (crs[A] & 0x8000) | ((crs[A] << 1) & 0x7FFE) | (crs[B] >> 15);
       crs[VSC]++;
     }
     crs[B] &= 0x7FFF;
-    TRACE(T_INST,  " finished with %d shifts: crs[A]=%o, crs[B]=%o\n", crs[VSC], crs[A], crs[B]);
+    TRACE(T_INST,  " finished with %d shifts: A=%o, B=%o\n", crs[VSC], crs[A], crs[B]);
   }
   goto fetch;
 
@@ -8639,7 +8639,7 @@ imode:
   case 011:
     TRACE(T_FLOW, " LH\n");
     if (*(int *)&ea < 0) {
-      TRACE(T_FLOW, " ea=%x, immu32=%lx, crsl[%d]=%x\n", ea, immu32, dr, crsl[dr]);
+      TRACE(T_FLOW, " ea=%x, immu32=%lx, gr%d=%x\n", ea, immu32, dr, crsl[dr]);
       crs[dr*2] = immu32 >> 16;
     } else
       crs[dr*2] = get16(ea);
@@ -9239,11 +9239,11 @@ imodepcl:
   case 055:
     if (*(int *)&ea < 0) {
       TRACE(T_FLOW, " ACP\n");
-      TRACE(T_INST, " before acp, crsl[%d]=%o/%o, immu32=%lu, CP(dr)=%d\n", dr, crsl[dr]>>16, crsl[dr]&0xFFFF, immu32, EACP(crsl[dr]));
+      TRACE(T_INST, " before acp, gr%d=%o/%o, immu32=%lu, CP(dr)=%d\n", dr, crsl[dr]>>16, crsl[dr]&0xFFFF, immu32, EACP(crsl[dr]));
       utempl = EACP(crsl[dr]);
       utempl += *(int *)&immu32;
       crsl[dr] = CPEA(crsl[dr], utempl);
-      TRACE(T_INST, " after acp, utempl=%d, crsl[dr]=%o/%o\n", utempl, crsl[dr]>>16, crsl[dr]&0xFFFF);
+      TRACE(T_INST, " after acp, utempl=%d, gr[dr]=%o/%o\n", utempl, crsl[dr]>>16, crsl[dr]&0xFFFF);
     } else {
       TRACE(T_FLOW, " SCC\n");
       utempa = get16(ea);

@@ -61,7 +61,7 @@ static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32,
       d = iget16(RP);
       INCRP;
       ea = (crsl[sr] & 0xFFFF0000) | ((crsl[sr] + d) & 0xFFFF);
-      TRACE(T_EAI, " GRR, d=%x, crsl[sr]=%o/%o, ea=%o/%o\n", d, crsl[sr]>>16, crsl[sr]&0xFFFF, ea>>16, ea&0xFFFF);
+      TRACE(T_EAI, " GRR, d=%x, [sr]=%o/%o, ea=%o/%o\n", d, crsl[sr]>>16, crsl[sr]&0xFFFF, ea>>16, ea&0xFFFF);
       if (ea & 0x80000000)
 	fault(POINTERFAULT, ea>>16, ea);
       return ea | ring;
@@ -104,7 +104,7 @@ static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32,
       fault(POINTERFAULT, ip>>16, ea);
     if (sr > 0) {
       ip = (ip & 0xFFFF0000) | ((ip + crs[sr*2]) & 0xFFFF);
-      TRACE(T_EAI, " index by crs[%d]='%o/%d, ea=%o/%o\n", sr, crs[sr*2], crs[sr*2], ea>>16, ea&0xFFFF);
+      TRACE(T_EAI, " index by gr%d='%o/%d, ea=%o/%o\n", sr, crs[sr*2], crs[sr*2], ea>>16, ea&0xFFFF);
     }
     return ip | ring;
 

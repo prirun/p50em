@@ -3,7 +3,7 @@
 
 REV=${shell hg id -n}
 
-.PHONY:	em debug trace fixed hobby dongle lmserver magrst parts smad smag mtread mtwrite
+.PHONY:	em debug trace vfy fixed hobby dongle lmserver magrst parts smad smag mtread mtwrite
 
 em:     # production
 
@@ -21,6 +21,11 @@ debug:  # gdb
 trace:  # tracing + gdb
 
 	cc -arch ppc -DREV=\"${REV}\" -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+
+
+vfy:  # prod + tracing to verify em changes
+
+	cc -arch ppc -DREV=\"\" -O -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
 fixed:  # fixed clock rate, gdb
