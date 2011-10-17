@@ -559,31 +559,31 @@ int devamlc (int class, int func, int device) {
 	}
       }
       //printf("devamlc: dss for device '%o = 0x%x\n", device, dc[dx].dss);
-      crs[A] = ~dc[dx].dss;      /* to the outside world, 1 = no carrier */
+      putcrs16(A, ~dc[dx].dss);    /* to the outside world, 1 = no carrier */
       IOSKIP;
 
     } else if (func == 07) {       /* input AMLC status */
       dc[dx].interrupting = 0;
-      crs[A] = 040000 | (dc[dx].bufnum<<8) | (dc[dx].intenable<<5) | (1<<4);
+      putcrs16(A, 040000 | (dc[dx].bufnum<<8) | (dc[dx].intenable<<5) | (1<<4));
       if (anyeor) {
-	crs[A] |= 0100000;
+	putcrs16(A, getcrs16(A) | 0100000);
 	for (dx=0; dx<MAXBOARDS; dx++)
 	  dc[dx].eor = 0;
 	anyeor = 0;
       }
       if (wascti) {
-	crs[A] |= 0x8f;          /* last line cti */
+	putcrs16(A, getcrs16(A) | 0x8f);    /* last line cti */
 	wascti = 0;
       }
-      //printf("INA '07%02o returns 0x%x\n", device, crs[A]);
+      //printf("INA '07%02o returns 0x%x\n", device, getcrs16(A));
       IOSKIP;
-      if (crs[A] & 0100000) {
+      if (getcrs16(A) & 0100000) {
 	maxxmit = 0;               /* ugh! sloppy... */
 	goto dorecv;
       }
 
     } else if (func == 011) {      /* input ID */
-      crs[A] = 020054;             /* 020000 = QAMLC */
+      putcrs16(A, 020054);         /* 020000 = QAMLC */
       IOSKIP;
 
     } else {
@@ -604,14 +604,14 @@ int devamlc (int class, int func, int device) {
        the line, either telnet or over a modem */
 
     if (func == 01) {              /* set line configuration */
-      lx = crs[A] >> 12;
-      //printf("OTA '01%02o: AMLC line %d new config = '%o, old config = '%o\n", device, lx, crs[A] & 0xFFF, dc[dx].lconf[lx] & 0xFFF);
+      lx = getcrs16(A) >> 12;
+      //printf("OTA '01%02o: AMLC line %d new config = '%o, old config = '%o\n", device, lx, getcrs16(A) & 0xFFF, dc[dx].lconf[lx] & 0xFFF);
 
       switch (dc[dx].ctype[lx]) {
 
       case CT_SOCKET:
       case CT_DEDIP:
-	if (!(crs[A] & 0x400) && dc[dx].fd[lx] >= 0) {  /* if DTR drops, disconnect */
+	if (!(getcrs16(A) & 0x400) && dc[dx].fd[lx] >= 0) {  /* if DTR drops, disconnect */
 	  AMLC_CLOSE_LINE;
 	}
 	break;
@@ -624,7 +624,7 @@ int devamlc (int class, int func, int device) {
 	   something other than DTR changing) */
 
 	fd = dc[dx].fd[lx];
-	if ((crs[A] ^ dc[dx].lconf[lx]) & ~02000) {
+	if ((getcrs16(A) ^ dc[dx].lconf[lx]) & ~02000) {
 	  int baud;
 	  struct termios terminfo;
 
@@ -635,13 +635,13 @@ int devamlc (int class, int func, int device) {
 	  }
 	  memset(&terminfo, 0, sizeof(terminfo));
 	  cfmakeraw(&terminfo);
-	  baud = baudtable[(crs[A] >> 6) & 7];
+	  baud = baudtable[(getcrs16(A) >> 6) & 7];
 	  if (cfsetspeed(&terminfo, baud) == -1)
 	    perror("em: unable to set AMLC line speed");
 	  else
 	    printf("em: AMLC line %d set to %d bps\n", dx*16 + lx, baud);
 	  terminfo.c_cflag = CREAD | CLOCAL;		// turn on READ and ignore modem control lines
-	  switch (crs[A] & 3) {              /* data bits */
+	  switch (getcrs16(A) & 3) {              /* data bits */
 	  case 0:
 	    terminfo.c_cflag |= CS5;
 	    break;
@@ -655,11 +655,11 @@ int devamlc (int class, int func, int device) {
 	    terminfo.c_cflag |= CS8;
 	    break;
 	  }
-	  if (crs[A] & 020)
+	  if (getcrs16(A) & 020)
 	    terminfo.c_cflag |= CSTOPB;
-	  if (!(crs[A] & 010)) {
+	  if (!(getcrs16(A) & 010)) {
 	    terminfo.c_cflag |= PARENB;
-	    if (!(crs[A] & 4))
+	    if (!(getcrs16(A) & 4))
 	      terminfo.c_cflag |= PARODD;
 	  }
 
@@ -680,7 +680,7 @@ int devamlc (int class, int func, int device) {
 	     let it flow through to the AMLC controller. :(
 	  */
 
-	  switch ((crs[A] >> 9) & 7) {
+	  switch ((getcrs16(A) >> 9) & 7) {
 	  case 1: case 3:
 	    terminfo.c_iflag |= IXON | IXOFF;
 	    terminfo.c_cc[VSTART] = 0x11;
@@ -704,7 +704,7 @@ int devamlc (int class, int func, int device) {
 	     Unix xon/xoff feature is good for serial I/O devices,
 	     where it stays enabled. */
 
-	  if (crs[A] & 01000) {
+	  if (getcrs16(A) & 01000) {
 	    terminfo.c_iflag |= IXON | IXOFF;
 	    terminfo.c_cc[VSTART] = 0x11;
 	    terminfo.c_cc[VSTOP] = 0x13;
@@ -727,11 +727,11 @@ int devamlc (int class, int func, int device) {
 
 	/* set DTR high (02000) or low if it has changed */
 
-	if ((crs[A] ^ dc[dx].lconf[lx]) & 02000) {
+	if ((getcrs16(A) ^ dc[dx].lconf[lx]) & 02000) {
 	  int modemstate;
 	  //printf("devamlc: DTR state changed\n");
 	  ioctl(fd, TIOCMGET, &modemstate);
-	  if (crs[A] & 02000)
+	  if (getcrs16(A) & 02000)
 	    modemstate |= TIOCM_DTR;
 	  else {
 	    modemstate &= ~TIOCM_DTR;
@@ -748,21 +748,21 @@ int devamlc (int class, int func, int device) {
 
       /* finally, update line config */
 
-      dc[dx].lconf[lx] = crs[A];
+      dc[dx].lconf[lx] = getcrs16(A);
       IOSKIP;
 
     } else if (func == 02) {      /* set line control */
-      lx = (crs[A]>>12);
-      //printf("OTA '02%02o: AMLC line %d control = %x\n", device, lx, crs[A]);
-      if (crs[A] & 040)           /* character time interrupt enable/disable */
+      lx = (getcrs16(A)>>12);
+      //printf("OTA '02%02o: AMLC line %d control = %x\n", device, lx, getcrs16(A));
+      if (getcrs16(A) & 040)           /* character time interrupt enable/disable */
 	dc[dx].ctinterrupt |= BITMASK16(lx+1);
       else
 	dc[dx].ctinterrupt &= ~BITMASK16(lx+1);
-      if (crs[A] & 010)           /* transmit enable/disable */
+      if (getcrs16(A) & 010)           /* transmit enable/disable */
 	dc[dx].xmitenabled |= BITMASK16(lx+1);
       else
 	dc[dx].xmitenabled &= ~BITMASK16(lx+1);
-      if (crs[A] & 01)            /* receive enable/disable */
+      if (getcrs16(A) & 01)            /* receive enable/disable */
 	dc[dx].recvenabled |= BITMASK16(lx+1);
       else
 	dc[dx].recvenabled &= ~BITMASK16(lx+1);
@@ -776,21 +776,21 @@ int devamlc (int class, int func, int device) {
       IOSKIP;
 
     } else if (func == 014) {      /* set DMA/C channel (for input) */
-      dc[dx].dmcchan = crs[A] & 0x7ff;
-      if (!(crs[A] & 0x800))
+      dc[dx].dmcchan = getcrs16(A) & 0x7ff;
+      if (!(getcrs16(A) & 0x800))
 	fatal("Can't run AMLC in DMA mode!");
       IOSKIP;
 
     } else if (func == 015) {      /* set DMT/DMQ base address (for output) */
-      dc[dx].baseaddr = crs[A];
+      dc[dx].baseaddr = getcrs16(A);
       IOSKIP;
 
     } else if (func == 016) {      /* set interrupt vector */
-      dc[dx].intvector = crs[A];
+      dc[dx].intvector = getcrs16(A);
       IOSKIP;
 
     } else if (func == 017) {      /* set programmable clock constant */
-      baudtable[4] = 115200/(crs[A]+1);
+      baudtable[4] = 115200/(getcrs16(A)+1);
       printf("em: AMLC baud rates are");
       for (i=0; i<8; i++)
 	printf(" %d", baudtable[i]);
@@ -798,7 +798,7 @@ int devamlc (int class, int func, int device) {
       IOSKIP;
 
     } else {
-      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
+      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, getcrs16(A));
       fatal(NULL);
     }
     break;
@@ -961,7 +961,7 @@ int devamlc (int class, int func, int device) {
 	    n = 0;
 	    for (i=0; i < maxn; i++) {
 	      unsigned short utemp;
-	      utemp = MEM[qentea];
+	      utemp = get16mem(qentea);
 	      qentea = (qentea & ~qmask) | ((qentea+1) & qmask);
 	      //printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utemp, utemp & 0x7f);
 	      buf[n++] = utemp & 0x7F;

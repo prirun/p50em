@@ -603,9 +603,9 @@ pncconnect(time_t timenow) {
 /* initialize a dma transfer */
 
 pncinitdma(t_dma *iob, char *iotype) {
-  if (crs[A] > 037)
+  if (getcrs16(A) > 037)
     fatal("PNC doesn't support chaining, DMC, or DMA reg > 037");
-  (*iob).dmachan = crs[A];
+  (*iob).dmachan = getcrs16(A);
   (*iob).dmareg = (*iob).dmachan << 1;
   (*iob).dmanw = -((regs.sym.regdmx[(*iob).dmareg]>>4) | 0xF000);
   if ((*iob).dmanw > MAXPNCWORDS)
@@ -1066,17 +1066,17 @@ int devpnc (int class, int func, int device) {
   case 2:
     if (func == 011) {          /* input ID */
       TRACE(T_INST|T_RIO, " INA '%02o%02o - input ID\n", func, device);
-      crs[A] = 07;
+      putcrs16(A, 07);
       IOSKIP;
 
     } else if (func == 012) {   /* read receive status word */   
       TRACE(T_INST|T_RIO, " INA '%02o%02o - get recv status '%o 0x%04x\n", func, device, rcvstat, rcvstat);
-      crs[A] = rcvstat;
+      putcrs16(A, rcvstat);
       IOSKIP;
 
     } else if (func == 013) {   /* read xmit status word */
       TRACE(T_INST|T_RIO, " INA '%02o%02o - get xmit status '%o 0x%04x\n", func, device, xmitstat, xmitstat);
-      crs[A] = xmitstat;
+      putcrs16(A, xmitstat);
       IOSKIP;
 
       /* these next two are mostly bogus: prmnt1 T&M wants them this
@@ -1089,23 +1089,23 @@ int devpnc (int class, int func, int device) {
 
     } else if (func == 014) {   /* read recv DMX channel */
       TRACE(T_INST|T_RIO, " INA '%02o%02o - get recv DMX chan '%o 0x%04x\n", func, device, rcv.dmachan, rcv.dmachan);
-      crs[A] = (~rcv.dmachan & 0xF000) | rcv.dmachan & 0x0FFE;
+      putcrs16(A, (~rcv.dmachan & 0xF000) | rcv.dmachan & 0x0FFE);
       IOSKIP;
 
     } else if (func == 015) {   /* read xmit DMX channel */
       TRACE(T_INST|T_RIO, " INA '%02o%02o - get xmit DMX chan '%o 0x%04x\n", func, device, xmit.dmachan, xmit.dmachan);
-      crs[A] = (~xmit.dmachan & 0xF000) | xmit.dmachan & 0x0FFE;
-      TRACE(T_INST|T_RIO, " returning '%o 0x%04x\n", crs[A], crs[A]);
+      putcrs16(A, (~xmit.dmachan & 0xF000) | xmit.dmachan & 0x0FFE);
+      TRACE(T_INST|T_RIO, " returning '%o 0x%04x\n", getcrs16(A), getcrs16(A));
       IOSKIP;
 
     } else if (func == 016) {   /* read diagnostic register */
       TRACE(T_INST|T_RIO, " INA '%02o%02o - read diag reg '%o 0x%04x\n", func, device, pncdiag, pncdiag);
-      crs[A] = pncdiag;
+      putcrs16(A, pncdiag);
       IOSKIP;
 
     } else if (func == 017) {   /* read network status word */   
       TRACE(T_INST|T_RIO, " INA '%02o%02o - get ctrl status '%o 0x%04x\n", func, device, pncstat, pncstat);
-      crs[A] = pncstat;
+      putcrs16(A, pncstat);
       IOSKIP;
 
     } else {
@@ -1117,7 +1117,7 @@ int devpnc (int class, int func, int device) {
   case 3:
     TRACE(T_INST|T_RIO, " OTA '%02o%02o\n", func, device);
     if (func == 011) {          /* output diagnostic register */
-      pncdiag = crs[A];
+      pncdiag = getcrs16(A);
       IOSKIP;
 
     } else if (func == 014) {   /* initiate recv, dma chan in A */
@@ -1197,18 +1197,18 @@ int devpnc (int class, int func, int device) {
       goto rcvexit;                  /* rcv & interrupt following xmit */
 
     } else if (func == 016) {   /* set interrupt vector */
-      pncvec = crs[A];
+      pncvec = getcrs16(A);
       TRACE(T_INST|T_RIO, " interrupt vector = '%o\n", pncvec);
       IOSKIP;
 
     } else if (func == 017) {   /* set my node ID */
-      myid = crs[A] & 0xFF;
+      myid = getcrs16(A) & 0xFF;
       pncstat = (pncstat & 0xFF00) | myid;
       TRACE(T_INST|T_RIO, " my node id is %d\n", myid);
       IOSKIP;
 
     } else {
-      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
+      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, getcrs16(A));
       fatal(NULL);
     }
     break;

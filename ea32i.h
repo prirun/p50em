@@ -20,7 +20,7 @@ static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32,
   case 0:
     switch (br) {
     case 0:                                   /* reg-reg */
-      *immu32 = crsl[sr];
+      *immu32 = getgr32(sr);
       return IMM_EA;
 
     case 1:
@@ -40,10 +40,10 @@ static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32,
 	*immu64 = (((long long)(d & 0xFF00)) << 48) | (d & 0xFF);
 	return IMM_EA;
       case 1:                                 /* FAC0 source */
-	*immu64 = *(unsigned long long *)(crsl+FAC0);
+	*immu64 = getgr64(FAC0);
 	return IMM_EA;
       case 3:                                 /* FAC1 source */
-	*immu64 = *(unsigned long long *)(crsl+FAC1);
+	*immu64 = getgr64(FAC1);
 	return IMM_EA;
       case 2:
       case 4:
@@ -60,8 +60,8 @@ static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32,
     case 3:                                   /* GR relative */
       d = iget16(RP);
       INCRP;
-      ea = (crsl[sr] & 0xFFFF0000) | ((crsl[sr] + d) & 0xFFFF);
-      TRACE(T_EAI, " GRR, d=%x, [sr]=%o/%o, ea=%o/%o\n", d, crsl[sr]>>16, crsl[sr]&0xFFFF, ea>>16, ea&0xFFFF);
+      ea = (getgr32(sr) & 0xFFFF0000) | ((getgr32(sr) + d) & 0xFFFF);
+      TRACE(T_EAI, " GRR, d=%x, [sr]=%o/%o, ea=%o/%o\n", d, getgr32(sr)>>16, getgr32(sr)&0xFFFF, ea>>16, ea&0xFFFF);
       if (ea & 0x80000000)
 	fault(POINTERFAULT, ea>>16, ea);
       return ea | ring;
@@ -75,18 +75,18 @@ static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32,
     d = iget16(RP);
     INCRP;
     if (sr == 0)
-      ea = (crsl[BR+br] & 0xFFFF0000) | ((crsl[BR+br] + d) & 0xFFFF);
+      ea = (getgr32(BR+br) & 0xFFFF0000) | ((getgr32(BR+br) + d) & 0xFFFF);
     else
-      ea = (crsl[BR+br] & 0xFFFF0000) | ((crsl[BR+br] + d + crs[sr*2]) & 0xFFFF);
+      ea = (getgr32(BR+br) & 0xFFFF0000) | ((getgr32(BR+br) + d + getgr16(sr)) & 0xFFFF);
     return ea | ring;
 
   case 2:  /* TM=2: Indirect and Indirect Preindexed */
     d = iget16(RP);
     INCRP;
     if (sr == 0)
-      ea = (crsl[BR+br] & 0xFFFF0000) | ((crsl[BR+br] + d) & 0xFFFF);
+      ea = (getgr32(BR+br) & 0xFFFF0000) | ((getgr32(BR+br) + d) & 0xFFFF);
     else
-      ea = (crsl[BR+br] & 0xFFFF0000) | ((crsl[BR+br] + d + crs[sr*2]) & 0xFFFF);
+      ea = (getgr32(BR+br) & 0xFFFF0000) | ((getgr32(BR+br) + d + getgr16(sr)) & 0xFFFF);
     ip = get32(ea | ring);
     if (ip & 0x80000000)
       fault(POINTERFAULT, ip>>16, ea);
@@ -96,15 +96,15 @@ static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned long *immu32,
     TRACE(T_EAI, " TM=3: Indirect [Postindexed]");
     d = iget16(RP);
     INCRP;
-    ea = (crsl[BR+br] & 0xFFFF0000) | ((crsl[BR+br] + d) & 0xFFFF);
-    TRACE(T_EAI, " BR[%d]=%o/%o, d=%o, ip ea=%o/%o\n", br, crsl[BR+br]>>16, crsl[BR+br]&0xFFFF, d, ea>>16, ea&0xFFFF);
+    ea = (getgr32(BR+br) & 0xFFFF0000) | ((getgr32(BR+br) + d) & 0xFFFF);
+    TRACE(T_EAI, " BR[%d]=%o/%o, d=%o, ip ea=%o/%o\n", br, getgr32(BR+br)>>16, getgr32(BR+br)&0xFFFF, d, ea>>16, ea&0xFFFF);
     ip = get32(ea | ring);
     TRACE(T_EAI, " after indirect, ea=%o/%o\n", ip>>16, ip&0xFFFF);
     if (ip & 0x80000000)
       fault(POINTERFAULT, ip>>16, ea);
     if (sr > 0) {
-      ip = (ip & 0xFFFF0000) | ((ip + crs[sr*2]) & 0xFFFF);
-      TRACE(T_EAI, " index by gr%d='%o/%d, ea=%o/%o\n", sr, crs[sr*2], crs[sr*2], ea>>16, ea&0xFFFF);
+      ip = (ip & 0xFFFF0000) | ((ip + getgr16(sr)) & 0xFFFF);
+      TRACE(T_EAI, " index by gr%d='%o/%d, ea=%o/%o\n", sr, getgr16(sr), getgr16(sr), ea>>16, ea&0xFFFF);
     }
     return ip | ring;
 

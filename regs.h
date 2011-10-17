@@ -88,6 +88,7 @@
 #define FAC1 10
 #define BR 12
 #define OWNER32 (OWNERH/2)
+#define TIMER32 (TIMERH/2)
 
 /* this is the number of user register sets for this cpuid */
 
@@ -183,10 +184,6 @@ static union {
 
 /* store RP and crsl in dedicated registers 29-30 (Power PC) */
 
-#define RP rpreg.ul
-#define RPH rpreg.s.rph
-#define RPL rpreg.s.rpl
-
 static unsigned int grp;      /* global RP for restore after longjmp */
 register union {
   struct {
@@ -195,6 +192,10 @@ register union {
   } s;
   unsigned int ul;
 } rpreg asm ("r29");
+
+#define RP rpreg.ul
+#define RPH rpreg.s.rph
+#define RPL rpreg.s.rpl
 
 static unsigned int *gcrsl;   /* global crs pointer for restore after longjmp */
 register union {
@@ -228,6 +229,89 @@ static union {
 
 #define crs  cr.u16
 #define crsl cr.u32
+
+/************  16-bit offset macros:  *************/
+
+/* fetch 16-bit unsigned at 16-bit offset */
+#define getcrs16(offset) crs[(offset)]
+
+/* store 16-bit unsigned at 16-bit offset */
+#define putcrs16(offset, val) crs[(offset)] = (val)
+
+/* get 16-bit signed at 16-bit offset */
+#define getcrs16s(offset) *(short *)(crs+(offset))
+
+/* get 32-bit unsigned at 16-bit offset */
+#define getcrs32(offset) *(unsigned int *)(crs+offset)
+
+/* get 32-bit signed at 16-bit offset */
+#define getcrs32s(offset) *(int *)(crs+(offset))
+
+/* put 32-bit unsigned at 16-bit offset */
+#define putcrs32(offset, val) *(unsigned int *)(crs+(offset)) = (val)
+
+/* put 32-bit signed at 16-bit offset */
+#define putcrs32s(offset, val) *(int *)(crs+(offset)) = (val)
+
+/* get 32-bit effective address at 16-bit offset */
+#define getcrs32ea(offset) *(ea_t *)(crs+(offset))
+
+/* put 32-bit effective address at 16-bit offset */
+#define putcrs32ea(offset, val) *(ea_t *)(crs+(offset)) = (val)
+
+/* get 64-bit signed at 16-bit offset */
+#define getcrs64s(offset) *(long long *)(crs+(offset))
+
+/* put 64-bit signed at 16-bit offset (remove later) */
+#define putcrs64s(offset, val) *(long long *)(crs+(offset)) = (val)
+
+/* put 64-bit double at 16-bit offset (remove later) */
+#define putcrs64d(offset, val) *(double *)(crs+(offset)) = (val)
+
+/******* 32-bit offset macros: ***********/
+
+/* fetch 16-bit unsigned at 32-bit offset (right halfword is returned) */
+#define getgr16(offset) crs[(offset)*2]
+
+/* store 16-bit unsigned at 32-bit offset (in right halfword) */
+#define putgr16(offset, val) crs[(offset)*2] = (val)
+
+/* fetch 16-bit signed at 32-bit offset (right halfword is returned) */
+#define getgr16s(offset) *(short *)(crs+(offset)*2)
+
+/* store 16-bit signed at 32-bit offset (in right halfword) */
+#define putgr16s(offset, val) *(short *)(crs+(offset)*2) = (val)
+
+/* fetch 32-bit unsigned at 32-bit offset */
+#define getgr32(offset) crsl[(offset)]
+
+/* store 32-bit unsigned at 32-bit offset */
+#define putgr32(offset, val) crsl[(offset)] = (val)
+
+/* fetch 32-bit signed at 32-bit offset */
+#define getgr32s(offset) *(int *)(crsl+(offset))
+
+/* store 32-bit signed at 32-bit offset */
+#define putgr32s(offset, val) *(int *)(crsl+(offset)) = (val)
+
+/* fetch 64-bit signed at 32-bit offset */
+#define getgr64s(offset) *(long long *)(crsl+(offset))
+
+/* store 64-bit signed at 32-bit offset */
+#define putgr64s(offset, val) *(long long *)(crsl+(offset)) = (val)
+
+/* fetch 64-bit unsigned at 32-bit offset */
+#define getgr64(offset) *(unsigned long long *)(crsl+(offset))
+
+/* fetch 32-bit unsigned at FP register 0 or 1
+   For FP 0, offset=0; for FP 1, offset=2
+   NOTE: instead of doing FAC0+offset, there could be another
+   pointer to FR0, then use offset as an index */
+#define getfr32(offset) crsl[(FAC0+offset)]
+
+/* put 64-bit double in FP reg 0 or 1
+   For FP 0, offset=0; for FP 1, offset=2 */
+#define putfr64d(offset, val) *(double *)(crsl+FAC0+offset) = (val)
 
 #define PCBLEV 0
 #define PCBLINK 1

@@ -105,8 +105,8 @@
    the EQ condition code bit.  In SR modes, it does a skip */
 
 #define IOSKIP \
-  if (crs[KEYS] & 010000) \
-    crs[KEYS] |= 0100; \
+  if (getcrs16(KEYS) & 010000)			\
+    putcrs16(KEYS, getcrs16(KEYS) | 0100);	\
   else \
     RPL++
 
@@ -119,7 +119,7 @@
 
 #if 1
 #define BLOCKIO \
-  (!(crs[MODALS] & 010) && (iget16(RP) == 03776 || (iget16(RP) == 0141603 && iget16(RP+1) == RPL-2)))
+  (!(getcrs16(MODALS) & 010) && (iget16(RP) == 03776 || (iget16(RP) == 0141603 && iget16(RP+1) == RPL-2)))
 #else
 #define BLOCKIO 0
 #endif
@@ -170,7 +170,7 @@ int devnew (int class, int func, int device) {
     if (func == 99) {
       IOSKIP;
     } else {
-      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
+      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, getcrs16(A));
       fatal(NULL);
     }
     break;
@@ -392,7 +392,7 @@ int devasr (int class, int func, int device) {
       if (xoff)                    /* no output if xoff */
 	return;
       if (roomleft <= 0) {         /* shouldn't be negative, but safer */
-	if (crs[MODALS] & 010)     /* PX enabled? */
+	if (getcrs16(MODALS) & 010)/* PX enabled? */
 	  timeout.tv_sec = 0;      /* yes, can't delay */
 	else
 	  timeout.tv_sec = 1;      /* single user: okay to delay */
@@ -410,7 +410,7 @@ int devasr (int class, int func, int device) {
       }
 
     } else if (func == 7) {        /* skip if received a char */
-      if (crs[MODALS] & 010)       /* PX enabled? */
+      if (getcrs16(MODALS) & 010)  /* PX enabled? */
 	timeout.tv_sec = 0;        /* yes, can't delay */
       else {
 	timeout.tv_sec = 1;        /* single user: okay to delay */
@@ -475,7 +475,7 @@ readasr:
 	  fatal(NULL);
 	}
       } else if (n == 1) {
-	if (!(crs[MODALS] & 010) && (ch == '')) {
+	if (!(getcrs16(MODALS) & 010) && (ch == '')) {
 	  printf("\nRebooting at instruction #%lu\n", gvp->instcount);
 	  // gvp->savetraceflags = ~T_MAP;  /****/
 	  longjmp(bootjmp, 1);
@@ -509,9 +509,9 @@ readasr:
 	}
 	xoff = 0;                /* enable output if any characters typed */
 	if (func >= 010)
-	  crs[A] = 0;
-	crs[A] = crs[A] | ch;
-	TRACE(T_INST, " character read=%o: %c\n", crs[A], crs[A] & 0x7f);
+	  putcrs16(A, 0);
+	putcrs16(A, getcrs16(A) | ch);
+	TRACE(T_INST, " character read=%o: %c\n", getcrs16(A), getcrs16(A) & 0x7f);
 	if (!(terminfo.c_lflag & ECHO) && ch != 015) /* log all except CR */
 	  fputc(ch, conslog);
 	fflush(conslog);         /* immediately flush when typing */
@@ -524,16 +524,16 @@ readasr:
 	fatal(NULL);
       }
     } else if (04 <= func && func <= 07) {  /* read control register 1/2 */
-      crs[A] = 0;
+      putcrs16(A, 0);
       IOSKIP;
     } else if (func == 011) {    /* read device id? */
-      crs[A] = 4;
+      putcrs16(A, 4);
       IOSKIP;
     } else if (func == 012) {    /* read control word */
-      crs[A] = 04110;
+      putcrs16(A, 04110);
       IOSKIP;
     } else if (func == 017) {    /* read xmit interrupt vector -OR- clock */
-      crs[A] = vcptime[vcptimeix++];
+      putcrs16(A, vcptime[vcptimeix++]);
       if (vcptimeix > 7)
 	vcptimeix = 0;
       IOSKIP;
@@ -546,8 +546,8 @@ readasr:
   case 3:
     TRACE(T_INST, " OTA '%02o%02o\n", func, device);
     if (func == 0) {
-      ch = crs[A] & 0x7f;
-      TRACE(T_INST, " char to write=%o: %c\n", crs[A], ch);
+      ch = getcrs16(A) & 0x7f;
+      TRACE(T_INST, " char to write=%o: %c\n", getcrs16(A), ch);
       if (ch == 0 || ch == 0x7f) {  /* ignore null and del (rubout) */
 	IOSKIP;
 	return;
@@ -580,23 +580,23 @@ readasr:
 	devpoll[device] = gvp->instpermsec*100;
       IOSKIP;
     } else if (func == 1) {       /* write control word */
-      TRACEA("OTA 4, func %d, A='%o/%d\n", func, crs[A], *(short *)(crs+A));
+      TRACEA("OTA 4, func %d, A='%o/%d\n", func, getcrs16(A), getcrs16s(A));
       IOSKIP;
     } else if (04 <= func && func <= 07) {  /* write control register 1/2 */
-      TRACEA("OTA 4, func %d, A='%o/%d\n", func, crs[A], *(short *)(crs+A));
+      TRACEA("OTA 4, func %d, A='%o/%d\n", func, getcrs16(A), getcrs16s(A));
       IOSKIP;
     } else if (func == 012) {
-      TRACEA("OTA 4, func %d, A='%o/%d\n", func, crs[A], *(short *)(crs+A));
+      TRACEA("OTA 4, func %d, A='%o/%d\n", func, getcrs16(A), getcrs16s(A));
       /* NOTE: does this in rev 23 when system is shutdown with '4110 in A */
       IOSKIP;
 
     } else if (func == 013) {
-      TRACEA("OTA 4, func %d, A='%o/%d\n", func, crs[A], *(short *)(crs+A));
+      TRACEA("OTA 4, func %d, A='%o/%d\n", func, getcrs16(A), getcrs16s(A));
       /* NOTE: does this in rev 20 on settime command (set clock on VCP?) */
       IOSKIP;
 
     } else if (func == 017) {
-      if (crs[A] == 0) {
+      if (getcrs16(A) == 0) {
 
 	/* setup to read VCP battery backup clock, only available on
 	   Prime models with cpuid >= 5.  All words are 2 BCD digits */
@@ -615,11 +615,11 @@ readasr:
 	vcptime[7] = 0;
 	vcptimeix = 0;
       } else {
-	TRACEA("OTA 4, func '%o, A='%o/%d\n", func, crs[A], *(short *)(crs+A));
+	TRACEA("OTA 4, func '%o, A='%o/%d\n", func, getcrs16(A), getcrs16s(A));
       }
       IOSKIP;
     } else {
-      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
+      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, getcrs16(A));
       fatal(NULL);
     }
     break;
@@ -1008,16 +1008,16 @@ int devmt (int class, int func, int device) {
     if (func == 0) {
       if (!ready) {
 	TRACE(T_INST|T_TIO, "INA 0 on tape device w/o matching OTA!\n");
-	crs[A] = 0;
+	putcrs16(A, 0);
       } else {
 	TRACE(T_INST|T_TIO, "  INA 0 returns '%06o 0x%04x\n", datareg, datareg);
-	crs[A] = datareg;
+	putcrs16(A, datareg);
       }
       ready = 0;
       IOSKIP;
 
     } else if (func == 011) {
-      crs[A] = (1 << 8) | 0214;   /* backplane slot + device ID */
+      putcrs16(A, (1 << 8) | 0214);   /* backplane slot + device ID */
       IOSKIP;
 
     } else {
@@ -1027,20 +1027,20 @@ int devmt (int class, int func, int device) {
     break;
 
   case 3:
-    TRACE(T_INST|T_TIO, " OTA '%02o%02o, A='%06o %04x\n", func, device, crs[A], crs[A]);
+    TRACE(T_INST|T_TIO, " OTA '%02o%02o, A='%06o %04x\n", func, device, getcrs16(A), getcrs16(A));
 
     if (func != 0)
       busy = 0;
 
     if (func == 00) {
-      datareg = crs[A];
+      datareg = getcrs16(A);
       IOSKIP;
 
     } else if (func == 01) {
 
       /* here's the hard part where everything happens... decode unit first */
 
-      u = crs[A] & 0xF;
+      u = getcrs16(A) & 0xF;
       if (u == 1) u = 3;
       else if (u == 2) u = 2;
       else if (u == 4) u = 1;
@@ -1079,7 +1079,7 @@ int devmt (int class, int func, int device) {
       /* "select only" is ignored.  On a real tape controller, this
        blocks (I think) if the previous tape operation is in progress */
 
-      if ((crs[A] & 0xFFF00) == 0x8000) {
+      if ((getcrs16(A) & 0xFFF00) == 0x8000) {
 	TRACE(T_TIO, " select only\n");
 	IOSKIP;
 	break;
@@ -1095,7 +1095,7 @@ int devmt (int class, int func, int device) {
       interrupting = 1;
       devpoll[device] = 10;
 
-      if ((crs[A] & 0x00E0) == 0x0020) {       /* rewind */
+      if ((getcrs16(A) & 0x00E0) == 0x0020) {       /* rewind */
 	//gvp->traceflags = ~T_MAP;
 	TRACE(T_TIO, " rewind\n");
 	if (lseek(unit[u].fd, 0, SEEK_SET) == -1) {
@@ -1119,7 +1119,7 @@ int devmt (int class, int func, int device) {
 	 create garbage tape images for testing by doing a Magsav,
 	 rewind, starting another Magsav, and aborting it. */
 
-      if ((crs[A] & 0x4010) == 0x0010) {
+      if ((getcrs16(A) & 0x4010) == 0x0010) {
 	TRACE(T_TIO, " write file mark\n");
 	*(int *)iobuf = 0;
 	mtwrite(unit[u].fd, iobuf, 2, &unit[u].mtstat);
@@ -1130,16 +1130,16 @@ int devmt (int class, int func, int device) {
 
       /* space forward or backward a record or file at a time */
 
-      if (crs[A] & 0x2000) {           /* space operation */
-	if ((crs[A] & 0xC0) == 0)
+      if (getcrs16(A) & 0x2000) {           /* space operation */
+	if ((getcrs16(A) & 0xC0) == 0)
 	  warn("Motion = 0 for tape spacing operation");
-	else if (crs[A] & 0x4000) {    /* record operation */
-	  TRACE(T_TIO, " space record, dir=%x\n", crs[A] & 0x80);
-	  mtread(unit[u].fd, iobuf, 0, crs[A], &unit[u].mtstat);
+	else if (getcrs16(A) & 0x4000) {    /* record operation */
+	  TRACE(T_TIO, " space record, dir=%x\n", getcrs16(A) & 0x80);
+	  mtread(unit[u].fd, iobuf, 0, getcrs16(A), &unit[u].mtstat);
 	} else {                       /* file spacing operation */
-	  TRACE(T_TIO, " space file, dir=%x\n", crs[A] & 0x80);
+	  TRACE(T_TIO, " space file, dir=%x\n", getcrs16(A) & 0x80);
 	  do {
-	    mtread(unit[u].fd, iobuf, 0, crs[A], &unit[u].mtstat);
+	    mtread(unit[u].fd, iobuf, 0, getcrs16(A), &unit[u].mtstat);
 	  } while (!(unit[u].mtstat & 0x128));  /* FM, EOT, BOT */
 	}
 	IOSKIP;
@@ -1148,7 +1148,7 @@ int devmt (int class, int func, int device) {
 
       /* read/write backward aren't supported */
 
-      if (((crs[A] & 0x00E0) == 0x0040) && ((crs[A] & 0x2000) == 0)) {
+      if (((getcrs16(A) & 0x00E0) == 0x0040) && ((getcrs16(A) & 0x2000) == 0)) {
 	warn("devtape: read/write reverse not supported");
 	unit[u].mtstat = 0;
 	IOSKIP;
@@ -1163,13 +1163,13 @@ int devmt (int class, int func, int device) {
          for write commands, the 4-byte .TAP record length IS stored in
 	 iobuf and the length returned by mtwrite reflects that */
 
-      if (crs[A] & 0x10) {         /* write record */
+      if (getcrs16(A) & 0x10) {         /* write record */
 	TRACE(T_TIO, " write record\n");
 	dmxtotnw = 0;
 	iobufp = iobuf+2;
       } else {
 	TRACE(T_TIO, " read record\n");
-	dmxtotnw = mtread(unit[u].fd, iobuf, MAXTAPEWORDS, crs[A], &unit[u].mtstat);
+	dmxtotnw = mtread(unit[u].fd, iobuf, MAXTAPEWORDS, getcrs16(A), &unit[u].mtstat);
 	iobufp = iobuf;
       }
 
@@ -1193,7 +1193,7 @@ int devmt (int class, int func, int device) {
 	  printf("devmt: requested negative DMX of size %d\n", dmxnw);
 	  fatal(NULL);
 	}
-	if (crs[A] & 0x10) {            /* write record */
+	if (getcrs16(A) & 0x10) {            /* write record */
 	  if (dmxtotnw+dmxnw > MAXTAPEWORDS)
 	    fatal("Tape write is too big");
 	  for (i=0; i < dmxnw; i++) {
@@ -1240,7 +1240,7 @@ int devmt (int class, int func, int device) {
 
       /* for write record, do the write */
 
-      if (crs[A] & 0x10) {             /* write record */
+      if (getcrs16(A) & 0x10) {             /* write record */
 	n = dmxtotnw*2;
 	reclen[0] = n & 0xFF;
 	reclen[1] = n>>8 & 0xFF;
@@ -1260,7 +1260,7 @@ int devmt (int class, int func, int device) {
 	
     } else if (func == 02) {
       ready = 1;
-      if (crs[A] & 0x8000) {      /* status word 1 */
+      if (getcrs16(A) & 0x8000) {      /* status word 1 */
 	datareg = unit[usel].mtstat;
 	
 	/* if the tape was rewinding, return rewinding status once, then
@@ -1268,16 +1268,16 @@ int devmt (int class, int func, int device) {
 
 	if (datareg & 0x10)
 	  unit[usel].mtstat = unit[usel].mtstat & ~0x10 | 0x8;
-      } else if (crs[A] & 0x4000)
+      } else if (getcrs16(A) & 0x4000)
 	datareg = 0214;           /* device ID */
-      else if (crs[A] & 0x2000)
+      else if (getcrs16(A) & 0x2000)
 	datareg = dmxchan;
-      else if (crs[A] & 0x1000)
+      else if (getcrs16(A) & 0x1000)
 	datareg = mtvec;
-      else if (crs[A] & 0x800)
+      else if (getcrs16(A) & 0x800)
 	datareg = 0;              /* status word 2 */
       else {
-	TRACE(T_TIO, "  Bad OTA '02 to tape drive, A='%06o, 0x$04x\n", crs[A], crs[A]);
+	TRACE(T_TIO, "  Bad OTA '02 to tape drive, A='%06o, 0x$04x\n", getcrs16(A), getcrs16(A));
 	datareg = 0;
 	interrupting = 1;
 	devpoll[device] = 10;
@@ -1296,7 +1296,7 @@ int devmt (int class, int func, int device) {
       IOSKIP;
 
     } else if (func == 014) {               /* set DMX channel */
-      dmxchan = crs[A];
+      dmxchan = getcrs16(A);
       TRACE(T_TIO,  " dmx channel '%o, 0x%04x\n", dmxchan, dmxchan);
       IOSKIP;
 
@@ -1305,12 +1305,12 @@ int devmt (int class, int func, int device) {
       IOSKIP;
 
     } else if (func == 016) {               /* set interrupt vector */
-      mtvec = crs[A];
+      mtvec = getcrs16(A);
       TRACE(T_TIO,  " set int vec '%o\n", mtvec);
       IOSKIP;
 
     } else {
-      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
+      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, getcrs16(A));
     }
     break;
 
@@ -1318,7 +1318,7 @@ int devmt (int class, int func, int device) {
     TRACE(T_TIO,  " POLL device '%02o, enabled=%d, interrupting=%d\n", device, enabled, interrupting);
     if (enabled && (interrupting == 1)) {
       devpoll[device] = 100;         /* assume interrupt will be deferred */
-      if (gvp->intvec == -1 && (crs[MODALS] & 0100000)) {
+      if (gvp->intvec == -1 && (getcrs16(MODALS) & 0100000)) {
 	TRACE(T_TIO,  " CPU interrupt to vector '%o\n", mtvec);
 	gvp->intvec = mtvec;
 	devpoll[device] = 0;
@@ -1472,13 +1472,13 @@ int devcp (int class, int func, int device) {
   case 2:
     TRACE(T_INST, " INA '%02o%02o\n", func, device);
     if (func == 011) {             /* input ID */
-      crs[A] = 020;                /* this is the Option-A board */
-      crs[A] = 0120;               /* this is the SOC board */
+      putcrs16(A, 020);            /* this is the Option-A board */
+      putcrs16(A, 0120);           /* this is the SOC board */
       //gvp->traceflags = ~T_MAP;
     } else if (func == 016) {      /* read switches that are up */
-      crs[A] = sswitch;
+      putcrs16(A, sswitch);
     } else if (func == 017) {      /* read switches pushed down */
-      crs[A] = dswitch;
+      putcrs16(A, dswitch);
     } else {
       printf("Unimplemented INA device '%02o function '%02o\n", device, func);
       fatal(NULL);
@@ -1505,31 +1505,31 @@ int devcp (int class, int func, int device) {
     */
 
     if (func == 02) {            /* set PIC interval */
-      clkpic = *(short *)(crs+A);
+      clkpic = getcrs16s(A);
       if (clkpic == -947)
 	if (cpuid == 11 || cpuid == 20)
 	  clkpic = -625;         /* P2250: 500 ticks/second */
 	else if (cpuid >= 15)    /* newer machines: 250 ticks/second */
 	  clkpic = -1250;
-      TRACE(T_INST, "Clock PIC %d requested, set to %d\n", *(short *)(crs+A), clkpic);
+      TRACE(T_INST, "Clock PIC %d requested, set to %d\n", getcrs16s(A), clkpic);
       SETCLKPOLL;
 
     } else if (func == 07) {
-      TRACE(T_INST, "Clock control register set to '%o\n", crs[A]);
-      if (crs[A] & 020)
+      TRACE(T_INST, "Clock control register set to '%o\n", getcrs16(A));
+      if (getcrs16(A) & 020)
 	clkrate = 102.4;
       else
 	clkrate = 3.2;
       SETCLKPOLL;
 
     } else if (func == 013) {     /* set interrupt vector */
-      clkvec = crs[A];
+      clkvec = getcrs16(A);
       TRACE(T_INST, "Clock interrupt vector address = '%o\n", clkvec);
 
     } else if (func == 017) {     /* write lights */
 
     } else {
-      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
+      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, getcrs16(A));
       fatal(NULL);
     }
     break;
@@ -1844,11 +1844,11 @@ int devdisk (int class, int func, int device) {
       return;
 
     if (func == 01)          /* read device id, clear A first */
-      crs[A] = CID4005 + device;
+      putcrs16(A, CID4005 + device);
     else if (func == 011)    /* read device id, don't clear A */
-      crs[A] |= (CID4005 + device);
+      putcrs16(A, getcrs16(A) | (CID4005 + device));
     else if (func == 017) {  /* read OAR */
-      crs[A] = dc[dx].oar;
+      putcrs16(A, dc[dx].oar);
     } else {
       printf("Unimplemented INA device '%02o function '%02o\n", device, func);
       fatal(NULL);
@@ -1860,10 +1860,10 @@ int devdisk (int class, int func, int device) {
     TRACE(T_INST|T_DIO, " OTA '%02o%02o\n", func, device);
     if (func == 017) {        /* set OAR (order address register) */
       dc[dx].state = S_RUN;
-      dc[dx].oar = crs[A];
+      dc[dx].oar = getcrs16(A);
       devpoll[device] = 1;
     } else {
-      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, crs[A]);
+      printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, getcrs16(A));
       fatal(NULL);
     }
     IOSKIP;
@@ -2010,7 +2010,7 @@ int devdisk (int class, int func, int device) {
 	    TRACE(T_INST|T_DIO,  " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dc[dx].dmanch, dc[dx].dmachan, regs.sym.regdmx[dmareg], dc[dx].dmachan+1, dmaaddr, dmanw);
 	    
 	    if (order == 5) {
-	      if (crs[MODALS] & 020)
+	      if (getcrs16(MODALS) & 020)
 		if ((dmaaddr & 01777) || dmanw > 1024)
 		  iobufp = iobuf;
 		else
@@ -2032,7 +2032,7 @@ int devdisk (int class, int func, int device) {
 		for (i=0; i<dmanw; i++)
 		  put16io(iobuf[i], dmaaddr+i);
 	    } else {
-	      if (crs[MODALS] & 020) {
+	      if (getcrs16(MODALS) & 020) {
 		iobufp = iobuf;
 		for (i=0; i<dmanw; i++)
 		  iobuf[i] = get16io(dmaaddr+i);
@@ -2165,7 +2165,7 @@ int devdisk (int class, int func, int device) {
 	   omitted.  Hence the PX test.  Ignoring stall gives a 25%
 	   increase in I/O's per second on a 2GHz Mac (8MB emulator). */
 
-	if (crs[MODALS] & 010)             /* PX enabled? */
+	if (getcrs16(MODALS) & 010)             /* PX enabled? */
 	  break;                           /* yes, no stall */
 	devpoll[device] = gvp->instpermsec/5;   /* 200 microseconds, sb 210 */
 	return;
@@ -2188,7 +2188,7 @@ int devdisk (int class, int func, int device) {
 
       case 14: /* DINT = generate interrupt through vector address */
 	TRACE(T_INST|T_DIO,  " interrupt through '%o\n", m1);
-	if (gvp->intvec >= 0 || !(crs[MODALS] & 0100000))
+	if (gvp->intvec >= 0 || !(getcrs16(MODALS) & 0100000))
 	  dc[dx].oar -= 2;     /* can't take interrupt right now */
 	else {
 	  gvp->intvec = m1;

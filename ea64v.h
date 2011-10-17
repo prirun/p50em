@@ -52,14 +52,14 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
     TRACE(T_EAV, " new opcode=%#05o, y=%d, br=%d, ixy=%d, xok=%d\n", opcode, (y != 0), br, ixy, xok);
 #endif
 
-    ea_s = crs[PBH+br*2] | (ea_s & RINGMASK16);
-    ea_w = crs[PBL+br*2] + a;
+    ea_s = getcrs16(PBH+br*2) | (ea_s & RINGMASK16);
+    ea_w = getcrs16(PBL+br*2) + a;
 
     if (xok)
       if (ixy == 2 || ixy == 6)
-	ea_w += crs[X];
+	ea_w += getcrs16(X);
       else if (ixy == 1 || ixy == 4)
-	ea_w += crs[Y];
+	ea_w += getcrs16(Y);
 
 #if 0
       /* if this is a PB% address, use RPBR instead if it's in range
@@ -90,11 +90,11 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
 
       if (xok)
 	if (ixy == 7) {
-	  TRACE(T_EAV, " Postindex, old ea_w=%o, X='%o/%d\n", ea_w, crs[X], *(short *)(crs+X));
-	  ea_w += crs[X];
+	  TRACE(T_EAV, " Postindex, old ea_w=%o, X='%o/%d\n", ea_w, getcrs16(X), getcrs16s(X));
+	  ea_w += getcrs16(X);
 	} else if (ixy == 5) {
-	  TRACE(T_EAV, " Postindex, old ea_w=%o, Y='%o/%d\n", ea_w, crs[Y], *(short *)(crs+Y));
-	  ea_w += crs[Y];
+	  TRACE(T_EAV, " Postindex, old ea_w=%o, Y='%o/%d\n", ea_w, getcrs16(Y), getcrs16s(Y));
+	  ea_w += getcrs16(Y);
 	}
     }
     return MAKEVA(ea_s, ea_w);
@@ -105,22 +105,22 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
   if ((inst & 0101000) == 0) {
     ea_w = (inst & 0777);
     if (x) {
-      TRACE(T_EAV, " Postindex, old ea_w=%o, X='%o/%d\n", ea_w, crs[X], *(short *)(crs+X));
-      ea_w += crs[X];
+      TRACE(T_EAV, " Postindex, old ea_w=%o, X='%o/%d\n", ea_w, getcrs16(X), getcrs16s(X));
+      ea_w += getcrs16(X);
       TRACE(T_EAV, " Postindex, new ea_w=%o\n", ea_w);
     }
     if (inst & 0400) {
-      TRACE(T_EAV, " Short LB relative, LB=%o/%o\n", crs[LBH], crs[LBL]);
+      TRACE(T_EAV, " Short LB relative, LB=%o/%o\n", getcrs16(LBH), getcrs16(LBL));
       eap = &gvp->brp[LBBR];
-      ea_s = crs[LBH] | (ea_s & RINGMASK16);
-      ea_w += crs[LBL];
+      ea_s = getcrs16(LBH) | (ea_s & RINGMASK16);
+      ea_w += getcrs16(LBL);
       return MAKEVA(ea_s, ea_w);
     }
     if (ea_w >= gvp->livereglim) {
       eap = &gvp->brp[SBBR];
-      ea_s = crs[SBH] | (ea_s & RINGMASK16);
-      ea_w += crs[SBL];
-      TRACE(T_EAV, " Short SB relative, SB=%o/%o\n", crs[SBH], crs[SBL]);
+      ea_s = getcrs16(SBH) | (ea_s & RINGMASK16);
+      ea_w += getcrs16(SBL);
+      TRACE(T_EAV, " Short SB relative, SB=%o/%o\n", getcrs16(SBH), getcrs16(SBL));
       return MAKEVA(ea_s, ea_w);
     }
     TRACE(T_EAV, " Live register '%o\n", ea_w);
@@ -148,8 +148,8 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
     ea_w = (inst & 0777);                        /* sector 0 */
     TRACE(T_EAV, " Sector 0, new ea_w=%o\n", ea_w);
     if (ea_w < 0100 && x) {                      /* preindex by X */
-      TRACE(T_EAV, " Preindex, ea_w=%o, X='%o/%d\n", ea_w, crs[X], *(short *)(crs+X));
-      ea_w += crs[X];
+      TRACE(T_EAV, " Preindex, ea_w=%o, X='%o/%d\n", ea_w, getcrs16(X), getcrs16s(X));
+      ea_w += getcrs16(X);
       TRACE(T_EAV, " Preindex, new ea_w=%o\n", ea_w);
       x = 0;
     }
@@ -167,8 +167,8 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
   }
 
   if (x) {
-    TRACE(T_EAV, " Postindex, old ea_w=%o, X='%o/%d\n", ea_w, crs[X], *(short *)(crs+X));
-    ea_w += crs[X];
+    TRACE(T_EAV, " Postindex, old ea_w=%o, X='%o/%d\n", ea_w, getcrs16(X), getcrs16s(X));
+    ea_w += getcrs16(X);
     TRACE(T_EAV, " Postindex, new ea_w=%o\n", ea_w);
   }
 
