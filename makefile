@@ -23,6 +23,11 @@ trace:  # tracing + gdb
 	cc -arch ppc -DREV=\"${REV}\" -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
+tracei:  # tracing + gdb (Intel)
+
+	cc -arch i386 -DREV=\"${REV}\" -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/Universal/api;g++ -arch i386 -o em em.o ../dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+
+
 vfy:  # prod + tracing to verify em changes
 
 	cc -arch ppc -DREV=\"\" -O -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation

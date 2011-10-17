@@ -9873,7 +9873,7 @@ d_jlt:  /* 00603 (R-mode) */
 d_anl:  /* 00303 (V-mode) */
   utempl = get32(ea);
   TRACE(T_FLOW, " ANL ='%o\n", utempl);
-  getcrs32(L) &= utempl;
+  putcrs32(L, getcrs32(L) & utempl);
   goto fetch;
 
 d_jne:  /* 00303 (R-mode) */
