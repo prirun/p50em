@@ -395,7 +395,7 @@ static unsigned short cpuid = 15;      /* STPM CPU model, set with -cpuid */
 #define STLB_UNMODIFIED_BIT 2 /* stored in access[2] */
 
 typedef struct {
-  unsigned short *pmep;       /* C pointer to page table flag word */
+  unsigned int pmaddr;        /* Prime phys addr of page table flag word */
   unsigned int ppa;           /* physical page address (PPN << 10) */
   unsigned short procid;      /* process id for segments >= '4000 */
   short seg;                  /* segment number (0-0xFFF), 0xFFFF = invalid */
@@ -1051,7 +1051,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       stlbp->procid = getcrs16(OWNERL);
       stlbp->seg = seg;
       stlbp->ppa = ppa;
-      stlbp->pmep = MEM+pmaddr;  /* NOTE: C pointer to Prime memory */
+      stlbp->pmaddr = pmaddr;
 #ifndef NOTRACE
       TRACE(T_TLB, "stlb[%d] loaded at %o/%o for %o/%o, ppn=%d\n", stlbix, RPH, RPL, seg, ea&0xFFFF, ppa>>10);
       stlbp->load_ic = gvp->instcount;
@@ -1081,7 +1081,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       fault(ACCESSFAULT, 0, ea);
     if (stlbp->access[STLB_UNMODIFIED_BIT] && intacc == WACC) {
       stlbp->access[STLB_UNMODIFIED_BIT] = 0;
-      *(stlbp->pmep) &= ~020000;    /* BS reset unmodified bit in memory */
+      put16mem(stlbp->pmaddr, get16mem(stlbp->pmaddr) & ~020000);    /* reset unmodified bit in memory */
     }
     pa = stlbp->ppa | (ea & 0x3FF);
     TRACE(T_MAP,"        for ea %o/%o, iacc=%d, stlbix=%d, pa=%o	loaded at #%lu\n", ea>>16, ea&0xffff, intacc, stlbix, pa, stlbp->load_ic);
