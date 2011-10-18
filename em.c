@@ -4259,23 +4259,22 @@ static int add32(unsigned int *a1, unsigned int a2, unsigned int a3, ea_t ea) {
   }
 }
 
-static int add16(unsigned short *a1, unsigned short a2, unsigned short a3, ea_t ea) {
+static int add16(unsigned short a1, unsigned short a2, unsigned short a3, ea_t ea) {
 
-  unsigned short uorig;
+  unsigned short retval;
   unsigned int uresult;
   int keybits, oflow;
 
   stopwatch_push(&sw_add16);
-  uorig = *a1;                             /* save original for sign check */
-  uresult = uorig;                         /* expand to higher precision */
+  uresult = a1;                            /* expand to higher precision */
   uresult += a2;                           /* double-precision add */
   uresult += a3;                           /* again, for subtract */
   keybits = (uresult & 0x10000) >> 3;      /* set L-bit if carry occurred */  
   uresult &= 0xFFFF;                       /* truncate result */
-  *a1 = uresult;                           /* store result */
+  retval = uresult;                        /* save result */
   if (uresult == 0)                        /* set EQ? */
     keybits |= 0100; 
-  oflow = (((~uorig ^ a2) & (uorig ^ uresult) & 0x8000) != 0); /* overflow! */
+  oflow = (((~a1 ^ a2) & (a1 ^ uresult) & 0x8000) != 0); /* overflow! */
   if (oflow)
     uresult = ~uresult;
   keybits |= (uresult & 0x8000) >> 8;      /* set LT if result negative */
@@ -4283,6 +4282,7 @@ static int add16(unsigned short *a1, unsigned short a2, unsigned short a3, ea_t 
   if (oflow)
     mathexception('i', FC_INT_OFLOW, ea);
   stopwatch_pop(&sw_add16);
+  return retval;
 }
 
 
@@ -6767,12 +6767,12 @@ d_bdx:  /* 0140734 */
 d_a1a:  /* 0141206 */
   TRACE(T_FLOW, " A1A\n");
 a1a:
-  add16(crs+A, 1, 0, 0);
+  putcrs16(A, add16(getcrs16(A), 1, 0, 0));
   goto fetch;
 
 d_a2a:  /* 0140304 */
   TRACE(T_FLOW, " A2A\n");
-  add16(crs+A, 2, 0, 0);
+  putcrs16(A, add16(getcrs16(A), 2, 0, 0));
   goto fetch;
 
 d_aca:  /* 0141216 */
@@ -6785,12 +6785,12 @@ d_aca:  /* 0141216 */
 
 d_s1a:  /* 0140110 */
   TRACE(T_FLOW, " S1A\n");
-  add16(crs+A, 0xFFFF, 0, 0);
+  putcrs16(A, add16(getcrs16(A), 0xFFFF, 0, 0));
   goto fetch;
 
 d_s2a:  /* 0140310 */
   TRACE(T_FLOW, " S2A\n");
-  add16(crs+A, 0xFFFE, 0, 0);
+  putcrs16(A, add16(getcrs16(A), 0xFFFE, 0, 0));
   goto fetch;
 
 d_cal:  /* 0141050 */
@@ -7961,12 +7961,12 @@ imode:
 
     case 0130:
       TRACE(T_FLOW, " DH1\n");
-      add16(crs+dr*2, 0xFFFF, 0, 0);
+      putgr16(dr, add16(getgr16(dr), 0xFFFF, 0, 0));
       break;
 
     case 0131:
       TRACE(T_FLOW, " DH2\n");
-      add16(crs+dr*2, 0xFFFE, 0, 0);
+      putgr16(dr, add16(getgr16(dr), 0xFFFE, 0, 0));
       break;
 
     case 0124:
@@ -8052,12 +8052,12 @@ imode:
 
     case 0126:
       TRACE(T_FLOW, " IH1\n");
-      add16(crs+dr*2, 1, 0, 0);
+      putgr16(dr, add16(getgr16(dr), 1, 0, 0));
       break;
 
     case 0127:
       TRACE(T_FLOW, " IH2\n");
-      add16(crs+dr*2, 2, 0, 0);
+      putgr16(dr, add16(getgr16(dr), 2, 0, 0));
       break;
 
     case 0070:
@@ -8660,7 +8660,7 @@ imode:
       utempa = (immu32 >> 16);
     else
       utempa = get16(ea);
-    add16(crs+dr*2, utempa, 0, ea);
+    putgr16(dr, add16(getgr16(dr), utempa, 0, ea));
     goto fetch;
 
   case 013:
@@ -8973,7 +8973,7 @@ imode:
       utempa = (immu32 >> 16);
     else
       utempa = get16(ea);
-    add16(crs+dr*2, ~utempa, 1, ea);
+    putgr16(dr, add16(getgr16(dr), ~utempa, 1, ea));
     goto fetch;
 
   case 033:
@@ -9551,7 +9551,7 @@ d_era:  /* 00500 */
 d_add:  /* 00600 (V-mode) */
   m = get16t(ea);
   TRACE(T_FLOW, " ADD ='%o/%d\n", m, *(short *)&m);
-  add16(crs+A, m, 0, ea);
+  putcrs16(A, add16(getcrs16(A), m, 0, ea));
   goto fetch;
 
 d_adddad:  /* 00600 (R-mode) */
@@ -9586,7 +9586,7 @@ d_sub:  /* 00700 (V-mode) */
   m = get16t(ea);
   utempa = getcrs16(A);
   TRACE(T_FLOW, " SUB ='%o/%d\n", m, *(short *)&m);
-  add16(crs+A, ~m, 1, ea);
+  putcrs16(A, add16(getcrs16(A), ~m, 1, ea));
   goto fetch;
 
 d_subdsb:  /* 00700 */
