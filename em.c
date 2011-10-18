@@ -4197,12 +4197,11 @@ static inline unsigned int arr(unsigned short val, unsigned short inst) {
 
 /* math functions */
 
-static inline tcr(unsigned int *un) {
+static inline tcr(unsigned int un) {
 
   unsigned int utempl;
 
-  utempl = - (*(int *)un);
-  *un = utempl;
+  utempl = -(int)un;
   if (utempl != 0) {    /* clear C, L, EQ, set LT from bit 1 */
     putcrs16(KEYS, (getcrs16(KEYS) & ~0120300) | ((utempl & 0x80000000) >> 24));
     if (utempl == 0x80000000) {
@@ -4211,14 +4210,14 @@ static inline tcr(unsigned int *un) {
     }
   } else
     putcrs16(KEYS, (getcrs16(KEYS) & ~0120300) | 020100);  /* set L, EQ */
+  return utempl;
 }
 
-static inline tch (unsigned short *un) {
+static inline tch (unsigned short un) {
 
   unsigned short utemp;
 
-  utemp = - (*(short *)un);
-  *un = utemp;
+  utemp = -(short)un;
   if (utemp != 0) {    /* clear C, L, EQ, set LT from bit 1 */
     putcrs16(KEYS, (getcrs16(KEYS) & ~0120300) | ((utemp & 0x8000) >> 8));
     if (utemp == 0x8000) {
@@ -4227,6 +4226,7 @@ static inline tch (unsigned short *un) {
     }
   } else
     putcrs16(KEYS, (getcrs16(KEYS) & ~0120300) | 020100);  /* set L, EQ */
+  return utemp;
 }
 
 /* NOTE: ea is only used to set faddr should an arithmetic exception occur */
@@ -6943,12 +6943,12 @@ d_xcb:  /* 0140204 */
 
 d_tca:  /* 0140407 */
   TRACE(T_FLOW, " TCA\n");
-  tch(crs+A);
+  putcrs16(A, tch(getcrs16(A)));
   goto fetch;
 
 d_tcl:  /* 0141210 */
   TRACE(T_FLOW, " TCL\n");
-  tcr(crsl+GR2);
+  putcrs32(L, tcr(getcrs32(L)));
   goto fetch;
 
 d_scb:  /* 0140600 */
@@ -8477,12 +8477,12 @@ imode:
 
     case 0046:
       TRACE(T_FLOW, " TC\n");
-      tcr(crsl+dr);
+      putgr32(dr, tcr(getgr32(dr)));
       break;
 
     case 0047:
       TRACE(T_FLOW, " TCH\n");
-      tch(crs+dr*2);
+      putgr16(dr, tch(getgr16(dr)));
       break;
 
     case 0170:
