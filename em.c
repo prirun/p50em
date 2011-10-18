@@ -4231,25 +4231,25 @@ static inline tch (unsigned short un) {
 
 /* NOTE: ea is only used to set faddr should an arithmetic exception occur */
 
-static int add32(unsigned int *a1, unsigned int a2, unsigned int a3, ea_t ea) {
+static int add32(unsigned int a1, unsigned int a2, unsigned int a3, ea_t ea) {
 
-  unsigned int uorig, uresult;
+  unsigned int retval;
+  unsigned int uresult;
   unsigned long long utemp;
   short link, eq, lt;
 
   putcrs16(KEYS, getcrs16(KEYS) & ~0120300);
   link = eq = lt = 0;
-  uorig = *a1;                             /* save original for sign check */
-  utemp = uorig;                           /* expand to higher precision */
+  utemp = a1;                              /* expand to higher precision */
   utemp += a2;                             /* double-precision add */
   utemp += a3;                             /* again, for subtract */
   uresult = utemp;                         /* truncate result to result size */
-  *a1 = uresult;                           /* store result */
+  retval = uresult;
   if (utemp & 0x100000000LL)               /* set L-bit if carry occurred */
     link = 020000;  
   if (uresult == 0)                        /* set EQ? */
     eq = 0100; 
-  if (((~uorig ^ a2) & (uorig ^ uresult) & 0x80000000) == 0) {
+  if (((~a1 ^ a2) & (a1 ^ uresult) & 0x80000000) == 0) {
     if (*(int *)&uresult < 0)
       lt = 0200;
     putcrs16(KEYS, getcrs16(KEYS) | link | eq | lt);
@@ -4259,6 +4259,7 @@ static int add32(unsigned int *a1, unsigned int a2, unsigned int a3, ea_t ea) {
     putcrs16(KEYS, getcrs16(KEYS) | link | eq | lt);
     mathexception('i', FC_INT_OFLOW, 0);
   }
+  return retval;
 }
 
 static int add16(unsigned short a1, unsigned short a2, unsigned short a3, ea_t ea) {
@@ -4291,7 +4292,7 @@ static int add16(unsigned short a1, unsigned short a2, unsigned short a3, ea_t e
 static inline adlr(int dr) {
 
   if (getcrs16(KEYS) & 020000)
-    add32(crsl+dr, 1, 0, 0);
+    putgr32(dr, add32(getgr32(dr), 1, 0, 0));
   else {
     putcrs16(KEYS, getcrs16(KEYS) & ~0120300);    /* clear C, L, LT, EQ */
     SETCC_32(getgr32(dr));
@@ -7976,12 +7977,12 @@ imode:
 
     case 0124:
       TRACE(T_FLOW, " DR1\n");
-      add32(crsl+dr, 0xFFFFFFFF, 0, 0);
+      putgr32(dr, add32(getgr32(dr), 0xFFFFFFFF, 0, 0));
       break;
 
     case 0125:
       TRACE(T_FLOW, " DR2\n");
-      add32(crsl+dr, 0xFFFFFFFE, 0, 0);
+      putgr32(dr, add32(getgr32(dr), 0xFFFFFFFE, 0, 0));
       break;
 
     case 0100:
@@ -8108,12 +8109,12 @@ imode:
 
     case 0122:
       TRACE(T_FLOW, " IR1\n");
-      add32(crsl+dr, 1, 0, 0);
+      putgr32(dr, add32(getgr32(dr), 1, 0, 0));
       break;
 
     case 0123:
       TRACE(T_FLOW, " IR2\n");
-      add32(crsl+dr, 2, 0, 0);
+      putgr32(dr, add32(getgr32(dr), 2, 0, 0));
       break;
 
     case 0064:
@@ -8550,7 +8551,7 @@ imode:
       utempl = immu32;
     else
       utempl = get32(ea);
-    add32(crsl+dr, utempl, 0, ea);
+    putgr32(dr, add32(getgr32(dr), utempl, 0, ea));
     goto fetch;
 
   case 003:
@@ -8816,7 +8817,7 @@ imode:
       utempl = immu32;
     else
       utempl = get32(ea);
-    add32(crsl+dr, ~utempl, 1, ea);
+    putgr32(dr, add32(getgr32(dr), ~utempl, 1, ea));
     goto fetch;
 
   case 023:
@@ -9822,7 +9823,7 @@ d_jeq:  /* 00203 (R-mode) */
 d_sbl:  /* 00703 (V-mode) */
   utempl = get32(ea);
   TRACE(T_FLOW, " SBL ='%o/%d\n", utempl, *(int *)&utempl);
-  add32(crsl+GR2, ~utempl, 1, ea);
+  putgr32(GR2, add32(getgr32(GR2), ~utempl, 1, ea));
   goto fetch;
 
 d_jge:  /* 00703 (R-mode) */
@@ -9869,7 +9870,7 @@ d_jle:  /* 00403 (R-mode) */
 d_adl:  /* 00603 (V-mode) */
   utempl = get32(ea);
   TRACE(T_FLOW, " ADL ='%o/%d\n", utempl, *(int *)&utempl);
-  add32(crsl+GR2, utempl, 0, ea);
+  putgr32(GR2, add32(getgr32(GR2), utempl, 0, ea));
   goto fetch;
 
 d_jlt:  /* 00603 (R-mode) */
