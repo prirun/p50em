@@ -2361,8 +2361,10 @@ special:
     if (class == 2) {
       ea = getcrs16(S);
       putcrs16(S, getcrs16(S) + 1);
-    } else
-      ea = --crs[S];
+    } else {
+      putcrs16(S, getcrs16(S) - 1);
+      ea = getcrs16(S);
+    }
     TRACE(T_EAR, " Class 2/3, new ea=%o, new S=%o\n", ea, getcrs16(S));
     if (x) {
       if (ea >= gvp->livereglim)
@@ -6650,7 +6652,8 @@ d_bfgt:  /* 0141611 */
 
 d_bix:  /* 0141334 */
   TRACE(T_FLOW, " BIX\n");
-  if ((short)(++crs[X]) != 0) 
+  putcrs16(X, getcrs16(X) + 1);
+  if (getcrs16(X) != 0) 
     RPL = iget16(RP);
   else
     INCRP;
@@ -6658,7 +6661,8 @@ d_bix:  /* 0141334 */
 
 d_biy:  /* 0141324 */
   TRACE(T_FLOW, " BIY\n");
-  if ((short)(++crs[Y]) != 0) 
+  putcrs16(Y, getcrs16(Y) + 1);
+  if (getcrs16(Y) != 0) 
     RPL = iget16(RP);
   else
     INCRP;
@@ -6666,7 +6670,8 @@ d_biy:  /* 0141324 */
 
 d_bdy:  /* 0140724 */
   TRACE(T_FLOW, " BDY\n");
-  if ((short)(--crs[Y]) != 0) 
+  putcrs16(Y, getcrs16(Y) - 1);
+  if (getcrs16(Y) != 0) 
     RPL = iget16(RP);
   else
     INCRP;
@@ -6674,7 +6679,8 @@ d_bdy:  /* 0140724 */
 
 d_bdx:  /* 0140734 */
   TRACE(T_FLOW, " BDX\n");
-  if ((short)(--crs[X]) == 0) 
+  putcrs16(X, getcrs16(X) - 1);
+  if (getcrs16(X) == 0) 
     INCRP;
   else {
     m = iget16(RP);
@@ -6854,17 +6860,16 @@ d_caz:  /* 0140214 */
 
 d_irx:  /* 0140114 */
 
-  /* NOTE: using "if (++crs[X] == 0)" doesn't work because of
-     unsigned short type promotion! */
-
   TRACE(T_FLOW, " IRX\n");
-  if ((short)(++crs[X]) == 0)
+  putcrs16(X, getcrs16(X) + 1);
+  if (getcrs16(X) == 0) 
     INCRP;
   goto fetch;
 
 d_drx:  /* 0140210 */
   TRACE(T_FLOW, " DRX\n");
-  if ((short)(--crs[X]) == 0)
+  putcrs16(X, getcrs16(X) - 1);
+  if (getcrs16(X) == 0) 
     INCRP;
   goto fetch;
 
