@@ -610,10 +610,10 @@ static  jmp_buf bootjmp;               /* for longjumps to the fetch loop */
 
 static unsigned short physmem[MEMSIZE]; /* system's physical memory */
 
-#define get16mem(phyaddr) MEM[(phyaddr)]
-#define put16mem(phyaddr, val) MEM[(phyaddr)] = (val)
-#define get32mem(phyaddr) *(unsigned int *)(MEM+phyaddr)
-#define put32mem(phyaddr, val) *(unsigned int *)(MEM+phyaddr) = (val)
+#define get16mem(phyaddr) swap16(MEM[(phyaddr)])
+#define put16mem(phyaddr, val) MEM[(phyaddr)] = swap16((val))
+#define get32mem(phyaddr) swap32(*(unsigned int *)(MEM+phyaddr))
+#define put32mem(phyaddr, val) *(unsigned int *)(MEM+phyaddr) = swap32((val))
 
 #define MAKEVA(seg,word) ((((int)(seg))<<16) | (word))
 
@@ -1282,6 +1282,7 @@ static unsigned int get32m(ea_t ea) {
 
 static inline unsigned int get32(ea_t ea) {
   pa_t pa;
+  unsigned short access;
 
 #ifdef DBG
   if (ea & 0x80000000) {
@@ -4830,10 +4831,12 @@ main (int argc, char **argv) {
       perror("Error opening boot file");
       fatal(NULL);
     }
-    if (read(bootfd, rvec, 18) != 18) {     //BS
+    if (read(bootfd, rvec, 18) != 18) {
       perror("Error reading boot file's rvec header");
       fatal(NULL);
     }
+    for (i=0; i<9; i++)
+      rvec[i] = swap16(rvec[i]);
 
   } else {
 
@@ -4929,7 +4932,7 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
   /* read memory image from SA to EA inclusive */
 
   nw = rvec[1]-rvec[0]+1;
-  if ((nw2=read(bootfd, MEM+rvec[0], nw*2)) == -1) { //BS
+  if ((nw2=read(bootfd, MEM+rvec[0], nw*2)) == -1) {
     perror("Error reading memory image");
     fatal(NULL);
   }

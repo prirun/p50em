@@ -189,15 +189,16 @@ static union {
 static unsigned int grp;      /* global RP for restore after longjmp */
 register union {
   struct {
+#ifdef __BIG_ENDIAN__
     unsigned short rph;
     unsigned short rpl;
+#else
+    unsigned short rpl;
+    unsigned short rph;
+#endif
   } s;
   unsigned int ul;
 } rpreg asm ("r29");
-
-#define RP rpreg.ul
-#define RPH rpreg.s.rph
-#define RPL rpreg.s.rpl
 
 static unsigned int *gcrsl;   /* global crs pointer for restore after longjmp */
 register union {
@@ -211,11 +212,19 @@ register union {
 
 #else
 
-/* the live program counter register is aka microcode scratch register TR7 */
+union {
+  struct {
+#ifdef __BIG_ENDIAN__
+    unsigned short rph;
+    unsigned short rpl;
+#else
+    unsigned short rpl;
+    unsigned short rph;
+#endif
+  } s;
+  unsigned int ul;
+} rpreg;
 
-#define RP regs.sym.tr7
-#define RPH regs.u16[14]
-#define RPL regs.u16[15]
 #define grp RP              /* turns grp assignments into dummies */
 #define gcrsl crsl          /* turns gcrsl assignments into dummies */
 
@@ -231,6 +240,10 @@ static union {
 
 #define crs  cr.u16
 #define crsl cr.u32
+
+#define RP rpreg.ul
+#define RPH rpreg.s.rph
+#define RPL rpreg.s.rpl
 
 /************  16-bit offset macros:  *************/
 

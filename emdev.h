@@ -1789,8 +1789,10 @@ int devdisk (int class, int func, int device) {
     dc[dx].state = S_HALT;
     dc[dx].status = 0100000;
     dc[dx].usel = -1;
+#ifdef HOBBY
     if (geomcksum != geomhash((char *)geom, sizeof(geom)))
       RP=MAKEVA(01000,0);
+#endif
     for (u=0; u<MAXDRIVES; u++) {
       dc[dx].unit[u].rtfd = -1;
       dc[dx].unit[u].heads = -1;
