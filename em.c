@@ -1635,6 +1635,10 @@ void sensorcheck () {
   sensorabort = 1;
 }
 
+void sigquit() {
+  fatal("Quit");
+}
+
 /* machine check handler, called with check vector locations
    The first arg is used when PX is disabled, the 2nd when PX is enabled. */
 
@@ -4515,6 +4519,8 @@ main (int argc, char **argv) {
   /* on SIGTERM, shutdown the emulator with a Prime sensor check */
 
   signal (SIGTERM, sensorcheck);
+
+  signal (SIGQUIT, sigquit);
 
 #ifndef NOTRACE
 
