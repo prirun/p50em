@@ -607,11 +607,11 @@ pncinitdma(t_dma *iob, char *iotype) {
     fatal("PNC doesn't support chaining, DMC, or DMA reg > 037");
   (*iob).dmachan = getcrs16(A);
   (*iob).dmareg = (*iob).dmachan << 1;
-  (*iob).dmanw = -((regs.sym.regdmx[(*iob).dmareg]>>4) | 0xF000);
+  (*iob).dmanw = -((getar16(REGDMX16 + ((*iob).dmareg))>>4) | 0xF000);
   if ((*iob).dmanw > MAXPNCWORDS)
     (*iob).dmanw = MAXPNCWORDS;      /* clamp it */
-  (*iob).dmaaddr = ((regs.sym.regdmx[(*iob).dmareg] & 3)<<16) | regs.sym.regdmx[(*iob).dmareg+1];
-  TRACE(T_RIO, " pncinitdma: %s dmachan=%o, dmareg=%o, [dmaregs]=%o|%o, dmaaddr=%o/%o, dmanw=%d\n", iotype, (*iob).dmachan, (*iob).dmareg, regs.sym.regdmx[(*iob).dmareg], regs.sym.regdmx[(*iob).dmareg+1], (*iob).dmaaddr>>16, (*iob).dmaaddr&0xFFFF, (*iob).dmanw);
+  (*iob).dmaaddr = ((getar16(REGDMX16 + ((*iob).dmareg)) & 3)<<16) | getar16(REGDMX16 + ((*iob).dmareg+1));
+  TRACE(T_RIO, " pncinitdma: %s dmachan=%o, dmareg=%o, [dmaregs]=%o|%o, dmaaddr=%o/%o, dmanw=%d\n", iotype, (*iob).dmachan, (*iob).dmareg, swap16(regs.sym.regdmx[(*iob).dmareg]), swap16(regs.sym.regdmx[(*iob).dmareg+1]), (*iob).dmaaddr>>16, (*iob).dmaaddr&0xFFFF, (*iob).dmanw);
   (*iob).memp = MEM + mapio((*iob).dmaaddr);
   (*iob).state = PNCBSRDY;
 }
@@ -760,8 +760,8 @@ pncrecv1(int nodeid) {
   
   *(unsigned short *)(ni[nodeid].rcvpkt+2) = (myid<<8) | nodeid;
   memcpy(rcv.memp, ni[nodeid].rcvpkt+2, nw*2);
-  regs.sym.regdmx[rcv.dmareg] += nw<<4;  /* bump recv count */
-  regs.sym.regdmx[rcv.dmareg+1] += nw;   /* and address */
+  putar16(REGDMX16 + rcv.dmareg, getar16(REGDMX16 + rcv.dmareg) + nw<<4);  /* bump recv count */
+  putar16(REGDMX16 + rcv.dmareg+1, getar16(REGDMX16 + rcv.dmareg+1) + nw); /* and address */
   pncstat |= PNCNSRCVINT;                /* set recv interrupt bit */
   rcv.state = PNCBSIDLE;                 /* no longer ready to recv */
   ni[nodeid].rcvlen = 0;                 /* reset for next read */
@@ -1154,8 +1154,8 @@ int devpnc (int class, int func, int device) {
 
       /* bump the DMA registers to show the transfer */
 
-      regs.sym.regdmx[xmit.dmareg] += xmit.dmanw<<4;   /* bump xmit count */
-      regs.sym.regdmx[xmit.dmareg+1] += xmit.dmanw;    /* and address */
+      putar16(REGDMX16+xmit.dmareg, getar16(REGDMX16+xmit.dmareg) + xmit.dmanw<<4);   /* bump xmit count */
+      putar16(REGDMX16+xmit.dmareg+1, getar16(REGDMX16+xmit.dmareg+1) + xmit.dmanw);  /* and address */
 
       /* the Primenet startup code sends a single ring packet from me
 	 to me, to verify that my node id is unique.  This packet must
@@ -1172,8 +1172,8 @@ int devpnc (int class, int func, int device) {
 	if (rcv.state == PNCBSRDY && rcv.dmanw >= xmit.dmanw) {
 	  TRACE(T_INST|T_RIO, " xmit: loopback, rcv.memp=%o/%o\n", ((int)(rcv.memp))>>16, ((int)(rcv.memp))&0xFFFF);
 	  memcpy(rcv.memp, xmit.memp, xmit.dmanw*2);
-	  regs.sym.regdmx[rcv.dmareg] += xmit.dmanw<<4;  /* bump recv count */
-	  regs.sym.regdmx[rcv.dmareg+1] += xmit.dmanw;   /* and address */
+	  putar16(REGDMX16 + rcv.dmareg, getar16(REGDMX16 + rcv.dmareg) + xmit.dmanw<<4);  /* bump recv count */
+	  putar16(REGDMX16 + rcv.dmareg+1, getar16(REGDMX16 + rcv.dmareg+1) + xmit.dmanw); /* and address */
 	  pncstat |= PNCNSRCVINT;             /* set recv interrupt */
 	  rcv.state = PNCBSIDLE;              /* no longer ready to recv */
 	} else {

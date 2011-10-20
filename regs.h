@@ -6,6 +6,22 @@
 
 #define REGSETS 10
 
+/* these are 16-bit absolute offsets into the register file */
+
+#define PSWKEYS16 031*2
+#define PLA16     032*2
+#define PCBA16    032*2+1
+#define PLB16     033*2
+#define PCBB16    033*2+1
+#define REGDMX16  040*2
+
+/* these are 32-bit absolute offsets into the register file */
+
+#define DSWPB32   036
+#define DSWSTAT32 035
+#define DSWRMA32  034
+#define PSWPB32   030
+
 /* these are 16-bit offsets into crs (current register set) */
 
 #define A 4
@@ -309,6 +325,16 @@ static inline double putcrs64d(int offset, double val) {  \
   *(unsigned long long *)(crs+offset) = swap64(*(uint64_t *)&val);	  \
 }
 
+/* get 16-bit unsigned at 16-bit absolute register file address */
+static inline uint16_t getar16(int offset) {  \
+  return swap16(regs.u16[offset]);  \
+}
+
+/* put 16-bit unsigned at 16-bit absolute register file address */
+static inline uint16_t putar16(int offset, uint16_t val) {  \
+  regs.u16[(offset)] = swap16(val); \
+}
+
 /******* 32-bit offset macros: ***********/
 
 /* fetch 16-bit unsigned at 32-bit offset (left halfword is returned) */
@@ -366,6 +392,16 @@ static inline int64_t putgr64s(int offset, int64_t val) {  \
 /* fetch 64-bit unsigned at 32-bit offset */
 //#define getgr64(offset) *(unsigned long long *)(crsl+(offset))
 #define getgr64(offset) getgr64s(offset)
+
+/* get 32-bit unsigned at 32-bit absolute register file address */
+static inline uint32_t getar32(int offset) {  \
+  return swap32(regs.u32[offset]);  \
+}
+
+/* put 32-bit unsigned at 32-bit absolute register file address */
+static inline uint32_t putar32(int offset, uint32_t val) {  \
+  regs.u32[(offset)] = swap32(val); \
+}
 
 /* fetch 32-bit unsigned at FP register 0 or 1
    For FP 0, offset=0; for FP 1, offset=2

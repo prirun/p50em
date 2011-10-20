@@ -38,7 +38,7 @@
    -------------
    Usage:  to load SAM.SAVE from Unix FS and run diagnostics from pdev 2466
 
-$ time ./em  -cpuid 5 -boot SAM.SAVE 2>err
+$ time ./em  -cpuid 5 -boot SAM.SAVE 14114 2>err
 [SAM Rev. 16.2, DTS Release: 0004.A, Copyright (c) 1990, Prime Computer, Inc.]
 
 Enter physical device = 2466
@@ -614,6 +614,8 @@ static unsigned short physmem[MEMSIZE]; /* system's physical memory */
 #define put16mem(phyaddr, val) MEM[(phyaddr)] = swap16((val))
 #define get32mem(phyaddr) swap32(*(unsigned int *)(MEM+phyaddr))
 #define put32mem(phyaddr, val) *(unsigned int *)(MEM+phyaddr) = swap32((val))
+#define get64mem(phyaddr) swap64(*(unsigned long long *)(MEM+phyaddr))
+#define put64mem(phyaddr, val) *(unsigned long long *)(MEM+phyaddr) = swap64((val))
 
 #define MAKEVA(seg,word) ((((int)(seg))<<16) | (word))
 
@@ -1192,14 +1194,14 @@ static inline unsigned short get16(ea_t ea) {
 #endif
   if ((ea & 0x0FFFFC00) == (eap->vpn & 0x0FFFFFFF)) {
     TRACE(T_MAP, "    get16: cached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
-    return eap->memp[ea & 0x3FF];
+    return swap16(eap->memp[ea & 0x3FF]);
   } else {
 #ifndef NOTRACE
     gvp->supermisses++;
 #endif
     eap->memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
     eap->vpn = ea & 0x0FFFFC00;
-    return eap->memp[ea & 0x3FF];
+    return swap16(eap->memp[ea & 0x3FF]);
   }
 #else
   return get16mem(mapva(ea, RP, RACC, &access));
@@ -1217,7 +1219,7 @@ static unsigned short get16trap(ea_t ea) {
   if (ea < 020)                 /* CRS */
     return getcrs16(memtocrs[ea]);
   if (ea < 040)                 /* DMX */
-    return regs.sym.regdmx[((ea & 036) << 1) | (ea & 1)];
+    return getar16(REGDMX16 + (((ea & 036) << 1) | (ea & 1)));
   printf("get16trap: live register address %o too big!\n", ea);
   fatal(NULL);
 }
@@ -1258,7 +1260,6 @@ static unsigned short get16r(ea_t ea, ea_t rpring) {
 static unsigned int get32m(ea_t ea) {
   pa_t pa;
   unsigned short access;
-  unsigned short m[2];
 
 #ifdef DBG
   if (ea & 0x80000000) {
@@ -1273,7 +1274,7 @@ static unsigned int get32m(ea_t ea) {
   if ((ea & 01777) <= 01776) {
     eap->memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
     eap->vpn = ea & 0x0FFFFC00;
-    return *(unsigned int *)&eap->memp[ea & 0x3FF];
+    return swap32(*(unsigned int *)&eap->memp[ea & 0x3FF]);
   }
   return (get16(ea) << 16) | get16(INCVA(ea,1));
 }
@@ -1298,15 +1299,10 @@ static inline unsigned int get32(ea_t ea) {
   if ((ea & 01777) <= 01776)
     if ((ea & 0x0FFFFC00) == (eap->vpn & 0x0FFFFFFF)) {
       TRACE(T_MAP, "    get32: cached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
-      return *(unsigned int *)&eap->memp[ea & 0x3FF];
+      return swap32(*(unsigned int *)&eap->memp[ea & 0x3FF]);
     }
-  return get32m(ea);
-#else
-  pa = mapva(ea, RP, RACC, &access);
-  if ((ea & 01777) <= 01776)
-    return get32mem(pa);
-  return (MEM[pa] << 16) | get16(INCVA(ea,1));
 #endif
+  return get32m(ea);
 }
 
 static unsigned int get32r(ea_t ea, ea_t rpring) {
@@ -1328,13 +1324,13 @@ static unsigned int get32r(ea_t ea, ea_t rpring) {
   pa = mapva(ea, rpring, RACC, &access);
   if ((pa & 01777) <= 01776)
     return get32mem(pa);
-  return (MEM[pa] << 16) | get16r(INCVA(ea,1), rpring);
+  return (swap16(MEM[pa]) << 16) | get16r(INCVA(ea,1), rpring);
 }
 
 static long long get64r(ea_t ea, ea_t rpring) {
-  pa_t pa;
+  pa_t pa, pa2;
   unsigned short access;
-  unsigned short m[4];
+  unsigned long long m;
 
   /* check for live register access */
 
@@ -1346,44 +1342,30 @@ static long long get64r(ea_t ea, ea_t rpring) {
 #endif
 
   pa = mapva(ea, rpring, RACC, &access);
-#if FAST
-  if ((ea & 01777) <= 01774) {          /* no page wrap */
-    *(int *)(m+0) = *(int *)(MEM+pa);
-    *(int *)(m+2) = *(int *)(MEM+pa+2);
-  } else                                /* wraps page (maybe seg too) */
-    switch (ea & 3) {
-    case 1:
-      m[0] = MEM[pa];
-      *(int *)(m+1) = *(int *)(MEM+pa+1);
-      pa = mapva(INCVA(ea,3), rpring, RACC, &access);
-      m[3] = MEM[pa];
-      break;
-    case 2:
-      *(int *)(m+0) = *(int *)(MEM+pa);
-      pa = mapva(INCVA(ea,2), rpring, RACC, &access);
-      *(int *)(m+2) = *(int *)(MEM+pa);
-      break;
-    case 3:
-      m[0] = MEM[pa];
-      pa = mapva(INCVA(ea,1), rpring, RACC, &access);
-      *(int *)(m+1) = *(int *)(MEM+pa);
-      m[3] = MEM[pa+2];
-      break;
-    default:
-      fatal("Page cross error in get64r");
-    }
-#else
-  if ((pa & 01777) <= 01774) {          /* no page wrap */
-    *(int *)(m+0) = *(int *)(MEM+pa);
-    *(int *)(m+2) = *(int *)(MEM+pa+2);
-  } else {
-    m[0] = MEM[pa];
-    m[1] = get16r(INCVA(ea,1), rpring);
-    m[2] = get16r(INCVA(ea,2), rpring);
-    m[3] = get16r(INCVA(ea,3), rpring);
+  if ((ea & 01777) <= 01774)          /* no page wrap */
+    return get64mem(pa);
+  switch (ea & 3) {                  /* wraps page (maybe seg too) */
+  case 1:
+    pa2 = mapva(INCVA(ea,3), rpring, RACC, &access);
+    m = (((long long) get16mem(pa)) << 48) +
+      (((long long) get32mem(pa+1)) << 16) +
+      get16mem(pa2);
+    break;
+  case 2:
+    pa2 = mapva(INCVA(ea,2), rpring, RACC, &access);
+    m = (((long long) get32mem(pa)) << 32) +
+      ((long long) get32mem(pa2+2));
+    break;
+  case 3:
+    pa2 = mapva(INCVA(ea,1), rpring, RACC, &access);
+    m = (((long long) get16mem(pa)) << 48) +
+      (((long long) get32mem(pa2+1))<< 16) +
+      get16mem(pa2);
+    break;
+  default:
+    fatal("Page cross error in get64r");
   }
-#endif
-  return *(long long *)m;
+  return m;
 }
 
 /* Instruction version of get16 (can be replaced by get16 too...)
@@ -1414,7 +1396,7 @@ unsigned short iget16t(ea_t ea) {
   if (*(int *)&ea >= 0) {
     gvp->brp[RPBR].memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
     gvp->brp[RPBR].vpn = ea & 0x0FFFFC00;
-    return gvp->brp[RPBR].memp[ea & 0x3FF];
+    return swap16(gvp->brp[RPBR].memp[ea & 0x3FF]);
   }
   return get16trap(ea);
 }
@@ -1423,7 +1405,7 @@ static inline unsigned short iget16(ea_t ea) {
   unsigned short access;
 
   if ((ea & 0x8FFFFC00) == (gvp->brp[RPBR].vpn & 0x0FFFFFFF))
-    return gvp->brp[RPBR].memp[ea & 0x3FF];
+    return swap16(gvp->brp[RPBR].memp[ea & 0x3FF]);
   else
     return iget16t(ea);
 }
@@ -1454,14 +1436,14 @@ static inline put16(unsigned short value, ea_t ea) {
 
   if ((ea & 0x0FFFFC00) == (eap->vpn & 0x0FFFFFFF) && (eap->vpn & 0x10000000)) {
     TRACE(T_MAP, "    put16: cached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
-    eap->memp[ea & 0x3FF] = value;
+    eap->memp[ea & 0x3FF] = swap16(value);
   } else {
 #ifndef NOTRACE
     gvp->supermisses++;
 #endif
     eap->memp = MEM + (mapva(ea, RP, WACC, &access) & 0xFFFFFC00);
     eap->vpn = (ea & 0x0FFFFC00) | (access << 28);
-    eap->memp[ea & 0x3FF] = value;
+    eap->memp[ea & 0x3FF] = swap16(value);
   }
 #else
   put16mem(mapva(ea, RP, WACC, &access), value);
@@ -1500,7 +1482,7 @@ static put16trap(unsigned short value, ea_t ea) {
     if (ea <= 017)                      /* CRS */
       putcrs16(memtocrs[ea], value);
     else if (ea <= 037)                 /* DMX */
-      regs.sym.regdmx[((ea & 036) << 1) | (ea & 1)] = value;
+      putar16(REGDMX16+(((ea & 036) << 1) | (ea & 1)), value);
     else {
       printf(" Live register store address %o too big!\n", ea);
       fatal(NULL);
@@ -1531,36 +1513,25 @@ static put32(unsigned int value, ea_t ea) {
   }
 #endif
 
-#ifdef FAST
 #ifndef NOTRACE
   gvp->supercalls++;
 #endif
   if ((ea & 01777) <= 01776) {
     if ((ea & 0x0FFFFC00) == (eap->vpn & 0x0FFFFFFF) && (eap->vpn & 0x10000000)) {
       TRACE(T_MAP, "    put32: cached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
-      *(unsigned int *)&eap->memp[ea & 0x3FF] = value;
+      *(unsigned int *)&eap->memp[ea & 0x3FF] = swap32(value);
     } else {
 #ifndef NOTRACE
       gvp->supermisses++;
 #endif
       eap->memp = MEM + (mapva(ea, RP, WACC, &access) & 0xFFFFFC00);
       eap->vpn = (ea & 0x0FFFFC00) | (access << 28);
-      *(unsigned int *)&eap->memp[ea & 0x3FF] = value;
+      *(unsigned int *)&eap->memp[ea & 0x3FF] = swap32(value);
     }
   } else {
     put16(value >> 16, ea);
     put16(value & 0xFFFF, INCVA(ea,1));
   }
-#else
-  pa = mapva(ea, RP, WACC, &access);
-  if ((pa & 01777) <= 01776)
-    put32mem(pa, value);
-  else {
-    m = (void *)&value;
-    MEM[pa] = m[0];
-    put16(m[1], INCVA(ea,1));
-  }
-#endif
 }
 
 static put32r(unsigned int value, ea_t ea, ea_t rpring) {
@@ -1584,9 +1555,8 @@ static put32r(unsigned int value, ea_t ea, ea_t rpring) {
   if ((pa & 01777) <= 01776)
     put32mem(pa, value);
   else {
-    m = (void *)&value;
-    MEM[pa] = m[0];
-    put16r(m[1], INCVA(ea,1), rpring);
+    put16mem(pa, value>>16);
+    put16r(value & 0xFFFF, INCVA(ea,1), rpring);
   }
 }
 
@@ -1606,13 +1576,12 @@ static put64r(long long value, ea_t ea, ea_t rpring) {
 
   pa = mapva(ea, rpring, WACC, &access);
   if ((pa & 01777) <= 01774)
-    *(long long *)(MEM+pa) = value;
+    put64mem(pa, value);
   else {
-    m = (void *)&value;
-    MEM[pa] = m[0];
-    put16r(m[1], INCVA(ea,1), rpring);
-    put16r(m[2], INCVA(ea,2), rpring);
-    put16r(m[3], INCVA(ea,3), rpring);
+    put16mem(pa, value >> 48);
+    put16r((value >> 32) & 0xFFFF, INCVA(ea,1), rpring);
+    put16r((value >> 16) & 0xFFFF, INCVA(ea,1), rpring);
+    put16r(value & 0xFFFF, INCVA(ea,1), rpring);
   }
 }
 
@@ -1647,9 +1616,9 @@ void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int dswsta
 
   /* set check registers in the register file */
 
-  regs.sym.dswpb = RP;
-  regs.sym.dswstat = dswstat;
-  regs.sym.dswrma = dswrma;
+  putar32(DSWPB32, RP);
+  putar32(DSWSTAT32, dswstat);
+  putar32(DSWRMA32, dswrma);
 
   /* if process exchange is enabled, follow the standard check protocol;
      if PX not enabled, simulate JST p300vec,* to invoke the check.
@@ -1931,8 +1900,8 @@ static void fatal(char *msg) {
     while (next != first) {
       this = next-6;
       csea = MAKEVA(getcrs16(OWNERH)+gvp->csoffset, this);
-      *(unsigned int *)(cs+0) = get32r0(csea+0);
-      *(long long *)(cs+2) = get64r0(csea+2);
+      for (i=0; i<6; i++)
+	cs[i] = get16r0(csea+i);
       printf("Fault: RP=%o/%o, keys=%06o, fcode=%o, faddr=%o/%o\n", cs[0], cs[1], cs[2], cs[3], cs[4], cs[5]);
       next = this;
     }
@@ -2036,8 +2005,8 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
 
   /* save RP, keys in regfile, fcode and faddr in crs */
 
-  regs.sym.pswpb = faultrp;
-  regs.sym.pswkeys = getcrs16(KEYS);
+  putar32(PSWPB32, faultrp);
+  regs.sym.pswkeys = crs[KEYS];   /* Prime->Prime: no swap! */
   putcrs16(FCODE, fcode);
   putcrs32(FADDR, faddr);
   
@@ -2528,7 +2497,7 @@ static dumpregs() {
   for (rs=0; rs<REGSETS; rs++) {
     TRACEA("Register set %d:\n", rs);
     for (i=0; i<32; i++) {
-      val = regs.rs[rs][i];
+      val = swap32(regs.rs[rs][i]);
       v1 = val >> 16;
       v2 = val & 0xFFFF;
       TRACEA("'%02o: %06o %06o  %04x %04x\n", i, v1, v2, v1, v2);
@@ -3325,8 +3294,8 @@ static ors(unsigned short pcbw) {
   ownedx = freex = savedx = -1;
   for (rx = regsets[cpuid]-1; rx >= 0; rx--) {   /* search LRU first */
     rs = regq[rx];
-    TRACE(T_PX, "ors: check rs %d: owner=%o/%o, saved=%d\n", rs, regs.sym.userregs[rs][21]>>16, regs.sym.userregs[rs][21] & 0xFFFF, regs.sym.userregs[rs][20] & 1);
-    ownerl = regs.sym.userregs[rs][21] & 0xFFFF;          /* OWNERH/OWNERL */
+    TRACE(T_PX, "ors: check rs %d: owner=%o/%o, saved=%d\n", rs, swap32(regs.sym.userregs[rs][21])>>16, swap32(regs.sym.userregs[rs][21]) & 0xFFFF, swap32(regs.sym.userregs[rs][20]) & 1);
+    ownerl = swap32(regs.sym.userregs[rs][21]) & 0xFFFF;      /* OWNERH/OWNERL */
 
     /* NOTE: could stick breaks after a rs is found, except that for
        debug, I wanted to make sure a process never owns 2 register sets */
@@ -3337,7 +3306,7 @@ static ors(unsigned short pcbw) {
       ownedx = rx;
     } else if (ownerl == 0)
       freex = rx;
-    else if (savedx < 0 && (regs.sym.userregs[rs][20] & 1)) /* KEYS/MODALS */
+    else if (savedx < 0 && (swap32(regs.sym.userregs[rs][20]) & 1)) /* KEYS/MODALS */
       savedx = rx;
   }
   if (ownedx >= 0) {
@@ -3367,7 +3336,7 @@ static ors(unsigned short pcbw) {
   modals = getcrs16(MODALS) ^ 040;
   rs = (modals & 0340) >> 5;
 #endif
-  crsl = regs.sym.userregs[rs];
+  crsl = regs.sym.userregs[rs];  /* pointer: no swap */
   putcrs16(MODALS, modals);
   TRACE(T_PX, "ors: rs = %d, reg set in modals = %d, modals = %o\n", rs, (getcrs16(MODALS) & 0340)>>5, getcrs16(MODALS));
 
@@ -3399,22 +3368,22 @@ static dispatcher() {
 
   putcrs16(MODALS, getcrs16(MODALS) | 0100000);     /* ISG says dispatcher enables int. */
 
-  if (regs.sym.pcba != 0) {
-    pcbp = MAKEVA(getcrs16(OWNERH), regs.sym.pcba);
-    TRACE(T_PX, "disp: dispatching PPA, pcba=%o, pla=%o\n", regs.sym.pcba, regs.sym.pla);
+  if (regs.sym.pcba != 0) {         /* zero: no byte swap */
+    pcbp = MAKEVA(getcrs16(OWNERH), getar16(PCBA16));
+    TRACE(T_PX, "disp: dispatching PPA, pcba=%o, pla=%o\n", getar16(PCBA16), getar16(PLA16));
 
-  } else if (regs.sym.pcbb != 0) {
-    pcbp = MAKEVA(getcrs16(OWNERH), regs.sym.pcbb);
-    regs.sym.pcba = regs.sym.pcbb;
-    regs.sym.pla = regs.sym.plb;
-    regs.sym.pcbb = 0;
-    TRACE(T_PX, "disp: dispatching PPB, pcba=%o, pla=%o\n", regs.sym.pcba, regs.sym.pla);
+  } else if (regs.sym.pcbb != 0) {  /* zero: no byte swap */
+    pcbp = MAKEVA(getcrs16(OWNERH), getar16(PCBB16));
+    regs.sym.pcba = regs.sym.pcbb;  /* Prime->Prime: no byte swap */
+    regs.sym.pla = regs.sym.plb;    /* Prime->Prime: no byte swap */
+    regs.sym.pcbb = 0;              /* zero: no byte swap */
+    TRACE(T_PX, "disp: dispatching PPB, pcba=%o, pla=%o\n", getar16(PCBA16), getar16(PLA16));
 
   } else {
     TRACE(T_PX, "disp: scanning RL\n");
-    if (regs.sym.pla != 0)
-      rlp = MAKEVA(getcrs16(OWNERH), regs.sym.pla);
-    else if (regs.sym.plb != 0)
+    if (regs.sym.pla != 0)          /* zero: no byte swap */
+      rlp = MAKEVA(getcrs16(OWNERH), getar16(PLA16));
+    else if (regs.sym.plb != 0)     /* zero: no byte swap */
       fatal("disp: pla is invalid, plb is valid?");
     else
       fatal("dispatch: both pla and plb are zero; can't locate ready list");
@@ -3427,8 +3396,8 @@ static dispatcher() {
     if (rlbol == 1)
       goto idle;
     pcbp = MAKEVA(getcrs16(OWNERH), rlbol);
-    regs.sym.pcba = rlbol;
-    regs.sym.pla = rlp & 0xFFFF;
+    putar16(PCBA16, rlbol);
+    putar16(PLA16, rlp & 0xFFFF);
   }
   pcbw = pcbp & 0xFFFF;
   TRACE(T_PX, "disp: process %o/%o selected\n", pcbp>>16, pcbw);
@@ -3437,7 +3406,7 @@ static dispatcher() {
   /* debug tests to verify ready list structure
      NOTE: this test causes some DIAGS to fail, so has been disabled */
 
-  rlp = MAKEVA(getcrs16(OWNERH), regs.sym.pla);
+  rlp = MAKEVA(getcrs16(OWNERH), getar16(PLA16));
   rlbol = get16r0(rlp);
   if (rlbol != pcbw) {
     printf("disp: rl bol=%o, != process dispatched=%o\n", rlbol, pcbw);
@@ -3448,8 +3417,8 @@ static dispatcher() {
   /* NOTE: if a running process has its priority changed (in the pcb), this
      test fails, so it has been disabled  */
 
-  if (get16r0(pcbp+PCBLEV) != regs.sym.pla) {
-    printf("disp: dispatched process level=%o, != pla=%o\n", get16r0(pcbp+PCBLEV), regs.sym.pla);
+  if (get16r0(pcbp+PCBLEV) != getar16(PLA16)) {
+    printf("disp: dispatched process level=%o, != pla=%o\n", get16r0(pcbp+PCBLEV), getar16(PLA16));
     fatal(NULL);
   }
 #endif
@@ -3545,7 +3514,7 @@ static dispatcher() {
     RP |= 0x80000000;
   putcrs16(PBL, 0);
   putcrs16(KEYS, getcrs16(KEYS) & ~3);      /* erase "in dispatcher" and "save done" */
-  TRACE(T_PX, "disp: returning from dispatcher, running process %o/%o at %o/%o, modals=%o, ppa=%o, pla=%o, ppb=%o, plb=%o\n", getcrs16(OWNERH), getcrs16(OWNERL), RPH, RPL, getcrs16(MODALS), regs.sym.pcba, regs.sym.pla, regs.sym.pcbb, regs.sym.plb);
+  TRACE(T_PX, "disp: returning from dispatcher, running process %o/%o at %o/%o, modals=%o, ppa=%o, pla=%o, ppb=%o, plb=%o\n", getcrs16(OWNERH), getcrs16(OWNERL), RPH, RPL, getcrs16(MODALS), getar16(PCBA16), getar16(PLA16), getar16(PCBB16), getar16(PLB16));
 
   /* if this process' abort flags are set, clear them and take process fault */
 
@@ -3583,12 +3552,12 @@ Fatal error: instruction #86286965 at 6/15274 UNLOAD+'120: 315 1400
 owner=71600 DUMPCB, keys=14000, modals=37
 unready: pcba mismatch
   */
-  if (regs.sym.pcba != getcrs16(OWNERL))
+  if (getar16(PCBA16) != getcrs16(OWNERL))
     fatal("unready: pcba mismatch");
 #endif
 
   pcbp = getcrs32ea(OWNER);
-  rlp = MAKEVA(getcrs16(OWNERH), regs.sym.pla);
+  rlp = MAKEVA(getcrs16(OWNERH), getar16(PLA16));
   rl = get32r0(rlp);
   bol = rl >> 16;
   eol = rl & 0xFFFF;
@@ -3600,7 +3569,7 @@ owner=71600 DUMPCB, keys=14000, modals=77
 unready: I'm not first on the ready list
   */
   if (bol != (pcbp & 0xFFFF)) {
-    printf("rlp=%o/%o, bol=%o, eol=%o, pcbp=%o/%o, pla=%o, pcba=%o\n", rlp>>16, rlp&0xFFFF, bol, eol, pcbp>>16, pcbp&0xFFFF, regs.sym.pla, regs.sym.pcba);
+    printf("rlp=%o/%o, bol=%o, eol=%o, pcbp=%o/%o, pla=%o, pcba=%o\n", rlp>>16, rlp&0xFFFF, bol, eol, pcbp>>16, pcbp&0xFFFF, getar16(PLA16), getar16(PCBA16));
     fatal("unready: I'm not first on the ready list");
   }
 #endif
@@ -3617,7 +3586,7 @@ unready: I'm not first on the ready list
   put32r0(waitlist, pcbp+2);  /* update my pcb wait address */
   putcrs32(PB, RP & 0x7FFFFFFF);
   pxregsave(1);
-  regs.sym.pcba = 0;
+  regs.sym.pcba = 0;          /* zero: no byte swap */
 }
 
 
@@ -3636,7 +3605,7 @@ static unsigned short ready (ea_t pcbp, unsigned short begend) {
     fatal("Tried to put myself on the ready list!");
 #if 0
   /* NOTE: restore drive b, boot 14314, halts here after login_server */
-  if (regs.sym.pcba != getcrs16(OWNERL))
+  if (getar16(PCBA16) != getcrs16(OWNERL))
     fatal("I'm running, but not regs.sym.pcba!");
 #endif
 
@@ -3665,15 +3634,15 @@ static unsigned short ready (ea_t pcbp, unsigned short begend) {
      so that the dispatcher is entered.  If not, check for new plb/pcbb */
 
   resched = 0;
-  if (level < regs.sym.pla || (level == regs.sym.pla && begend)) {
-    regs.sym.plb = regs.sym.pla;
-    regs.sym.pcbb = regs.sym.pcba;
-    regs.sym.pla = level;
-    regs.sym.pcba = pcbw;
+  if (level < getar16(PLA16) || (level == getar16(PLA16) && begend)) {
+    regs.sym.plb = regs.sym.pla;          /* Prime->Prime: no byte swap */ 
+    regs.sym.pcbb = regs.sym.pcba;        /* Prime->Prime: no byte swap */ 
+    putar16(PLA16, level);
+    putar16(PCBA16, pcbw);
     resched = 1;
-  } else if (level < regs.sym.plb || (level == regs.sym.plb && begend)) {
-    regs.sym.plb = level;
-    regs.sym.pcbb = pcbw;
+  } else if (level < getar16(PLB16) || (level == getar16(PLB16) && begend)) {
+    putar16(PLB16, level);
+    putar16(PCBB16, pcbw);
   }
   return resched;
 }
@@ -3708,7 +3677,7 @@ static pwait() {
     fatal("WAIT: count == 1 but bol != 0");
   if (count > 1 && bol == 0)
     fatal("WAIT: count > 1 but bol == 0");
-  if (regs.sym.pcba == 0)
+  if (regs.sym.pcba == 0)              /* zero: no byte swap */
     fatal("WAIT: pcba is zero");
 #if 0
   /* enabling this causes rev 23.4 to fail:
@@ -3716,8 +3685,8 @@ WAIT: pcba=100500 != ownerl=71600
 Fatal error: instruction #86137885 at 6/15274 UNLOAD+'120: 315 1400
 owner=71600 DUMPCB, keys=14000, modals=77           */
 
-  if (regs.sym.pcba != getcrs16(OWNERL)) {
-    printf("WAIT: pcba=%o != ownerl=%o\n", regs.sym.pcba, getcrs16(OWNERL));
+  if (getar16(PCBA16) != getcrs16(OWNERL)) {
+    printf("WAIT: pcba=%o != ownerl=%o\n", getar16(PCBA16), getcrs16(OWNERL));
     fatal(NULL);
   }
 #endif
@@ -3770,8 +3739,8 @@ static nfy(unsigned short inst) {
 
   resched = 0;
   begend = inst & 1;
-  if (regs.sym.pcba != getcrs16(OWNERL)) {
-    printf("NFY: regs.pcba = %o, but OWNERL = %o\n", regs.sym.pcba, getcrs16(OWNERL));
+  if (getar16(PCBA16) != getcrs16(OWNERL)) {
+    printf("NFY: regs.pcba = %o, but OWNERL = %o\n", getar16(PCBA16), getcrs16(OWNERL));
     fatal(NULL);
   }
   ea = apea(NULL);
@@ -3810,8 +3779,8 @@ static nfy(unsigned short inst) {
     if (inst & 2)                /* clear active interrupt */
       gvp->intvec = -1;
     /* not sure about all this... Case 85/87 */
-    newkeys(regs.sym.pswkeys);
-    RP = regs.sym.pswpb;
+    newkeys(getar16(PSWKEYS16));
+    RP = getar32(PSWPB32);
     putcrs16(PBH, RPH);          /* NOTE: won't have fault bit */
     if (RPL < gvp->livereglim && ((getcrs16(KEYS) & 0016000) != 010000))
       RP |= 0x80000000;
@@ -3828,7 +3797,7 @@ static lpsw() {
 
   TRACE(T_PX, "\n%o/%o: LPSW issued\n", RPH, RPL);
   TRACE(T_PX, "LPSW: before load, RPH=%o, RPL=%o, keys=%o, modals=%o, owner=%o/%o\n", RPH, RPL, getcrs16(KEYS), getcrs16(MODALS), getcrs16(OWNERH), getcrs16(OWNERL));
-  TRACE(T_PX, "LPSW: crs=%d, ownerl[2]=%o, keys[2]=%o, modals[2]=%o, ownerl[3]=%o, keys[3]=%o, modals[3]=%o\n", crs==regs.rs16[2]? 2:3, regs.rs16[2][OWNERL], regs.rs16[2][KEYS], regs.rs16[2][MODALS], regs.rs16[3][OWNERL], regs.rs16[3][KEYS], regs.rs16[3][MODALS]);
+  TRACE(T_PX, "LPSW: crs=%d, ownerl[2]=%o, keys[2]=%o, modals[2]=%o, ownerl[3]=%o, keys[3]=%o, modals[3]=%o\n", crs==regs.rs16[2]? 2:3, swap16(regs.rs16[2][OWNERL]), swap16(regs.rs16[2][KEYS]), swap16(regs.rs16[2][MODALS]), swap16(regs.rs16[3][OWNERL]), swap16(regs.rs16[3][KEYS]), swap16(regs.rs16[3][MODALS]));
 
   ea = apea(NULL);
   RPH = get16(ea);
@@ -3853,7 +3822,7 @@ static lpsw() {
     TRACE(T_PX, "LPSW: WARNING: changed current register set: current modals=%o, new modals=%o\n", getcrs16(MODALS), m);
     /* not sure about doing this... */
     printf("WARNING: LPSW changed current register set: current modals=%o, new modals=%o\n", getcrs16(MODALS), m);
-    crsl = regs.sym.userregs[(m & 0340) >> 5];
+    crsl = regs.sym.userregs[(m & 0340) >> 5];   /* pointers: no byte swap */
   }
 #endif
   invalidate_brp();
@@ -3862,7 +3831,7 @@ static lpsw() {
   gvp->inhcount = 1;
 
   TRACE(T_PX, "LPSW:    NEW RPH=%o, RPL=%o, keys=%o, modals=%o, owner=%o/%o\n", RPH, RPL, getcrs16(KEYS), getcrs16(MODALS), getcrs16(OWNERH), getcrs16(OWNERL));
-  TRACE(T_PX, "LPSW: crs=%d, ownerl[2]=%o, keys[2]=%o, modals[2]=%o, ownerl[3]=%o, keys[3]=%o, modals[3]=%o\n", crs==regs.rs16[2]? 2:3, regs.rs16[2][OWNERL], regs.rs16[2][KEYS], regs.rs16[2][MODALS], regs.rs16[3][OWNERL], regs.rs16[3][KEYS], regs.rs16[3][MODALS]);
+  TRACE(T_PX, "LPSW: crs=%d, ownerl[2]=%o, keys[2]=%o, modals[2]=%o, ownerl[3]=%o, keys[3]=%o, modals[3]=%o\n", crs==regs.rs16[2]? 2:3, swap16(regs.rs16[2][OWNERL]), swap16(regs.rs16[2][KEYS]), swap16(regs.rs16[2][MODALS]), swap16(regs.rs16[3][OWNERL]), swap16(regs.rs16[3][KEYS]), swap16(regs.rs16[3][MODALS]));
   if (getcrs16(MODALS) & 020)
     TRACE(T_PX, "Mapped I/O enabled\n");
   if (getcrs16(MODALS) & 4) {
@@ -3872,9 +3841,9 @@ static lpsw() {
     gvp->livereglim = 040;
   if (getcrs16(MODALS) & 010) {
     TRACE(T_PX, "Process exchange enabled:\n");
-    TRACE(T_PX, "LPSW: PLA=%o, PCBA=%o, PLB=%o, PCBB=%o\n", regs.sym.pla, regs.sym.pcba, regs.sym.plb, regs.sym.pcbb);
+    TRACE(T_PX, "LPSW: PLA=%o, PCBA=%o, PLB=%o, PCBB=%o\n", getar16(PLA16), getar16(PCBA16), getar16(PLB16), getar16(PCBB16));
 #if 0
-    for (i=regs.sym.pla;; i += 2) {
+    for (i=getar16(PLA16);; i += 2) {
       ea = MAKEVA(getcrs16(OWNERH), i);
       utempa = get16(ea);
       TRACE(T_PX, " Level %o: BOL=%o, EOL=%o\n", i, utempa, get16(ea+1));
@@ -3888,7 +3857,7 @@ static lpsw() {
       TRACE(T_PX, "LPSW: before disp, RPH=%o, RPL=%o, keys=%o, modals=%o\n", RPH, RPL, getcrs16(KEYS), getcrs16(MODALS));
       dispatcher();
       TRACE(T_PX, "LPSW: after disp, RPH=%o, RPL=%o, keys=%o, modals=%o\n", RPH, RPL, getcrs16(KEYS), getcrs16(MODALS));
-      TRACE(T_PX, "LPSW: crs=%d, ownerl[2]=%o, keys[2]=%o, modals[2]=%o, ownerl[3]=%o, keys[3]=%o, modals[3]=%o\n", crs==regs.rs16[2]? 2:3, regs.rs16[2][OWNERL], regs.rs16[2][KEYS], regs.rs16[2][MODALS], regs.rs16[3][OWNERL], regs.rs16[3][KEYS], regs.rs16[3][MODALS]);
+      TRACE(T_PX, "LPSW: crs=%d, ownerl[2]=%o, keys[2]=%o, modals[2]=%o, ownerl[3]=%o, keys[3]=%o, modals[3]=%o\n", crs==regs.rs16[2]? 2:3, swap16(regs.rs16[2][OWNERL]), swap16(regs.rs16[2][KEYS]), swap16(regs.rs16[2][MODALS]), swap16(regs.rs16[3][OWNERL]), swap16(regs.rs16[3][KEYS]), swap16(regs.rs16[3][MODALS]));
     }
   }
 }
@@ -4355,7 +4324,7 @@ static int ldar(ea_t ea) {
     else if (ea == 7)
       result = RP;
     else
-      result = regs.u32[ea];
+      result = getar32(ea);
   } else {
     ea &= 037;
     if (ea > 017) RESTRICT();
@@ -4374,7 +4343,7 @@ static star(unsigned int val32, ea_t ea) {
       fatal(NULL);
     }
     ea &= 0777;
-    regs.u32[ea] = val32;
+    putar32(ea, val32);
     if (ea == 7)
       RP = val32;
   } else {
@@ -4868,7 +4837,7 @@ main (int argc, char **argv) {
       rvec[0] = 0760;                   /* disk load starts at '760 */
       rvec[1] = rvec[0]+1040-1;         /* read 1 disk block */
       /* setup DMA register '20 (address only) for the next boot record */
-      regs.sym.regdmx[041] = 03000;
+      putar16(REGDMX16 + 041, 03000);
       if (globdisk(bootfile, sizeof(bootfile), bootctrl, bootunit) != 0) {
 	printf("Can't find disk boot device file %s, or multiple files match this device.\nTo boot from tape (mt0), use -boot 10005", bootfile);
 	fatal(NULL);
@@ -4931,7 +4900,7 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
       nw = (boottaphdr[0] | boottaphdr[1]<<8 | boottaphdr[2]<<16 | boottaphdr[3]<<24)/2;
       rvec[1] = rvec[0]+nw-1;
       /* setup DMA register '20 (address only) for the next boot record */
-      regs.sym.regdmx[041] = 0200+nw;
+      putar16(REGDMX16 + 041, 0200+nw);
     }
   }
   TRACEA("Sense switches set to %o\n", sswitch);
@@ -5169,8 +5138,8 @@ fetch:
     if (gvp->inhcount == 0) {
       //printf("fetch: taking interrupt vector '%o, modals='%o\n", gvp->intvec, getcrs16(MODALS));
       TRACE(T_FLOW, "\nfetch: taking interrupt vector '%o, modals='%o\n", gvp->intvec, getcrs16(MODALS));
-      regs.sym.pswpb = RP & 0x7FFFFFFF;
-      regs.sym.pswkeys = getcrs16(KEYS);
+      putar32(PSWPB32, RP & 0x7FFFFFFF);
+      regs.sym.pswkeys = crs[KEYS];              /* Prime->Prime: no byte swap */
 
       /* NOTE: this code doesn't match the description on page B-21 of
 	 the Sys Arch Guide 2nd Ed. for Standard Interrupt Mode */
@@ -6221,17 +6190,20 @@ d_stpm:  /* 000024 */
   {
     ea_t ea;
     int i;
+    unsigned short val;
     unsigned short stpm[8];
 
-  TRACE(T_FLOW, " STPM\n", inst);
-  RESTRICT();
-  for (i=0; i<8; i++)
-    stpm[i] = 0;
-  stpm[1] = cpuid;
-  ea = getcrs32(XB);
-  put64(*(long long *)(stpm+0), ea);
-  put64(*(long long *)(stpm+4), INCVA(ea,4));
-  goto fetch;
+    TRACE(T_FLOW, " STPM\n", inst);
+    RESTRICT();
+    ea = getcrs32(XB);
+    for (i=0; i<8; i++) {
+      if (i==1)
+	val = cpuid;
+      else
+	val = 0;
+      put16(val, ea);
+    }
+    goto fetch;
   }
 
 d_dbgill:  /*  001700, 001701 */
@@ -6264,16 +6236,16 @@ d_irtn:  /* 000601 */
   RESTRICT();
   //fatal("IRTN causes a loop in CPU.CACHE Case 4");
 irtn:
-  newkeys(regs.sym.pswkeys);
-  RP = regs.sym.pswpb;
+  newkeys(getar16(PSWKEYS16));
+  RP = getar32(PSWPB32);
   putcrs16(PBH, RPH);
   if (RPL < gvp->livereglim && ((getcrs16(KEYS) & 0016000) != 010000))
     RP |= 0x80000000;
   putcrs16(MODALS, getcrs16(MODALS) | 0100000);
 #if 0
   if (regs.sym.pcba != 0) {
-    RP = regs.sym.pswpb;
-    newkeys(regs.sym.pswkeys);
+    RP = getar32(PSWPB32);
+    newkeys(getar16(PSWKEYS16));
   } else
     putcrs16(OWNERL, 0);
 #endif
@@ -7226,7 +7198,7 @@ d_flta:  /* 0140532 */
 d_intl:  /* 0140533 */
   TRACE(T_FLOW, " INTL\n");
   if (prieee8(getfr64(2), &tempd) && -2147483648.0 <= tempd && tempd <= 2147483647.0) {
-    putcrs32s(L, tempd);
+    putcrs32s(L, (int)tempd);
     CLEARC;
   } else
     mathexception('f', FC_INT_CONV, ea);
@@ -8102,7 +8074,7 @@ dfcmdr:
     case 0103:
       TRACE(T_FLOW, " INT 0\n");
       if (prieee8(getfr64(0), &tempd) && -2147483648.0 <= tempd && tempd <= 2147483647.0) {
-	putgr32s(dr, tempd);
+	putgr32s(dr, (int)tempd);
 	CLEARC;
       } else
 	mathexception('f', FC_INT_CONV, ea);
@@ -8501,7 +8473,7 @@ dfcmdr:
 
     case 0027:
       TRACE(T_FLOW, " STEX\n");
-      *(ea_t *)(crsl+dr) = stex(getgr32(dr));
+      putgr32(dr, stex(getgr32(dr)));
       break;
 
     case 0046:
@@ -8779,7 +8751,7 @@ dfcmdr:
 	immu64 = get32(ea);
 	immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
       }
-      if (*(int *)&immu64)
+      if (immu64 & 0xFFFFFFFF00000000LL)
 	if (getgr32s(FAC0+dr)) {
 	  tempa1 = getgr32(FAC0+dr+1) & 0xffff;
 	  tempa2 = immu64 & 0xffff;
@@ -8804,7 +8776,7 @@ dfcmdr:
       TRACE(T_FLOW, " DFA\n");
       if (*(int *)&ea >= 0)
 	immu64 = get64(ea);
-      if (*(int *)&immu64)
+      if (immu64 & 0xFFFFFFFF00000000LL)
 	if (getgr32s(FAC0+dr))
 	  if (prieee8(getfr64(dr), &tempd1) 
 	      && prieee8(immu64, &tempd2)
@@ -8893,7 +8865,7 @@ dfcmdr:
 	immu64 = get32(ea);
 	immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
       }
-      if (*(int *)&immu64)
+      if (immu64 & 0xFFFFFFFF00000000LL)
 	if (getgr32s(FAC0+dr)) {
 	  tempa1 = getgr32(FAC0+dr+1) & 0xffff;
 	  tempa2 = immu64 & 0xffff;
@@ -8922,7 +8894,7 @@ dfcmdr:
       TRACE(T_FLOW, " DFS\n");
       if (*(int *)&ea >= 0)
 	immu64 = get64(ea);
-      if (*(int *)&immu64)
+      if (immu64 & 0xFFFFFFFF00000000LL)
 	if (getgr32s(FAC0+dr))
 	  if (prieee8(getfr64(dr), &tempd1) 
 	      && prieee8(immu64, &tempd2)
@@ -8947,7 +8919,7 @@ dfcmdr:
 	  immu64 = get32(ea);
 	  immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
 	}
-	if (*(int *)&immu64)
+	if (immu64 & 0xFFFFFFFF00000000LL)
 	  if (prieee8(immu64, &tempd2) 
 	      && prieee8(getfr64(dr), &tempd1)
 	      && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC0+dr), 0))
@@ -8967,7 +8939,7 @@ dfcmdr:
       if (getgr32s(FAC0+dr)) {
 	if (*(int *)&ea >= 0)
 	  immu64 = get64(ea);
-	if (*(int *)&immu64)
+	if (immu64 & 0xFFFFFFFF00000000LL)
 	  if (prieee8(immu64, &tempd2) 
 	      && prieee8(getfr64(dr), &tempd1)
 	      && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC0+dr), 0))
@@ -9044,7 +9016,7 @@ dfcmdr:
 	immu64 = get32(ea);
 	immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
       }
-      if (*(int *)&immu64)
+      if (immu64 & 0xFFFFFFFF00000000LL)
 	if (getgr32s(FAC0+dr))
 	  if (prieee8(immu64, &tempd2) 
 	      && prieee8(getfr64(dr), &tempd1)
@@ -9064,7 +9036,7 @@ dfcmdr:
       TRACE(T_FLOW, " DFD\n");
       if (*(int *)&ea >= 0)
 	immu64 = get64(ea);
-      if (*(int *)&immu64)
+      if (immu64 & 0xFFFFFFFF00000000LL)
 	if (getgr32s(FAC0+dr))
 	  if (prieee8(immu64, &tempd2) 
 	      && prieee8(getfr64(dr), &tempd1)
@@ -9991,7 +9963,7 @@ d_fad:  /* 00601 */
   TRACE(T_FLOW, " FAD\n");
   immu64 = get32(ea);
   immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
-  if (*(int *)&immu64)
+  if (immu64 & 0xFFFFFFFF00000000LL)
     if (getgr32s(FAC1)) {
       tempa1 = getcrs16(FEXP);
       tempa2 = immu64 & 0xffff;
@@ -10022,7 +9994,7 @@ d_fdv:  /* 01701 */
   TRACE(T_FLOW, " FDV\n");
   immu64 = get32(ea);
   immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
-  if (*(int *)&immu64)
+  if (immu64 & 0xFFFFFFFF00000000LL)
     if (getgr32s(FAC1))
       if (prieee8(immu64, &tempd2) 
 	  && prieee8(getfr64(2), &tempd1)
@@ -10048,7 +10020,7 @@ d_fmp:  /* 01601 */
   if (getgr32s(FAC1)) {
     immu64 = get32(ea);
     immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
-    if (*(int *)&immu64)
+    if (immu64 & 0xFFFFFFFF00000000LL)
       if (prieee8(immu64, &tempd2) 
 	  && prieee8(getfr64(2), &tempd1)
 	  && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC1), 0))
@@ -10065,7 +10037,7 @@ d_fsb:  /* 00701 */
   TRACE(T_FLOW, " FSB\n");
   immu64 = get32(ea);
   immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
-  if (*(int *)&immu64)
+  if (immu64 & 0xFFFFFFFF00000000LL)
     if (getgr32s(FAC1)) {
       tempa1 = getcrs16(FEXP);
       tempa2 = immu64 & 0xffff;
@@ -10107,7 +10079,7 @@ d_fst:  /* 0401 */
 d_dfad:  /* 0602 */
   TRACE(T_FLOW, " DFAD\n");
   immu64 = get64(ea);
-  if (*(int *)&immu64)
+  if (immu64 & 0xFFFFFFFF00000000LL)
     if (getgr32s(FAC1))
       if (prieee8(getfr64(2), &tempd1) 
 	  && prieee8(immu64, &tempd2)
@@ -10133,7 +10105,7 @@ d_dfdv:  /* 01702 */
   TRACE(T_FLOW, " DFDV\n");
   if (*(int *)&ea >= 0)
     immu64 = get64(ea);
-  if (*(int *)&immu64)
+  if (immu64 & 0xFFFFFFFF00000000LL)
     if (getgr32s(FAC1))
       if (prieee8(immu64, &tempd2) 
 	  && prieee8(getfr64(2), &tempd1)
@@ -10155,15 +10127,15 @@ d_dfld:  /* 0202 */
 #ifndef NOTRACE
   if (!prieee8(getfr64(2), &tempd1))
     tempd1 = -0.0;
-#endif
   TRACE(T_FLOW, " Loaded %f  '%o %o %o %o\n", tempd1, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP));
+#endif
   goto fetch;
 
 d_dfmp:  /* 01602 */
   TRACE(T_FLOW, " DFMP\n");
   if (getgr32s(FAC1)) {
     immu64 = get64(ea);
-    if (*(int *)&immu64)
+    if (immu64 & 0xFFFFFFFF00000000LL)
       if (prieee8(immu64, &tempd2) 
 	  && prieee8(getfr64(2), &tempd1)
 	  && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC1), 0)) {
@@ -10181,7 +10153,7 @@ d_dfmp:  /* 01602 */
 d_dfsb:  /* 0702 */
   TRACE(T_FLOW, " DFSB\n");
   immu64 = get64(ea);
-  if (*(int *)&immu64)
+  if (immu64 & 0xFFFFFFFF00000000LL)
     if (getgr32s(FAC1))
       if (prieee8(getfr64(2), &tempd1) 
 	  && prieee8(immu64, &tempd2)

@@ -1184,10 +1184,10 @@ int devmt (int class, int func, int device) {
 	  TRACE(T_INST|T_TIO,  " DMC channels: ['%o]='%o, ['%o]='%o, nwords=%d", dmxreg, dmxaddr, dmxreg+1, (unsigned int) (dmcpair & 0xffff), dmxnw);
 	} else {                        /* DMA */
 	  dmxreg = dmxreg << 1;
-	  dmxnw = regs.sym.regdmx[dmxreg];
+	  dmxnw = getar16(REGDMX16+dmxreg);
 	  dmxnw = -((dmxnw>>4) | 0xF000);
-	  dmxaddr = ((regs.sym.regdmx[dmxreg] & 3)<<16) | regs.sym.regdmx[dmxreg+1];
-	  TRACE(T_INST|T_TIO, " DMA channels: ['%o]='%o, ['%o]='%o/%o, nwords=%d", dmxreg, regs.sym.regdmx[dmxreg], dmxreg+1, dmxaddr>>16, dmxaddr&0xffff, dmxnw);
+	  dmxaddr = ((getar16(REGDMX16+dmxreg) & 3)<<16) | getar16(REGDMX16+dmxreg+1);
+	  TRACE(T_INST|T_TIO, " DMA channels: ['%o]='%o, ['%o]='%o/%o, nwords=%d", dmxreg, swap16(regs.sym.regdmx[dmxreg]), dmxreg+1, dmxaddr>>16, dmxaddr&0xffff, dmxnw);
 	}
 	if (dmxnw < 0) {            /* but is legal for >32K DMC transfer... */
 	  printf("devmt: requested negative DMX of size %d\n", dmxnw);
@@ -1226,8 +1226,8 @@ int devmt (int class, int func, int device) {
 	if (dmxchan & 0x0800) {                    /* if DMC... */
 	  put16io(dmxaddr+dmxnw, dmxreg);          /* update starting address */
 	} else {                                   /* if DMA...
-	  regs.sym.regdmx[dmxreg] += (dmxnw<<4);   /* increment # words */
-	  regs.sym.regdmx[dmxreg+1] += dmxnw;      /* increment address */
+	  putar16(REGDMX16+dmxreg, getar16(REGDMX16+dmxreg) + (dmxnw<<4));   /* increment # words */
+	  putar16(REGDMX16+dmxreg+1, getar16(REGDMX16+dmxreg+1) + dmxnw);    /* increment address */
 	}
 
 	/* if chaining, bump channel number and decrement # channels */
@@ -1998,7 +1998,7 @@ int devdisk (int class, int func, int device) {
 
 	  while (dc[dx].dmanch >= 0) {
 	    dmareg = dc[dx].dmachan << 1;
-	    dmanw = regs.sym.regdmx[dmareg];
+	    dmanw = getar16(REGDMX16+dmareg);
 	    dmanw = -(dmanw>>4);
 	    if (dmanw > 1040) {
 	      warn("disk I/O limited to 1040 words");
@@ -2008,8 +2008,8 @@ int devdisk (int class, int func, int device) {
 	      warn("disk I/O size < 0; set to 0");
 	      dmanw = 0;
 	    }
-	    dmaaddr = ((regs.sym.regdmx[dmareg] & 3)<<16) | regs.sym.regdmx[dmareg+1];
-	    TRACE(T_INST|T_DIO,  " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dc[dx].dmanch, dc[dx].dmachan, regs.sym.regdmx[dmareg], dc[dx].dmachan+1, dmaaddr, dmanw);
+	    dmaaddr = ((getar16(REGDMX16+dmareg) & 3)<<16) | getar16(REGDMX16+dmareg+1);
+	    TRACE(T_INST|T_DIO,  " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dc[dx].dmanch, dc[dx].dmachan, swap16(regs.sym.regdmx[dmareg]), dc[dx].dmachan+1, dmaaddr, dmanw);
 	    
 	    if (order == 5) {
 	      if (getcrs16(MODALS) & 020)
@@ -2049,7 +2049,7 @@ int devdisk (int class, int func, int device) {
 	      }
 	    }
 	    regs.sym.regdmx[dmareg] = 0;
-	    regs.sym.regdmx[dmareg+1] += dmanw;
+	    putar16(REGDMX16+dmareg+1, getar16(REGDMX16+dmareg+1) + dmanw);
 	    dc[dx].dmachan += 2;
 	    dc[dx].dmanch--;
 	  }

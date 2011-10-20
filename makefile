@@ -25,7 +25,7 @@ trace:  # tracing + gdb
 
 tracei:  # tracing + gdb (Intel)
 
-	cc -arch i386 -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/Universal/api;g++ -arch i386 -o em em.o ../dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i386 -DREV=\"${REV}\" -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/Universal/api;g++ -arch i386 -o em em.o ../dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
 vfy:  # prod + tracing to verify em changes
