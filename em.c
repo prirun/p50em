@@ -2938,11 +2938,12 @@ static pcl (ea_t ecbea) {
   if (access == 1 && (ecbea & 0xF) != 0)
     fault(ACCESSFAULT, 0, ecbea);
   if ((pa & 01777) <= 02000 - sizeof(ecb)/sizeof(ecb[0])) {
-    memcpy(ecb, MEM+pa, sizeof(ecb));  //BS
+    memcpy(ecb, MEM+pa, sizeof(ecb));
+    for (i=0; i<9; i++)
+      swap16(ecb[i]);
   } else {
-    *(long long *)(ecb+0) = get64(ecbea+0);
-    *(long long *)(ecb+4) = get64(ecbea+4);
-    ecb[8] = get16(ecbea+8);
+    for (i=0; i<9; i++)
+      ecb[i] = get16(ecbea+i);
   }
 
   TRACE(T_PCL, " ecb.pb: %o/%o\n ecb.framesize: %d\n ecb.stackroot %o\n ecb.argdisp: %o\n ecb.nargs: %d\n ecb.lb: %o/%o\n ecb.keys: %o\n", ecb[0], ecb[1], ecb[2], ecb[3], ecb[4], ecb[5], ecb[6], ecb[7], ecb[8]);
@@ -7128,15 +7129,26 @@ d_flot:  /* 0140550 */
   goto fetch;
 
 d_frn:  /* 0140534 */
-  TRACE(T_FLOW, " FRN\n");
-  CLEARC;
-  frn(crsl+FAC1);
+  {
+    int oflow;
+    TRACE(T_FLOW, " FRN\n");
+    CLEARC;
+    putfr64(2, frn(getfr64(2), &oflow));
+    if (oflow)
+      mathexception('f', FC_DFP_OFLOW, 0);
+  }
   goto fetch;
 
 d_dfcm:  /* 0140574 */
-  TRACE(T_FLOW, " DFCM\n");
-  dfcm(crsl+FAC1);
-  goto fetch;
+  {
+    int oflow;
+    TRACE(T_FLOW, " DFCM\n");
+dfcmfac1:
+    putfr64(2, dfcm(getfr64(2), &oflow));
+    if (oflow)
+      mathexception('f', FC_DFP_OFLOW, 0);
+    goto fetch;
+  }
 
 d_adll:  /* 0141000 */
   TRACE(T_FLOW, " ADLL\n");
@@ -7145,8 +7157,7 @@ d_adll:  /* 0141000 */
 
 d_fcmv:  /* 0140530 */
   TRACE(T_FLOW, " FCMv\n");
-  dfcm(crsl+FAC1);
-  goto fetch;
+  goto dfcmfac1;
 
 d_fsze:  /* 0140510 */
   TRACE(T_FLOW, " FSZE\n");
@@ -7187,7 +7198,7 @@ d_fsgt:  /* 0140515 */
 d_int:  /* 0140554 */
   TRACE(T_FLOW, " INTr\n");
   /* XXX: do -1073741824.5 and 1073741823.5 work on Prime, or overflow? */
-  if (prieee8(crs+FLTH, &tempd) && -1073741824.0 <= tempd && tempd <= 1073741823.0) {
+  if (prieee8(getfr64(2), &tempd) && -1073741824.0 <= tempd && tempd <= 1073741823.0) {
     templ = tempd;
     putcrs16(B, templ & 0x7FFF);
     putcrs16(A, templ >> 15);
@@ -7199,7 +7210,7 @@ d_int:  /* 0140554 */
 d_inta:  /* 0140531 */
   TRACE(T_FLOW, " INTA\n");
   /* XXX: do 32767.5 and -32768.5 work on Prime, or overflow? */
-  if (prieee8(crs+FLTH, &tempd) && -32768.0 <= tempd && tempd <= 32767.0) {
+  if (prieee8(getfr64(2), &tempd) && -32768.0 <= tempd && tempd <= 32767.0) {
     putcrs16(A, (short)tempd);
     CLEARC;
   } else
@@ -7214,7 +7225,7 @@ d_flta:  /* 0140532 */
 
 d_intl:  /* 0140533 */
   TRACE(T_FLOW, " INTL\n");
-  if (prieee8(crs+FLTH, &tempd) && -2147483648.0 <= tempd && tempd <= 2147483647.0) {
+  if (prieee8(getfr64(2), &tempd) && -2147483648.0 <= tempd && tempd <= 2147483647.0) {
     putcrs32s(L, tempd);
     CLEARC;
   } else
@@ -7967,8 +7978,14 @@ imode:
       break;
 
     case 0144:
-      TRACE(T_FLOW, " DFCM\n");
-      dfcm(crsl+FAC0+dr);
+      {
+	int oflow;
+	TRACE(T_FLOW, " DFCM\n");
+dfcmdr:
+	putfr64(dr, dfcm(getfr64(dr), &oflow));
+	if (oflow)
+	  mathexception('f', FC_DFP_OFLOW, 0);
+      }
       break;
 
     case 0130:
@@ -7993,7 +8010,7 @@ imode:
 
     case 0100:
       TRACE(T_FLOW, " FCM\n");
-      dfcm(crsl+FAC0+dr);
+      goto dfcmdr;
       break;
 
     case 0105:
@@ -8017,9 +8034,14 @@ imode:
       break;
 
     case 0107:
-      TRACE(T_FLOW, " FRN\n");
-      CLEARC;
-      frn(crsl+FAC0+dr);
+      {
+	int oflow;
+	TRACE(T_FLOW, " FRN\n");
+	CLEARC;
+	putfr64(2, frn(getfr64(dr), &oflow));
+	if (oflow)
+	  mathexception('f', FC_DFP_OFLOW, 0);
+      }
       break;
 
     case 0146:  /* I-mode FRNM */
@@ -8079,7 +8101,7 @@ imode:
 
     case 0103:
       TRACE(T_FLOW, " INT 0\n");
-      if (prieee8(crsl+FAC0, &tempd) && -2147483648.0 <= tempd && tempd <= 2147483647.0) {
+      if (prieee8(getfr64(0), &tempd) && -2147483648.0 <= tempd && tempd <= 2147483647.0) {
 	putgr32s(dr, tempd);
 	CLEARC;
       } else
@@ -8088,7 +8110,7 @@ imode:
 
     case 0113:
       TRACE(T_FLOW, " INT 1\n");
-      if (prieee8(crsl+FAC1, &tempd) && -2147483648.0 <= tempd && tempd <= 2147483647.0) {
+      if (prieee8(getfr64(2), &tempd) && -2147483648.0 <= tempd && tempd <= 2147483647.0) {
 	putgr32s(dr, (int)tempd);
 	CLEARC;
       } else
@@ -8097,7 +8119,7 @@ imode:
 
     case 0101:
       TRACE(T_FLOW, " INTH 0\n");
-      if (prieee8(crsl+FAC0, &tempd) && -32768.0 <= tempd && tempd <= 32767.0) {
+      if (prieee8(getfr64(0), &tempd) && -32768.0 <= tempd && tempd <= 32767.0) {
 	putgr16s(dr, (short)tempd);
 	CLEARC;
       } else
@@ -8106,7 +8128,7 @@ imode:
 
     case 0111:
       TRACE(T_FLOW, " INTH 1\n");
-      if (prieee8(crsl+FAC1, &tempd) && -32768.0 <= tempd && tempd <= 32767.0) {
+      if (prieee8(getfr64(2), &tempd) && -32768.0 <= tempd && tempd <= 32767.0) {
 	putgr16s(dr, (short)tempd);
 	CLEARC;
       } else
@@ -8631,7 +8653,7 @@ imode:
 	utempl = ((immu64 >> 32) & 0xffffff00) | (immu64 & 0xff);
       else
 	utempl = get32(ea);
-      fcs(crsl+FAC0+dr, utempl);
+      fcs(getfr64(dr), utempl);
       break;
 
     case 5:
@@ -8640,7 +8662,7 @@ imode:
       TRACE(T_FLOW, " DFC\n");
       if (*(int *)&ea >= 0)
 	immu64 = get64(ea);
-      dfcs(crsl+FAC0+dr, immu64);
+      dfcs(getfr64(dr), immu64);
     break;
 
     default:
@@ -8718,6 +8740,7 @@ imode:
   case 016:  /* Special MR FP format */
     /* FST, DFST, FA, DFA */
     switch (dr) {
+      int oflow;
     case 0:
     case 2:
       dr &= 2;
@@ -8725,7 +8748,7 @@ imode:
       CLEARC;
       if (*(int *)&ea >= 0) {
 	if (getcrs16(KEYS) & 010)
-	  frn(crsl+FAC0+dr);
+	  putfr64(2, frn(getfr64(2), &oflow));  /* sing prec can't overflow */
 	if ((getgr32(FAC0+dr+1) & 0xFF00) == 0)
 	  put32((getfr32(dr) & 0xFFFFFF00) | (getgr32(FAC0+dr+1) & 0xFF), ea);
 	else
@@ -8761,8 +8784,8 @@ imode:
 	  tempa1 = getgr32(FAC0+dr+1) & 0xffff;
 	  tempa2 = immu64 & 0xffff;
 	  if (abs(tempa1-tempa2) < 48)
-	    if (prieee8(crsl+FAC0+dr, &tempd1) 
-		&& prieee8(&immu64, &tempd2)
+	    if (prieee8(getfr64(dr), &tempd1) 
+		&& prieee8(immu64, &tempd2)
 		&& ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC0+dr), 0))
 	      CLEARC;
 	    else
@@ -8783,8 +8806,8 @@ imode:
 	immu64 = get64(ea);
       if (*(int *)&immu64)
 	if (getgr32s(FAC0+dr))
-	  if (prieee8(crsl+FAC0+dr, &tempd1) 
-	      && prieee8(&immu64, &tempd2)
+	  if (prieee8(getfr64(dr), &tempd1) 
+	      && prieee8(immu64, &tempd2)
 	      && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC0+dr), 0))
 	    CLEARC;
 	  else
@@ -8875,19 +8898,19 @@ imode:
 	  tempa1 = getgr32(FAC0+dr+1) & 0xffff;
 	  tempa2 = immu64 & 0xffff;
 	  if (abs(tempa1-tempa2) < 48)
-	    if (prieee8(crsl+FAC0+dr, &tempd1) 
-		&& prieee8(&immu64, &tempd2)
+	    if (prieee8(getfr64(dr), &tempd1) 
+		&& prieee8(immu64, &tempd2)
 	        && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC0+dr), 0))
 	      CLEARC;
 	    else
 	      mathexception('f', FC_SFP_OFLOW, ea);
 	  else if (tempa1 < tempa2) {
 	    putgr64s(FAC0+dr, immu64);
-	    dfcm(crsl+FAC0+dr);
+	    goto dfcmdr;
 	  }
 	} else {
 	  putgr64s(FAC0+dr, immu64);
-	  dfcm(crsl+FAC0+dr);
+	  goto dfcmdr;
 	}
       else if (getgr32s(FAC0+dr) == 0)
 	putgr64s(FAC0+dr, 0);
@@ -8901,15 +8924,15 @@ imode:
 	immu64 = get64(ea);
       if (*(int *)&immu64)
 	if (getgr32s(FAC0+dr))
-	  if (prieee8(crsl+FAC0+dr, &tempd1) 
-	      && prieee8(&immu64, &tempd2)
+	  if (prieee8(getfr64(dr), &tempd1) 
+	      && prieee8(immu64, &tempd2)
 	      && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC0+dr), 0))
 	    CLEARC;
 	  else
 	    mathexception('f', FC_DFP_OFLOW, ea);
 	else {
 	  putgr64s(FAC0+dr, immu64);
-	  dfcm(crsl+FAC0+dr);
+	  goto dfcmdr;
 	}
       else if (getgr32s(FAC0+dr) == 0)
 	putgr64s(FAC0+dr, 0);
@@ -8925,8 +8948,8 @@ imode:
 	  immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
 	}
 	if (*(int *)&immu64)
-	  if (prieee8(&immu64, &tempd2) 
-	      && prieee8(crsl+FAC0+dr, &tempd1)
+	  if (prieee8(immu64, &tempd2) 
+	      && prieee8(getfr64(dr), &tempd1)
 	      && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC0+dr), 0))
 	    CLEARC;
 	  else
@@ -8945,8 +8968,8 @@ imode:
 	if (*(int *)&ea >= 0)
 	  immu64 = get64(ea);
 	if (*(int *)&immu64)
-	  if (prieee8(&immu64, &tempd2) 
-	      && prieee8(crsl+FAC0+dr, &tempd1)
+	  if (prieee8(immu64, &tempd2) 
+	      && prieee8(getfr64(dr), &tempd1)
 	      && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC0+dr), 0))
 	    CLEARC;
 	  else
@@ -9023,8 +9046,8 @@ imode:
       }
       if (*(int *)&immu64)
 	if (getgr32s(FAC0+dr))
-	  if (prieee8(&immu64, &tempd2) 
-	      && prieee8(crsl+FAC0+dr, &tempd1)
+	  if (prieee8(immu64, &tempd2) 
+	      && prieee8(getfr64(dr), &tempd1)
 	      && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC0+dr), 1))
 	    CLEARC;
 	  else
@@ -9043,8 +9066,8 @@ imode:
 	immu64 = get64(ea);
       if (*(int *)&immu64)
 	if (getgr32s(FAC0+dr))
-	  if (prieee8(&immu64, &tempd2) 
-	      && prieee8(crsl+FAC0+dr, &tempd1)
+	  if (prieee8(immu64, &tempd2) 
+	      && prieee8(getfr64(dr), &tempd1)
 	      && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC0+dr), 1))
 	    CLEARC;
 	  else
@@ -9973,8 +9996,8 @@ d_fad:  /* 00601 */
       tempa1 = getcrs16(FEXP);
       tempa2 = immu64 & 0xffff;
       if (abs(tempa1-tempa2) < 48)
-	if (prieee8(crsl+FAC1, &tempd1) 
-	    && prieee8(&immu64, &tempd2)
+	if (prieee8(getfr64(2), &tempd1) 
+	    && prieee8(immu64, &tempd2)
 	    && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC1), 0))
 	  CLEARC;
 	else
@@ -9992,7 +10015,7 @@ d_fad:  /* 00601 */
 d_fcs:  /* 01101 */
   TRACE(T_FLOW, " FCS\n");
   templ = get32(ea);
-  RPL += fcs(crsl+FAC1, templ);
+  RPL += fcs(getfr64(2), templ);
   goto fetch;
 
 d_fdv:  /* 01701 */
@@ -10001,8 +10024,8 @@ d_fdv:  /* 01701 */
   immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
   if (*(int *)&immu64)
     if (getgr32s(FAC1))
-      if (prieee8(&immu64, &tempd2) 
-	  && prieee8(crsl+FAC1, &tempd1)
+      if (prieee8(immu64, &tempd2) 
+	  && prieee8(getfr64(2), &tempd1)
 	  && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC1), 1))
 	CLEARC;
       else
@@ -10026,8 +10049,8 @@ d_fmp:  /* 01601 */
     immu64 = get32(ea);
     immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
     if (*(int *)&immu64)
-      if (prieee8(&immu64, &tempd2) 
-	  && prieee8(crsl+FAC1, &tempd1)
+      if (prieee8(immu64, &tempd2) 
+	  && prieee8(getfr64(2), &tempd1)
 	  && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC1), 0))
 	CLEARC;
       else
@@ -10047,33 +10070,38 @@ d_fsb:  /* 00701 */
       tempa1 = getcrs16(FEXP);
       tempa2 = immu64 & 0xffff;
       if (abs(tempa1-tempa2) < 48)
-	if (prieee8(crsl+FAC1, &tempd1) 
-	    && prieee8(&immu64, &tempd2)
+	if (prieee8(getfr64(2), &tempd1) 
+	    && prieee8(immu64, &tempd2)
 	    && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC1), 0))
 	  CLEARC;
 	else
 	  mathexception('f', FC_SFP_OFLOW, ea);
       else if (tempa1 < tempa2) {
 	putgr64s(FAC1, immu64);
-	dfcm(crsl+FAC1);
+	goto dfcmfac1;
       }
     } else {
       putgr64s(FAC1, immu64);
-      dfcm(crsl+FAC1);
+      goto dfcmfac1;
     }
   else if (getgr32s(FAC1) == 0)
     putgr64s(FAC1, 0);
   goto fetch;
 
 d_fst:  /* 0401 */
-  TRACE(T_FLOW, " FST\n");
-  CLEARC;
-  if (getcrs16(KEYS) & 010)
-    frn(crsl+FAC1);
-  if ((getgr32(FAC1+1) & 0xFF00) == 0)
-    put32((getgr32(FAC1) & 0xFFFFFF00) | (getgr32(FAC1+1) & 0xFF), ea);
-  else
-    mathexception('f', FC_SFP_STORE, ea);
+  {
+    int oflow;
+    unsigned long long dfp;
+    TRACE(T_FLOW, " FST\n");
+    CLEARC;
+    if (getcrs16(KEYS) & 010)
+      putfr64(2, frn(getfr64(2), &oflow));  /* sing prec can't overflow */
+    dfp = getfr64(2);
+    if ((dfp & 0xFF00) == 0)
+      put32(((dfp & 0xFFFFFF0000000000LL) >> 32) | (dfp & 0xFF), ea);
+    else
+      mathexception('f', FC_SFP_STORE, ea);
+  }
   goto fetch;
 
 d_dfad:  /* 0602 */
@@ -10081,8 +10109,8 @@ d_dfad:  /* 0602 */
   immu64 = get64(ea);
   if (*(int *)&immu64)
     if (getgr32s(FAC1))
-      if (prieee8(crsl+FAC1, &tempd1) 
-	  && prieee8(&immu64, &tempd2)
+      if (prieee8(getfr64(2), &tempd1) 
+	  && prieee8(immu64, &tempd2)
 	  && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC1), 0)) {
 	CLEARC;
 	TRACE(T_FLOW, " %f ('%o %o %o %o) + %f (%o %o %o %o)\n", tempd1, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP), tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
@@ -10098,7 +10126,7 @@ d_dfad:  /* 0602 */
 d_dfcs:  /* 01102 */
   TRACE(T_FLOW,  " DFCS\n");
   templl = get64(ea);
-  RPL += dfcs(crsl+FAC1, templl);
+  RPL += dfcs(getfr64(2), templl);
   goto fetch;
 
 d_dfdv:  /* 01702 */
@@ -10107,8 +10135,8 @@ d_dfdv:  /* 01702 */
     immu64 = get64(ea);
   if (*(int *)&immu64)
     if (getgr32s(FAC1))
-      if (prieee8(&immu64, &tempd2) 
-	  && prieee8(crsl+FAC1, &tempd1)
+      if (prieee8(immu64, &tempd2) 
+	  && prieee8(getfr64(2), &tempd1)
 	  && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC1), 1)) {
 	CLEARC;
 	TRACE(T_FLOW, " %f ('%o %o %o %o) / %f (%o %o %o %o)\n", tempd1, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP), tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
@@ -10125,7 +10153,7 @@ d_dfld:  /* 0202 */
   TRACE(T_FLOW, " DFLD\n");
   putcrs64s(FLTH, get64(ea));
 #ifndef NOTRACE
-  if (!prieee8(crs+FLTH, &tempd1))
+  if (!prieee8(getfr64(2), &tempd1))
     tempd1 = -0.0;
 #endif
   TRACE(T_FLOW, " Loaded %f  '%o %o %o %o\n", tempd1, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP));
@@ -10136,8 +10164,8 @@ d_dfmp:  /* 01602 */
   if (getgr32s(FAC1)) {
     immu64 = get64(ea);
     if (*(int *)&immu64)
-      if (prieee8(&immu64, &tempd2) 
-	  && prieee8(crsl+FAC1, &tempd1)
+      if (prieee8(immu64, &tempd2) 
+	  && prieee8(getfr64(2), &tempd1)
 	  && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC1), 0)) {
 	CLEARC;
 	TRACE(T_FLOW, " %f ('%o %o %o %o) * %f (%o %o %o %o)\n", tempd1, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP), tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
@@ -10155,8 +10183,8 @@ d_dfsb:  /* 0702 */
   immu64 = get64(ea);
   if (*(int *)&immu64)
     if (getgr32s(FAC1))
-      if (prieee8(crsl+FAC1, &tempd1) 
-	  && prieee8(&immu64, &tempd2)
+      if (prieee8(getfr64(2), &tempd1) 
+	  && prieee8(immu64, &tempd2)
 	  && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC1), 0)) {
 	CLEARC;
 	TRACE(T_FLOW, " %f ('%o %o %o %o) - %f (%o %o %o %o)\n", tempd1, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP), tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
@@ -10165,7 +10193,7 @@ d_dfsb:  /* 0702 */
 	mathexception('f', FC_DFP_OFLOW, ea);
     else {
       putgr64s(FAC1, immu64);
-      dfcm(crsl+FAC1);
+      goto dfcmfac1;
     }
   else if (getgr32s(FAC1) == 0)
     putgr64s(FAC1, 0);
@@ -10175,10 +10203,10 @@ d_dfst:  /* 0402 */
   TRACE(T_FLOW, " DFST\n");
   put64(getcrs64s(FLTH), ea);
 #ifndef NOTRACE
-  if (!prieee8(crs+FLTH, &tempd1))
+  if (!prieee8(getfr64(2), &tempd1))
     tempd1 = -0.0;
-#endif
   TRACE(T_FLOW, " Stored %f  '%o %o %o %o\n", tempd1, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP));
+#endif
   goto fetch;
 
 d_ealb:  /* 01302 */

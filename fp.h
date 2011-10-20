@@ -40,17 +40,13 @@ http://tima-cmp.imag.fr/~guyot/Cours/Oparithm/english/Op_Ar2.htm
 /* getdp unpacks a Prime DPFP into 48-bit sign + mantissa (left
    justified in 64 bits) and a 32-bit signed exponent */
 
-inline getdp (void *p, long long *frac64, int *exp32) {
+inline getdp (unsigned long long p, long long *frac64, int *exp32) {
 
-  *frac64 = *(long long *)p & 0xFFFFFFFFFFFF0000LL;  /* unpack fraction */
-  *exp32 = *((short *)p+3);                          /* unpack SIGNED exponent */
+  *frac64 = p & 0xFFFFFFFFFFFF0000LL;  /* unpack fraction */
+  *exp32 = (short) (p & 0xFFFFLL);     /* unpack SIGNED exponent */
 }
 
-inline putdp (void *p, long long frac64, int exp32) {
-
-  *(long long *)p = (frac64 & 0xFFFFFFFFFFFF0000LL) | (exp32 & 0xFFFF);
-}
-
+#define RETFP(frac64, exp32) return ((frac64) & 0xFFFFFFFFFFFF0000LL) | ((exp32) & 0xFFFF)
 
 /* Conversion from Prime DPFP to IEEE DPFP
    Returns true if conversion succeeded, false if it failed.
@@ -58,20 +54,7 @@ inline putdp (void *p, long long frac64, int exp32) {
    IEEE DPFP exponents are only 11 bits.
 */
 
-/* Floating point conversion caches.
-   1st entry is a Prime-format DPFP number.
-   2nd entry is the corresponding IEEE DPFP number.
-   Unused entries are 0.0
-
-   There are two corresponding hash arrays, one for Prime entries
-   and a 2nd for IEEE entries.  Whenever a conversion is done, both
-   types of entries are updated. */
-
-static double fpcache[2][512];
-static short primecix[512];
-static short ieeecix[512];
-
-int prieee8(void *dp, double *d) {
+int prieee8(unsigned long long dp, double *d) {
   long long frac64, sign;
   int exp32;
 
@@ -107,7 +90,7 @@ int prieee8(void *dp, double *d) {
 
   /* normalize positive fraction until bit 2 is 1 */
 
-  while ((*(int *)&frac64 & 0x40000000) == 0) {
+  while ((frac64 & 0x4000000000000000LL) == 0) {
     frac64 = frac64 << 1;
     exp32--;
   }
@@ -226,7 +209,7 @@ retry:
       /* XXX: should this be a subtract for negative numbers? */
       frac64 += 0x10000;
 
-  *p = (frac64 & 0xffffffffffff0000LL) | (exp32 & 0xffff);
+  *p = swap64((frac64 & 0xffffffffffff0000LL) | (exp32 & 0xffff));
   return okay;
 }
 
@@ -272,12 +255,12 @@ double fltl (int int32) {
 
 /* Prime DPFP complement */
 
-dfcm (void *dp) {
+unsigned long long dfcm (unsigned long long dp, int *oflow) {
   long long frac64;
-  int exp32, oflow;
+  int exp32;
 
   CLEARC;
-  oflow = 0;
+  *oflow = 0;
   getdp(dp, &frac64, &exp32);
   if (frac64 != 0) {                          /* can't normalize zero */
     if (frac64 == 0x8000000000000000LL) {     /* overflow case? */
@@ -290,36 +273,33 @@ dfcm (void *dp) {
 	exp32--;
       }
     }
-    putdp(dp, frac64, exp32);
-    oflow = exp32 > 32767 || exp32 < -32768;
+    if (exp32 > 32767 || exp32 < -32768)
+      *oflow = 1;
+    RETFP(frac64, exp32);
   } else
-    *(double *)dp = 0.0;;            /* DFCM is documented to clean up dirty zeroes */
-  if (oflow)
-    mathexception('f', FC_DFP_OFLOW, 0);
+    RETFP(0, 0);            /* DFCM is documented to clean up dirty zeroes */
 }
 
 
 /* double precision floating point normalize
 
-   Passed a pointer to a Prime double precision variable and updates
-   it in place.  May set the C-bit or cause a floating point
-   exception. */
+   Passed a Prime double precision variable and returns normalized
+   value and overflow flag. */
 
-void norm(void *dp) {
+unsigned long long norm(unsigned long long dp, int *oflow) {
   long long frac64;
   int exp32;
 
+  *oflow = 0;
   getdp(dp, &frac64, &exp32);
   while ((frac64 ^ (frac64 << 1)) >= 0) {
     frac64 = frac64 << 1;
     exp32--;
   }
-
-  putdp(dp, frac64, exp32);
   if (exp32 > 32767 || exp32 < -32768)
-    mathexception('f', FC_DFP_OFLOW, 0);
+    *oflow = 1;
+  RETFP(frac64, exp32);
 }
-
 
 /* double->single floating point round (FRN) instruction.
 
@@ -329,14 +309,15 @@ void norm(void *dp) {
    NOTE: this routine is coded strangely because I ran into compiler
    bugs (gcc 4.0.1) */
 
-void frn(void *dp) {
+unsigned long long frn(unsigned long long dp, int *oflow) {
   long long frac64;
   int exp32;
   int doround1, doround2;
 
+  *oflow = 0;
   getdp(dp, &frac64, &exp32);
   if (frac64 == 0)
-    *(long long *)dp = 0;
+    return 0;
   else {
     doround1 = ((frac64 & 0x18000000000LL) != 0);
     doround2 = ((frac64 &  0x8000000000LL) != 0) && ((frac64 & 0x7FFFFF0000LL) != 0);
@@ -349,8 +330,8 @@ void frn(void *dp) {
 	exp32++;
       }
       frac64 |= (exp32 & 0xFFFF);
-      norm(&frac64);
-      *(long long *)dp = frac64;
+      frac64 = norm(frac64, oflow);
+      return frac64;
     }
   }
 }
@@ -362,16 +343,16 @@ void frn(void *dp) {
    RPL should be advanced.
 */
 
-int fcs (unsigned int *fac, int fop) {
+int fcs (unsigned long long fac, int fop) {
   int templ;
   short fopexp, facexp;
 
   CLEARCC;
-  templ = fac[0] & 0xffffff00;                       /* FAC SP mantissa */
+  templ = (fac & 0xffffff0000000000LL) >> 32;        /* FAC SP mantissa */
   if (templ == 0)                                    /* fix dirty zero */
     facexp = 0;
   else
-    facexp = fac[1] & 0xffff;                        /* FAC exponent */
+    facexp = fac & 0xffff;                           /* FAC exponent */
   fopexp = fop & 0xff;
   fop = fop & 0xffffff00;
   if (fop == 0)                                      /* fix dirty zero */
@@ -410,12 +391,12 @@ int fcs (unsigned int *fac, int fop) {
    Prime ASCII characters in the DAC) won't convert to IEEE.
 */
 
-int dfcs (unsigned int *fac, long long fop) {
+int dfcs (unsigned long long fac, long long fop) {
   long long templl;
   short fopexp, facexp;
 
   CLEARCC;
-  templl = *(long long *)fac;
+  templl = fac;
   facexp = templl & 0xffff;                          /* FAC exponent */
   templl = templl & 0xffffffffffff0000LL;            /* FAC SP mantissa */
   if (templl == 0)                                   /* fix dirty zero */
@@ -448,30 +429,3 @@ int dfcs (unsigned int *fac, long long fop) {
   } else
     return 0;                                        /* FAC > operand */
 }
-
-
-#if 0
-
-/* Prime DPFP multiply */
-
-dfmp(void *dp1, void *dp2, ea_t ea) {
-  long long frac64, frac641, frac642;
-  int exp32, exp321, exp322;
-  short fcode;
-
-  fcode = 0;
-  CLEARC;
-  getdp(dp1, &frac641, &exp321);
-  getdp(dp2, &frac642, &exp322);
-  exp32 = exp321 + exp322;
-  /* XXX: need to get 128-bit result to test for overflow? */
-  frac64 = frac641 * frac642;
-  if (exp32 > 32767 || exp32 < -32768)
-    fcode = FC_DFP_OFLOW;
-  /* insert (optional) rounding code here */
-  if (fcode == 0)
-    putdp(dp1, frac64, exp32);
-  else
-    mathexception('f', fcode, ea);
-}
-#endif

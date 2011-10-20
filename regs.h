@@ -373,6 +373,19 @@ static inline int64_t putgr64s(int offset, int64_t val) {  \
    pointer to FR0, then use offset as an index */
 #define getfr32(offset) getgr32(FAC0+offset)
 
+/* fetch 64-bit unsigned at FP register 0 or 1
+   For FP 0, offset=0; for FP 1, offset=2 */
+static inline uint64_t getfr64(int offset) {  \
+  return (uint64_t) swap64(*(unsigned long long *)(crsl+FAC0+offset));
+}
+
+/* put 64-bit double in FP reg 0 or 1
+   For FP 0, offset=0; for FP 1, offset=2 */
+//#define putfr64(offset, val) 
+static inline double putfr64(int offset, unsigned long long val) {  \
+  *(unsigned long long *)(crsl+FAC0+offset) = swap64((val));
+}
+
 /* put 64-bit double in FP reg 0 or 1
    For FP 0, offset=0; for FP 1, offset=2 */
 //#define putfr64d(offset, val) *(double *)(crsl+FAC0+offset) = (val)
