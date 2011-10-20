@@ -4032,7 +4032,7 @@ static inline arfa(int n, int val) {
 
 /* inline function to extract shift count from an instruction */
 
-static inline unsigned short shiftcount (inst) {
+static inline unsigned short shiftcount (short inst) {
   unsigned short scount;
   scount = -inst & 077;
   if (scount == 0)
@@ -4046,7 +4046,7 @@ static inline unsigned int lrs(unsigned int val, unsigned short inst) {
   unsigned short scount;
 
   scount = shiftcount(inst);
-  if (scount <= 32) {
+  if (scount < 32) {
     EXPCL(val & (((unsigned int)0x80000000) >> (32-scount)));
     return (*(int *)&val) >> scount;
   } else if (val & 0x80000000) {

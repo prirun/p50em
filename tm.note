@@ -67,7 +67,7 @@ Very fast test of HSA (High Speed Arithmetic).  Use Ctrl-\ to kill the
 emulator and the test.  Sense switch 14 (value 4) causes the pass to
 be displayed as the test executes.
 
-$ ../src/em -boot tmrun/cput3 4n
+$ ../src/em -boot tmrun/cput3 4
 [Prime Emulator ver 104 Aug  8 2011]
 
 
