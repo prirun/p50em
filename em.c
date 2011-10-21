@@ -475,8 +475,8 @@ typedef struct {
    current ring.
 
    All brp entries are invalidated by PCL and PRTN when the ring
-   changes, ITLB, PTLB, and LIOT (STLB changes), and when OWNERL
-   changes (process exchange).
+   changes, ITLB, PTLB, and LIOT (STLB changes), when OWNERL changes
+   (process exchange), and on LPSW.
 
    Storing the access bits in the vpn allows use of of the brp cache
    for write accesses as well as read accesses.  Only bit 4 (write
@@ -1580,8 +1580,8 @@ static put64r(long long value, ea_t ea, ea_t rpring) {
   else {
     put16mem(pa, value >> 48);
     put16r((value >> 32) & 0xFFFF, INCVA(ea,1), rpring);
-    put16r((value >> 16) & 0xFFFF, INCVA(ea,1), rpring);
-    put16r(value & 0xFFFF, INCVA(ea,1), rpring);
+    put16r((value >> 16) & 0xFFFF, INCVA(ea,2), rpring);
+    put16r(value & 0xFFFF, INCVA(ea,3), rpring);
   }
 }
 
@@ -1669,11 +1669,11 @@ static int rtq(ea_t qcbea, unsigned short *qent, ea_t rp) {
   qmask = get16r(qcbea+3, rp);
   qentea = MAKEVA(qseg & 0xfff, qtop);
   if (qseg & 0x8000)        /* virtual queue */
-    *qent = get16r(qentea, rp);
+    *qent = swap16(get16r(qentea, rp));
   else {
     RESTRICTR(rp);
     /* XXX: this should probably go through mapio */
-    *qent = get16mem(qentea);
+    *qent = swap16(get16mem(qentea));
   }
   qtop = (qtop & ~qmask) | ((qtop+1) & qmask);
   put16r(qtop, qcbea, rp);
@@ -1723,7 +1723,7 @@ static int rbq(ea_t qcbea, unsigned short *qent, ea_t rp) {
   qmask = get16(qcbea+3);
   qbot = (qbot & ~qmask) | ((qbot-1) & qmask);
   qentea = MAKEVA(qseg,qbot);
-  *qent = get16(qentea);
+  *qent = swap16(get16(qentea));
   put16(qbot, qcbea+1);
   return 1;
 }
@@ -2466,28 +2466,6 @@ static inline void mathexception(unsigned char extype, unsigned short fcode, ea_
 
 #include "fp.h"
 
-static memdump(int start, int end) {
-  int ea;
-
-  if (domemdump) {
-
-    /* dump sector zero for debugging */
-
-    TRACEA("\nSector 0:\n");
-    for (ea=0; ea<01000; ea=ea+8)
-      if (MEM[ea]|MEM[ea+1]|MEM[ea+2]|MEM[ea+3]|MEM[ea+4]|MEM[ea+5]|MEM[ea+6]|MEM[ea+7])
-	TRACEA("%3o: %6o %6o %6o %6o %6o %6o %6o %6o\n", ea, MEM[ea], MEM[ea+1], MEM[ea+2], MEM[ea+3], MEM[ea+4], MEM[ea+5], MEM[ea+6], MEM[ea+7]);
-
-    /* dump main memory for debugging */
-
-    TRACEA("\nMain memory:\n");
-    for (ea=start; ea<=end; ea=ea+8)
-      if (MEM[ea]|MEM[ea+1]|MEM[ea+2]|MEM[ea+3]|MEM[ea+4]|MEM[ea+5]|MEM[ea+6]|MEM[ea+7])
-	TRACEA("%o: %6o %6o %6o %6o %6o %6o %6o %6o\n", ea, MEM[ea], MEM[ea+1], MEM[ea+2], MEM[ea+3], MEM[ea+4], MEM[ea+5], MEM[ea+6], MEM[ea+7]);
-  }
-}
-
-
 static dumpregs() {
   int rs, i;
   unsigned int val;
@@ -2504,6 +2482,8 @@ static dumpregs() {
     }
   }
 }
+
+/* XXX: doesn't handle both page map formats */
 
 static dumpsegs() {
   short seg,nsegs,i,page,segno;
@@ -2769,8 +2749,10 @@ static argt() {
   
   brsave[0] = rp >> 16;    brsave[1] = 0;
   /* set ring bits on LB and SB to get correct ring on args */
-  *(ea_t *)(brsave+2) = get32(stackfp+4) | (rp & RINGMASK32);
-  *(ea_t *)(brsave+4) = get32(stackfp+6) | (rp & RINGMASK32);
+  brsave[2] = get16(stackfp+4) | ((rp >> 16) & RINGMASK16);
+  brsave[3] = get16(stackfp+5);
+  brsave[4] = get16(stackfp+6) | ((rp >> 16) & RINGMASK16);
+  brsave[5] = get16(stackfp+7);
 
   argdisp = getcrs16(Y);
   argsleft = getcrs16(YL);
@@ -2870,9 +2852,6 @@ static pcl (ea_t ecbea) {
   pa_t pa;                    /* physical address of ecb */
   unsigned short brsave[6];   /* old PB,SB,LB */
   unsigned short utempa;
-  unsigned char tnstring[500];
-  unsigned short tnlen, tnword;
-  unsigned char tnchar;
 
 #define UNWIND_ MAKEVA(013,0106577)
 
@@ -2909,7 +2888,7 @@ static pcl (ea_t ecbea) {
   if ((pa & 01777) <= 02000 - sizeof(ecb)/sizeof(ecb[0])) {
     memcpy(ecb, MEM+pa, sizeof(ecb));
     for (i=0; i<9; i++)
-      swap16(ecb[i]);
+      ecb[i] = swap16(ecb[i]);
   } else {
     for (i=0; i<9; i++)
       ecb[i] = get16(ecbea+i);
@@ -2917,7 +2896,7 @@ static pcl (ea_t ecbea) {
 
   TRACE(T_PCL, " ecb.pb: %o/%o\n ecb.framesize: %d\n ecb.stackroot %o\n ecb.argdisp: %o\n ecb.nargs: %d\n ecb.lb: %o/%o\n ecb.keys: %o\n", ecb[0], ecb[1], ecb[2], ecb[3], ecb[4], ecb[5], ecb[6], ecb[7], ecb[8]);
 
-  newrp = *(unsigned int *)(ecb+0);
+  newrp = ecb[0]<<16 | ecb[1];
   if (access != 1)    /* not a gate, so weaken ring (outward calls) */
     newrp = newrp | (RP & RINGMASK32);
 
@@ -2999,7 +2978,7 @@ static pcl (ea_t ecbea) {
     putcrs32(SB, (stackfp & ~RINGMASK32) | (newrp & RINGMASK32));
 #endif
   TRACE(T_PCL, " new SB=%o/%o\n", getcrs16(SBH), getcrs16(SBL));
-  putcrs32(LB, *(unsigned int *)(ecb+6));
+  putcrs32(LB, (ecb[6]<<16) | ecb[7]);
   newkeys(ecb[8] & 0177770);
 
   /* update the stack free pointer; this has to wait until after all
@@ -3055,6 +3034,9 @@ static pcl (ea_t ecbea) {
 
 #if 0
     if (TRACEUSER && ((ecbea & 0xFFFFFFF) == tnou_ea || (ecbea & 0xFFFFFFF) == tnoua_ea)) {
+      unsigned char tnstring[500];
+      unsigned short tnlen, tnword;
+      unsigned char tnchar;
       ea = getcrs32(SB) + ecb[4];
       utempa = get16(get32(ea));       /* 1st arg: userid */
       if (utempa == ((getcrs16(OWNERL)>>6) & 0xff)) {
@@ -3136,6 +3118,7 @@ static void calf(ea_t ea) {
   ea_t pcbp, stackfp, csea;
   unsigned short first,next,last,this;
   unsigned short cs[6];
+  int i;
 
   pcbp = getcrs32ea(OWNER);    /* my pcb pointer */
 
@@ -3172,9 +3155,8 @@ static void calf(ea_t ea) {
   /* get the concealed stack entries and adjust the new stack frame */
 
   eap = &gvp->brp[UNBR];
-  *(unsigned int *)(cs+0) = get32r0(csea+0);
-  *(unsigned int *)(cs+2) = get32r0(csea+2);
-  *(unsigned int *)(cs+4) = get32r0(csea+4);
+  for (i=0; i<6; i++)
+    cs[i] = get16r0(csea+i);
 
   /* pop the concealed stack 
      XXX: this was after code below.  Does it matter? */
@@ -3186,10 +3168,12 @@ static void calf(ea_t ea) {
   eap = &gvp->brp[SBBR];
   stackfp = getcrs32(SB);
   put16(1, stackfp+0);                          /* flag it as CALF frame */
-  put32(*(unsigned int *)(cs+0), stackfp+2);    /* return PB */
+  put16(cs[0], stackfp+2);                      /* return PBH */
+  put16(cs[1], stackfp+3);                      /* return PBL */
   put16(cs[2], stackfp+8);                      /* return keys */
   put16(cs[3], stackfp+10);                     /* fault code */
-  put32(*(unsigned int *)(cs+4), stackfp+11);   /* fault address */
+  put16(cs[4], stackfp+11);                     /* fault addr segno */
+  put16(cs[5], stackfp+12);                     /* fault addr word */
 }
 
 
@@ -4171,7 +4155,7 @@ static inline unsigned int arr(unsigned short val, unsigned short inst) {
 
 /* math functions */
 
-static inline tcr(unsigned int un) {
+static inline unsigned int tcr(unsigned int un) {
 
   unsigned int utempl;
 
@@ -4187,7 +4171,7 @@ static inline tcr(unsigned int un) {
   return utempl;
 }
 
-static inline tch (unsigned short un) {
+static inline unsigned short tch (unsigned short un) {
 
   unsigned short utemp;
 
@@ -4948,8 +4932,6 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
     newkeys(rvec[6]);
   }
   RPL = rvec[2];
-
-  memdump(rvec[0], rvec[1]);
 
   /* initialize the timer stuff */
 
@@ -6201,7 +6183,7 @@ d_stpm:  /* 000024 */
 	val = cpuid;
       else
 	val = 0;
-      put16(val, ea);
+      put16(val, ea+i);
     }
     goto fetch;
   }
@@ -6351,7 +6333,6 @@ d_cea:  /* 000111 */
 d_hlt:  /* 000000 */
   TRACE(T_FLOW, " HLT\n");
   RESTRICT();
-  memdump(0,0xFFFF);
   if (bootarg) {
     printf("\nCPU halt, instruction #%lu at %o/%o %s: %o %o\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d", gvp->instcount, RPH, RPL, searchloadmap(gvp->prevpc,' '), get16t(gvp->prevpc), get16t(gvp->prevpc+1), getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X));
     while (1) {
@@ -6412,7 +6393,7 @@ d_inkr:  /* 000043 */
   putcrs16(A, (getcrs16(KEYS) & 0xFF00) | (getcrs16(VSC) & 0xFF));
   goto fetch;
 
- d_otkr:  /* 000405 */
+d_otkr:  /* 000405 */
   TRACE(T_FLOW, " OTKr\n");
   newkeys((getcrs16(A) & 0xFF00) | (getcrs16(KEYS) & 0xFF));
   putcrs16(VSC, (getcrs16(VSC) & 0xFF00) | (getcrs16(A) & 0xFF));
@@ -6839,7 +6820,6 @@ d_caz:  /* 0140214 */
 
 
 d_irx:  /* 0140114 */
-
   TRACE(T_FLOW, " IRX\n");
   putcrs16(X, getcrs16(X) + 1);
   if (getcrs16(X) == 0) 
@@ -7276,7 +7256,7 @@ d_quii:
 d_rtq:  /* 0141714 */
   TRACE(T_FLOW, " RTQ\n");
   ea = apea(NULL);
-  if (rtq(ea, crs+A, RP))
+  if (rtq(ea, crs+A, RP))   /* does swap on store */
     CLEAREQ;
   else
     SETEQ;
@@ -7285,7 +7265,7 @@ d_rtq:  /* 0141714 */
 d_rbq:  /* 0141715 */
   TRACE(T_FLOW, " RBQ\n");
   ea = apea(NULL);
-  if (rbq(ea, crs+A, RP))
+  if (rbq(ea, crs+A, RP))  /* does swap on store */
     CLEAREQ;
   else
     SETEQ;
@@ -8322,7 +8302,7 @@ dfcmdr:
 
     case 0053:
       TRACE(T_FLOW, " PIDH\n");
-      putgr32s(dr, *(short *)(crsl+dr));
+      putgr32s(dr, ((int)getgr32(dr)) >> 16);
       break;
 
     case 0050:

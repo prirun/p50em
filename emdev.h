@@ -1197,13 +1197,13 @@ int devmt (int class, int func, int device) {
 	  if (dmxtotnw+dmxnw > MAXTAPEWORDS)
 	    fatal("Tape write is too big");
 	  for (i=0; i < dmxnw; i++) {
-	    ioword = get16io(dmxaddr+i);
 #if 0
+	    ioword = get16io(dmxaddr+i);
 	    if (i%10 == 0)
 	      TRACE(T_TIO, "\n %04d: ", i);
 	    TRACE(T_TIO, " %03o %03o", (unsigned)ioword>>8, ioword&0xff);
 #endif
-	    *iobufp++ = ioword;
+	    *iobufp++ = MEM[mapio(dmxaddr+i)];  /* Prime->Prime: no swap */
 	  }
 	  TRACE(T_TIO, "\n");
 	  dmxtotnw = dmxtotnw + dmxnw;
@@ -1211,13 +1211,13 @@ int devmt (int class, int func, int device) {
 	  if (dmxnw > dmxtotnw)
 	    dmxnw = dmxtotnw;
 	  for (i=0; i < dmxnw; i++) {
-	    ioword = *iobufp++;
 #if 0
+	    ioword = *iobufp++;
 	    if (i%10 == 0)
 	      TRACE(T_TIO, "\n %04d: ", i);
 	    TRACE(T_TIO, " %03o %03o", (unsigned)ioword>>8, ioword&0xff);
 #endif
-	    put16io(ioword, dmxaddr+i);
+	    MEM[mapio(dmxaddr+i)] = *iobufp++;  /* Prime->Prime: no swap */
 	  }
 	  TRACE(T_TIO, "\n");
 	  dmxtotnw = dmxtotnw - dmxnw;
@@ -2011,13 +2011,13 @@ int devdisk (int class, int func, int device) {
 	    dmaaddr = ((getar16(REGDMX16+dmareg) & 3)<<16) | getar16(REGDMX16+dmareg+1);
 	    TRACE(T_INST|T_DIO,  " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dc[dx].dmanch, dc[dx].dmachan, swap16(regs.sym.regdmx[dmareg]), dc[dx].dmachan+1, dmaaddr, dmanw);
 	    
-	    if (order == 5) {
-	      if (getcrs16(MODALS) & 020)
+	    if (order == 5) {    /* read */
+	      if (getcrs16(MODALS) & 020)  /* mapped read */
 		if ((dmaaddr & 01777) || dmanw > 1024)
 		  iobufp = iobuf;
 		else
 		  iobufp = MEM+mapio(dmaaddr);
-	      else
+	      else                         /* physical read */
 		iobufp = MEM+dmaaddr;
 	      if (hashp != NULL) {
 		memcpy((char *)iobufp, hashp, dmanw*2);
@@ -2032,12 +2032,12 @@ int devdisk (int class, int func, int device) {
 	      }
 	      if (iobufp == iobuf)
 		for (i=0; i<dmanw; i++)
-		  put16io(iobuf[i], dmaaddr+i);
-	    } else {
-	      if (getcrs16(MODALS) & 020) {
+		  MEM[mapio(dmaaddr+i)] = iobuf[i];  /* Prime->Prime: no swap */
+	    } else {         /* disk write */
+	      if (getcrs16(MODALS) & 020) {  /* mapped write */
 		iobufp = iobuf;
 		for (i=0; i<dmanw; i++)
-		  iobuf[i] = get16io(dmaaddr+i);
+		  iobuf[i] = MEM[mapio(dmaaddr+i)];  /* Prime->Prime: no swap */
 	      } else
 		iobufp = MEM+dmaaddr;
 	      if (hashp != NULL) {
