@@ -3,7 +3,7 @@
 
 REV=${shell hg id -n}
 
-.PHONY:	em debug trace vfy fixed hobby dongle lmserver magrst parts smad smag mtread mtwrite
+.PHONY:	em emi debug trace vfy vfyi fixed hobby dongle lmserver magrst parts smad smag mtread mtwrite
 
 em:     # production
 
@@ -14,7 +14,7 @@ em:     # production
 
 emi:    # production (Intel)
 
-	cc -arch i386 -DREV=\"${REV}\" -DNOREGS -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch i386 -o em em.o ../dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i686 -DREV=\"${REV}\" -DNOREGS -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch i386 -o em em.o ../dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	strip em
 	rm em.o
 
@@ -38,6 +38,11 @@ tracei:  # tracing + gdb (Intel)
 vfy:  # prod + tracing to verify em changes
 
 	cc -arch ppc -DREV=\"\" -O -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+
+
+vfyi:  # prod + tracing to verify em changes
+
+	cc -arch i686 -DREV=\"\" -O -DNOREGS -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/Universal/api;g++ -arch i686 -o em em.o ../dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
 fixed:  # fixed clock rate, gdb

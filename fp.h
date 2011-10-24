@@ -35,8 +35,6 @@ http://tima-cmp.imag.fr/~guyot/Cours/Oparithm/english/Op_Ar2.htm
 
 #include <float.h>
 
-#define GETFRAC(d) (*(long long *)&(d) & 0xFFFFFFFFFFFF0000LL)
-
 /* getdp unpacks a Prime DPFP into 48-bit sign + mantissa (left
    justified in 64 bits) and a 32-bit signed exponent */
 

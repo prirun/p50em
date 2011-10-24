@@ -205,6 +205,8 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
    - Prime only tested 32 bits of the fraction, even for double
    precision.  It expected DP floats to be normalized, or mostly
    normalized.
+
+   XXX: #define SETCC_F SETCC_32(getcrs32(FLTH))
 */
   
 #define SETCC_F \
@@ -1330,7 +1332,7 @@ static unsigned int get32r(ea_t ea, ea_t rpring) {
 static long long get64r(ea_t ea, ea_t rpring) {
   pa_t pa, pa2;
   unsigned short access;
-  unsigned long long m;
+  long long m;
 
   /* check for live register access */
 
@@ -1354,13 +1356,13 @@ static long long get64r(ea_t ea, ea_t rpring) {
   case 2:
     pa2 = mapva(INCVA(ea,2), rpring, RACC, &access);
     m = (((long long) get32mem(pa)) << 32) +
-      ((long long) get32mem(pa2+2));
+      get32mem(pa2);
     break;
   case 3:
     pa2 = mapva(INCVA(ea,1), rpring, RACC, &access);
     m = (((long long) get16mem(pa)) << 48) +
-      (((long long) get32mem(pa2+1))<< 16) +
-      get16mem(pa2);
+      (((long long) get32mem(pa2)) << 16) +
+      get16mem(pa2+2);
     break;
   default:
     fatal("Page cross error in get64r");
@@ -3024,6 +3026,9 @@ static pcl (ea_t ecbea) {
   if (ecb[5] > 0) {
     putcrs16(Y, ecb[4]);
     putcrs16(YL, ecb[5]);
+#if 0
+    putcrs16(X, 0);
+#endif
     putcrs16(XL, 0);
     argt();
 
@@ -5231,7 +5236,11 @@ xec:
     gvp->traceflags = 0;
 #endif
 
+#if 0
   TRACE(T_FLOW, "\n			#%lu [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X=%o/%d Y=%o/%d%s%s%s%s K=%o M=%o\n", gvp->instcount, searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16s(TIMERH), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS));
+#else
+  TRACE(T_FLOW, "\n			[%s %o] SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X=%o/%d Y=%o/%d%s%s%s%s K=%o M=%o\n", searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS) & 0177437);
+#endif
 
   /* begin instruction decode: generic? */
 
@@ -5481,7 +5490,7 @@ d_tka:  /* 001005 */
 
 d_tak:  /* 001015 */
   TRACE(T_FLOW, " TAK\n");
-  newkeys(getcrs16(A) & 0177770);
+  newkeys(getcrs16(A) & 0177774);
   goto fetch;
 
 d_nop:  /* 000001 */
@@ -6172,19 +6181,13 @@ d_stpm:  /* 000024 */
   {
     ea_t ea;
     int i;
-    unsigned short val;
-    unsigned short stpm[8];
 
     TRACE(T_FLOW, " STPM\n", inst);
     RESTRICT();
     ea = getcrs32(XB);
-    for (i=0; i<8; i++) {
-      if (i==1)
-	val = cpuid;
-      else
-	val = 0;
-      put16(val, ea+i);
-    }
+    for (i=0; i<8; i++)
+      put16(0, ea+i);
+    put16(cpuid, ea+1);
     goto fetch;
   }
 
@@ -7990,7 +7993,7 @@ dfcmdr:
 	int oflow;
 	TRACE(T_FLOW, " FRN\n");
 	CLEARC;
-	putfr64(2, frn(getfr64(dr), &oflow));
+	putfr64(dr, frn(getfr64(dr), &oflow));
 	if (oflow)
 	  mathexception('f', FC_DFP_OFLOW, 0);
       }
@@ -8700,7 +8703,7 @@ dfcmdr:
       CLEARC;
       if (*(int *)&ea >= 0) {
 	if (getcrs16(KEYS) & 010)
-	  putfr64(2, frn(getfr64(2), &oflow));  /* sing prec can't overflow */
+	  putfr64(dr, frn(getfr64(dr), &oflow));  /* sing prec can't overflow */
 	if ((getgr32(FAC0+dr+1) & 0xFF00) == 0)
 	  put32((getfr32(dr) & 0xFFFFFF00) | (getgr32(FAC0+dr+1) & 0xFF), ea);
 	else
@@ -9133,7 +9136,11 @@ dfcmdr:
     case 1:
 imodepcl:
       stopwatch_push(&sw_pcl);
+#if 0
       TRACE(T_FLOW|T_PCL, "#%lu %o/%0o: PCL %o/%o %s\n", gvp->instcount, RPH, RPL-2, ea>>16, ea&0xFFFF, searchloadmap(ea, 'e'));
+#else
+      TRACE(T_FLOW|T_PCL, "%o/%0o: PCL %o/%o %s\n", RPH, RPL-2, ea>>16, ea&0xFFFF, searchloadmap(ea, 'e'));
+#endif
 #ifndef NOTRACE
       if (gvp->numtraceprocs > 0 && TRACEUSER)
 	for (i=0; i<gvp->numtraceprocs; i++)
