@@ -1890,7 +1890,7 @@ static void fatal(char *msg) {
   printf("Fatal error");
   if (msg)
     printf(": %s", msg);
-  printf("\ninstruction #%lu at %o/%o %s: %o %o\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d\nowner=%o %s, keys=%o, modals=%o\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), get16t(gvp->prevpc), get16t(gvp->prevpc+1), getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X), getcrs16(OWNERL), searchloadmap(getcrs32(OWNER),' '), getcrs16(KEYS), getcrs16(MODALS));
+  printf("\ninstruction #%lu at %o/%o %s\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d\nowner=%o %s, keys=%o, modals=%o\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X), getcrs16(OWNERL), searchloadmap(getcrs32(OWNER),' '), getcrs16(KEYS), getcrs16(MODALS));
   
   /* dump concealed stack entries */
 
