@@ -733,7 +733,7 @@ pncrecv1(int nodeid) {
     if (!pncread(nodeid, 2 - ni[nodeid].rcvlen))
       return 0;
   }
-  pktlen = *(short *)(ni[nodeid].rcvpkt);
+  pktlen = swap16(*(short *)(ni[nodeid].rcvpkt));
   nw = (pktlen-4)/2;
   TRACE(T_RIO, " pncrecv1: have %d of %d bytes\n", ni[nodeid].rcvlen, pktlen);
   if (nw > rcv.dmanw) {
@@ -745,8 +745,8 @@ pncrecv1(int nodeid) {
   }
   if (!pncread(nodeid, pktlen - ni[nodeid].rcvlen))
     return 0;
-  if (pktlen != *(short *)(ni[nodeid].rcvpkt+pktlen-2)) {
-    fprintf(stderr, "devpnc: node %d, pktlen mismatch: %d != %d\n", nodeid, pktlen, *(short *)(ni[nodeid].rcvpkt+pktlen-2));
+  if (pktlen != swap16(*(short *)(ni[nodeid].rcvpkt+pktlen-2))) {
+    fprintf(stderr, "devpnc: node %d, pktlen mismatch: %d != %d\n", nodeid, pktlen, swap16(*(short *)(ni[nodeid].rcvpkt+pktlen-2)));
     pncdisc(nodeid);
     return 0;
   }
@@ -758,9 +758,10 @@ pncrecv1(int nodeid) {
 
   /* modify to/from word to allow me to be in multiple rings */
   
-  *(unsigned short *)(ni[nodeid].rcvpkt+2) = (myid<<8) | nodeid;
+  ni[nodeid].rcvpkt[2] = myid;
+  ni[nodeid].rcvpkt[3] = nodeid;    
   memcpy(rcv.memp, ni[nodeid].rcvpkt+2, nw*2);
-  putar16(REGDMX16 + rcv.dmareg, getar16(REGDMX16 + rcv.dmareg) + nw<<4);  /* bump recv count */
+  putar16(REGDMX16 + rcv.dmareg, getar16(REGDMX16 + rcv.dmareg) + (nw<<4));  /* bump recv count */
   putar16(REGDMX16 + rcv.dmareg+1, getar16(REGDMX16 + rcv.dmareg+1) + nw); /* and address */
   pncstat |= PNCNSRCVINT;                /* set recv interrupt bit */
   rcv.state = PNCBSIDLE;                 /* no longer ready to recv */
@@ -1147,14 +1148,14 @@ int devpnc (int class, int func, int device) {
       /* read the first word, the to and from node id's */
 
       pncinitdma(&xmit, "xmit");
-      dmaword = *xmit.memp;
+      dmaword = swap16(*xmit.memp);
       xmit.toid = dmaword >> 8;
       xmit.fromid = dmaword & 0xFF;
       TRACE(T_INST|T_RIO, " xmit: toid=%d, fromid=%d, myid=%d\n", xmit.toid, xmit.fromid, myid);
 
       /* bump the DMA registers to show the transfer */
 
-      putar16(REGDMX16+xmit.dmareg, getar16(REGDMX16+xmit.dmareg) + xmit.dmanw<<4);   /* bump xmit count */
+      putar16(REGDMX16+xmit.dmareg, getar16(REGDMX16+xmit.dmareg) + (xmit.dmanw<<4));   /* bump xmit count */
       putar16(REGDMX16+xmit.dmareg+1, getar16(REGDMX16+xmit.dmareg+1) + xmit.dmanw);  /* and address */
 
       /* the Primenet startup code sends a single ring packet from me
@@ -1172,7 +1173,7 @@ int devpnc (int class, int func, int device) {
 	if (rcv.state == PNCBSRDY && rcv.dmanw >= xmit.dmanw) {
 	  TRACE(T_INST|T_RIO, " xmit: loopback, rcv.memp=%o/%o\n", ((int)(rcv.memp))>>16, ((int)(rcv.memp))&0xFFFF);
 	  memcpy(rcv.memp, xmit.memp, xmit.dmanw*2);
-	  putar16(REGDMX16 + rcv.dmareg, getar16(REGDMX16 + rcv.dmareg) + xmit.dmanw<<4);  /* bump recv count */
+	  putar16(REGDMX16 + rcv.dmareg, getar16(REGDMX16 + rcv.dmareg) + (xmit.dmanw<<4));  /* bump recv count */
 	  putar16(REGDMX16 + rcv.dmareg+1, getar16(REGDMX16 + rcv.dmareg+1) + xmit.dmanw); /* and address */
 	  pncstat |= PNCNSRCVINT;             /* set recv interrupt */
 	  rcv.state = PNCBSIDLE;              /* no longer ready to recv */
@@ -1184,9 +1185,9 @@ int devpnc (int class, int func, int device) {
 	/* add leading and trailing byte counts to the packet */
 
 	len = xmit.dmanw*2 + 4;
-	*(short *)(xmit.iobuf+0) = len;
+	*(short *)(xmit.iobuf+0) = swap16(len);
 	memcpy(xmit.iobuf+2, xmit.memp, xmit.dmanw*2);
-	*(short *)(xmit.iobuf+2+xmit.dmanw*2) = len;
+	*(short *)(xmit.iobuf+2+xmit.dmanw*2) = swap16(len);
 
 	/* send packet, set transmit interrupt, return */
 
