@@ -664,38 +664,41 @@ readasr:
    These names are usually just links to the actual tape file.
 
    Tape status word bits (MSB to LSB):
-    1 = Vertical Parity Error
-    2 = Runaway
-    3 = CRC Error
-    4 = LRCC Error
-    5 = False Gap or Insufficient DMX Range
-    6 = Uncorrectable Read Error
-    7 = Raw Erorr
-    8 = Illegal Command
-    9 = Selected Tape Ready (online and not rewinding)
-   10 = Selected Tape Online
-   11 = Selected Tape is at End Of Tape (EOT)
-   12 = Selected Tape is Rewinding
-   13 = Selected Tape is at Beginning Of Tape (BOT)
-   14 = Selected Tape is Write Protected
-   15 = DMX Overrun
-   16 = Rewind Interrupt
+    1 0x8000 = Vertical Parity Error
+    2 0x4000 = Runaway
+    3 0x2000 = CRC Error
+    4 0x1000 = LRCC Error
+    5 0x0800 = False Gap or Insufficient DMX Range
+    6 0x0400 = Uncorrectable Read Error
+    7 0x0200 = Raw Error
+    8 0x0100 = Illegal Command (XXX: File Mark too?)
+    9 0x0080 = Selected Tape Ready (online and not rewinding)
+   10 0x0040 = Selected Tape Online
+   11 0x0020 = Selected Tape is at End Of Tape (EOT)
+   12 0x0010 = Selected Tape is Rewinding
+   13 0x0008 = Selected Tape is at Beginning Of Tape (BOT)
+   14 0x0004 = Selected Tape is Write Protected
+   15 0x0002 = DMX Overrun
+   16 0x0001 = Rewind Interrupt
 
    OTA '01 Motion control A-register bits:
-    1 = Select Tape Only
-    2 = 0 for File operation, 1 for Record operation
-    3 = 1 for Space operation
-    4 = 1 for Read & Correct
-    5 = 1 for 7-track
-    6 = 1 for 9-track
-    7 = unused
-    8 = 1 for 2 chars/word, 0 for 1 char/word (not supported here)
-    9-11 = motion:  100 = Forward,  010 = Reverse,  001 = Rewind
-    12 = 1 for Write
-    13 = 1 for Unit 0
-    14 = 1 for Unit 1
-    15 = 1 for Unit 2
-    16 = 1 for Unit 3
+    1 0x8000 = Select Tape Only
+    2 0x4000 = 0 for File operation, 1 for Record operation
+    3 0x2000 = 1 for Space operation
+    4 0x1000 = 1 for Read & Correct
+    5  0x800 = 1 for 7-track
+    6  0x400 = 1 for 9-track
+    7  0x200 = unused
+    8  0x100 = 1 for 2 chars/word, 0 for 1 char/word (not supported here)
+    9-11 = motion:
+        0x80 = Forward
+        0x40 = Reverse
+        0x20 = Rewind
+    12  0x10 = 1 for Write
+    13   0x8 = Unit 0
+    14   0x4 = Unit 1
+    15   0x2 = Unit 2
+    16   0x1 = Unit 3
 
     If the tape device file is empty, then BOT and EOT occur together.
     But, this doesn't happen with real magtapes, and some Prime software
@@ -708,7 +711,7 @@ int mtread (int fd, unsigned short *iobuf, int nw, int cmd, int *mtstat) {
   unsigned char buf[4];
   int n,reclen,reclen2,bytestoread;
 
-  TRACE(T_TIO, " mtread, nw=%d, initial tape status is 0x%04x\n", nw, *mtstat);
+  TRACE(T_TIO, " mtread, fpos=%u, nw=%d, cmd=0x%04x, status is 0x%04x\n", (unsigned int) lseek(fd, 0, SEEK_CUR), nw, cmd, *mtstat);
   if (cmd & 0x80) {                 /* forward motion */
     if (*mtstat & 0x20)             /* already at EOT, can't read */
       return 0;
@@ -822,6 +825,17 @@ fmterr:
       *mtstat = (*mtstat | 8) & ~0x20;   /* at BOT, clear EOT */
       return 0;
     }
+
+    /* if we were at EOT, clear EOT; next read will get EOT again */
+
+    if (*mtstat & 0x20) {
+      *mtstat &= ~0x20;
+      return 0;
+    }
+
+    /* now we're not at EOT */
+
+    *mtstat &= ~0x20;
 
     /* backup 4 bytes, read reclen */
 
