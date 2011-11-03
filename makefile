@@ -3,7 +3,7 @@
 
 REV=${shell hg id -n}
 
-.PHONY:	em emp debug debugp trace tracep vfy vfyp fixed fixedp hobby hobbyp dongle lmserver magrst parts smad smag mtread mtwrite
+.PHONY:	broken em emp debug debugp trace tracep vfy vfyp fixed fixedp hobby hobbyp dongle lmserver magrst parts smad smag mtread mtwrite
 
 em:     # production (Intel)
 
@@ -113,4 +113,21 @@ smad: # Unix utility to decode Prime pdev
 smag: # Unix create Prime pdev
 
 	cc -arch ppc -DREV=\"${REV}\" -o smag smag.c
+
+broken: # production (Intel)
+
+	cc -arch i686 -O -c broken.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/Universal/api;g++ -arch i686 -o broken broken.o ../dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+
+brokenp: # production (Intel)
+
+	cc -arch ppc -O -c broken.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/Universal/api;g++ -arch ppc -o brokenp broken.o ../dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+
+brokeno: # production (Intel)
+
+	cc -arch ppc -O -c broken.c -fobey-inline -mdynamic-no-pic -I../dongle/mx.orig/ppc/api;g++ -arch ppc -o brokeno broken.o ../dongle/mx.orig/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+
+brokenf: # production (Intel)
+
+	cc -arch i686 -O -c broken.c -I../dongle/mx.fix/Universal/api;g++ -arch i686 -o brokenf broken.o ../dongle/mx.fix/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+
 
