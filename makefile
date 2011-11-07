@@ -7,59 +7,59 @@ REV=${shell hg id -n}
 
 em:     # production (Intel)
 
-	cc -arch i686 -DREV=\"${REV}\" -DNOREGS -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/Universal/api;g++ -arch i686 -o em em.o ../dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i686 -DREV=\"${REV}\" -DNOREGS -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch i686 -o em em.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	strip em
 	rm em.o
 
 
 emp:    # production (PowerPC)
 
-	cc -arch ppc -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	strip em
 	rm em.o
 
 
 debug:   # gdb (Intel)
 
-	cc -arch i686 -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOTRACE -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/Universal/api;g++ -arch i686 -o em em.o ../dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i686 -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOTRACE -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch i686 -o em em.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 
 debugp:  # gdb (PowerPC)
 
-	cc -arch ppc -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOTRACE -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOTRACE -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 
 trace:   # tracing + gdb (Intel)
 
-	cc -arch i686 -DREV=\"${REV}\" -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/Universal/api;g++ -arch i686 -o em em.o ../dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i686 -DREV=\"${REV}\" -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch i686 -o em em.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
 tracep: # tracing + gdb (PowerPC)
 
-	cc -arch ppc -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
 vfy:   # prod + tracing to verify em changes (Intel)
 
-	cc -arch i686 -DREV=\"\" -O -DNOREGS -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/Universal/api;g++ -arch i686 -o em em.o ../dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i686 -DREV=\"\" -O -DNOREGS -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch i686 -o em em.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
 vfyp: # prod + tracing to verify em changes (PowerPC)
 
-	cc -arch ppc -DREV=\"\" -O -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DREV=\"\" -O -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
 fixed:  # fixed clock rate, gdb (Intel)
 
-	cc -arch i686 -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/Universal/api;g++ -arch i686 -o em em.o ../dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i686 -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch i686 -o em em.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 
 fixedp: # fixed clock rate, gdb (PowerPC)
 
-	cc -arch ppc -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/ppc/api;g++ -arch ppc -o em em.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 
@@ -77,13 +77,13 @@ hobbyp: # hobby (limited: no amlc, 1 disk drive up to 160MB, no PNC) (PowerPC)
 
 dongle: # utility to program a dongle
 
-	cc -arch ppc -DREV=\"${REV}\" -c dongle.c -I../dongle/mx/ppc/api;g++ -arch ppc -o dongle dongle.o ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DREV=\"${REV}\" -c dongle.c -Idongle/mx/ppc/api;g++ -arch ppc -o dongle dongle.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm dongle.o
 
 
 lmserver: # license server
 
-	cc -arch ppc -DREV=\"${REV}\" -c lmserver.c -I../dongle/mx/ppc/api;g++ -arch ppc lmserver.o -o lmserver ../dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DREV=\"${REV}\" -c lmserver.c -Idongle/mx/ppc/api;g++ -arch ppc lmserver.o -o lmserver dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm lmserver.o
 
 mtread: # Dump a tape to a .tap disk file (Linux only)
@@ -116,18 +116,18 @@ smag: # Unix create Prime pdev
 
 broken: # production (Intel)
 
-	cc -arch i686 -O -c broken.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/Universal/api;g++ -arch i686 -o broken broken.o ../dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i686 -O -c broken.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch i686 -o broken broken.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 brokenp: # production (Intel)
 
-	cc -arch ppc -O -c broken.c -fobey-inline -mdynamic-no-pic -I../dongle/mx/Universal/api;g++ -arch ppc -o brokenp broken.o ../dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -O -c broken.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch ppc -o brokenp broken.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 brokeno: # production (Intel)
 
-	cc -arch ppc -O -c broken.c -fobey-inline -mdynamic-no-pic -I../dongle/mx.orig/ppc/api;g++ -arch ppc -o brokeno broken.o ../dongle/mx.orig/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -O -c broken.c -fobey-inline -mdynamic-no-pic -Idongle/mx.orig/ppc/api;g++ -arch ppc -o brokeno broken.o dongle/mx.orig/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 brokenf: # production (Intel)
 
-	cc -arch i686 -O -c broken.c -I../dongle/mx.fix/Universal/api;g++ -arch i686 -o brokenf broken.o ../dongle/mx.fix/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i686 -O -c broken.c -Idongle/mx.fix/Universal/api;g++ -arch i686 -o brokenf broken.o dongle/mx.fix/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
