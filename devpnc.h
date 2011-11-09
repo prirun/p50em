@@ -819,6 +819,9 @@ int devpnc (int class, int func, int device) {
 
   switch (class) {
 
+  case -2:
+    break;
+
   case -1:
     if (nport <= 0) {
       fprintf(stderr, "-nport is zero, PNC not started\n");
