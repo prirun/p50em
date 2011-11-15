@@ -507,13 +507,13 @@ readasr:
 	    goto readasr;
 	  }
 	  xoff = 0;                /* enable output if any characters typed */
+	  if (ch != 015)           /* log all except CR */
+	    fputc(ch, conslog);
 	}
 	if (func >= 010)
 	  putcrs16(A, 0);
 	putcrs16(A, getcrs16(A) | ch);
 	TRACE(T_INST, " character read=%o: %c\n", getcrs16(A), getcrs16(A) & 0x7f);
-	if (!(terminfo.c_lflag & ECHO) && ch != 015) /* log all except CR */
-	  fputc(ch, conslog);
 	fflush(conslog);         /* immediately flush when typing */
 #ifndef NOTRACE
 	fflush(gvp->tracefile);
