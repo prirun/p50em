@@ -1,6 +1,6 @@
   /* static structure for disk file suffixes and config data */
 
-#ifdef HOBBY
+#ifdef DEMO
 #define MAXDRIVES 1
 #define MAXCTRL 1     /* 1 controller supported at device address '26 */
 
@@ -22,7 +22,12 @@
     12, "120M",  8,   7, 1020,   /* MODEL_4715 */
 };
 
-  static int geomcksum = 359381910;
+#ifdef __LITTLE_ENDIAN__
+  static int geomcksum = 0x15488c73;
+#else
+  static int geomcksum = 0x156bbb96;
+#endif
+
 #else
 
 #define NUMGEOM 25

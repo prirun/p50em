@@ -493,21 +493,21 @@ readasr:
 	}
 #endif
 	
-	/* do xon/xoff processing here, because if Unix does it, the
-	   emulator might block.  It would be nice to pass these onto
-	   Primos so that Emacs could use them, but at older revs, the
-	   system console didn't support xon/xoff.  If they are passed
-	   on, then the next command usually fails because the flow
-	   control characters are stored in the command line. */
+	/* if doing local echo, do xon/xoff processing here.  If Unix
+	   does it, the emulator might block on a console write.  If
+	   the console is running full-duplex (no local echo), we can
+	   pass xon & xoff onto Primos */
 
-	if (ch == '') {
-	  xoff = 1;
-	  goto readasr;
-	} else if (ch == '') {
-	  xoff = 0;
-	  goto readasr;
+	if (terminfo.c_lflag & ECHO) {
+	  if (ch == '') {
+	    xoff = 1;
+	    goto readasr;
+	  } else if (ch == '') {
+	    xoff = 0;
+	    goto readasr;
+	  }
+	  xoff = 0;                /* enable output if any characters typed */
 	}
-	xoff = 0;                /* enable output if any characters typed */
 	if (func >= 010)
 	  putcrs16(A, 0);
 	putcrs16(A, getcrs16(A) | ch);
@@ -942,7 +942,7 @@ int devmt (int class, int func, int device) {
   unsigned short dmxreg;                /* DMA/C register address */
   short dmxnch;                         /* number of DMX channels - 1 */
   unsigned int dmxaddr;
-  unsigned long dmcpair;
+  unsigned int dmcpair;
   short dmxnw, dmxtotnw;
   int i,n;
   char reclen[4];
@@ -1776,7 +1776,7 @@ int devdisk (int class, int func, int device) {
 
   switch (device) {
   case 026: dx = 0; break;
-#ifndef HOBBY
+#ifndef DEMO
   case 027: dx = 1; break;
   case 022: dx = 2; break;
   case 023: dx = 3; break;
@@ -1803,7 +1803,7 @@ int devdisk (int class, int func, int device) {
     dc[dx].state = S_HALT;
     dc[dx].status = 0100000;
     dc[dx].usel = -1;
-#ifdef HOBBY
+#ifdef DEMO
     if (geomcksum != geomhash((char *)geom, sizeof(geom)))
       RP=MAKEVA(01000,0);
 #endif
@@ -2106,7 +2106,7 @@ int devdisk (int class, int func, int device) {
 	  break;
 	}
 	if (u == 1) u = 0;
-#ifndef HOBBY
+#ifndef DEMO
 	else if (u == 2) u = 1;
 	else if (u == 4) u = 2;
 	else if (u == 8) u = 3;

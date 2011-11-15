@@ -200,8 +200,6 @@
 
 */
 
-#ifndef HOBBY
-
 /* PNC poll rate in ms, mostly for connecting to new nodes */
 
 #define PNCPOLL 1000
@@ -266,7 +264,12 @@
 #define MAXPNCBYTES MAXPNCWORDS*2     /* same in bytes */
 #define MAXPKTBYTES (MAXPNCBYTES+4)   /* adds 16-bit length word to each end */
 
-#define MAXNODEID 254        /* 0 is a dummy, 255 is broadcast */
+#ifdef DEMO
+  #define MAXNODEID 2        /* 0 is a dummy, 255 is broadcast */
+#else
+  #define MAXNODEID 254      /* 0 is a dummy, 255 is broadcast */
+#endif
+
 #define MAXHOSTLEN 64        /* max length of remote host name */
 #define MAXUIDLEN 16         /* max length of unique id/password */
 
@@ -1254,9 +1257,3 @@ intrexit:
     fatal("Bad func in devpcn");
   }
 }
-
-#else
-int devpnc (int class, int func, int device) {
-  return -1;
-}
-#endif

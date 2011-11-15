@@ -3,7 +3,7 @@
 
 REV=${shell hg id -n}
 
-.PHONY:	broken em emp debug debugp trace tracep vfy vfyp fixed fixedp hobby hobbyp dongle lmserver magrst parts smad smag mtread mtwrite
+.PHONY:	broken em emp debug debugp trace tracep vfy vfyp fixed fixedp demo demop dongle lmserver magrst parts smad smag mtread mtwrite
 
 em:     # production (Intel)
 
@@ -63,15 +63,15 @@ fixedp: # fixed clock rate, gdb (PowerPC)
 	rm em.o
 
 
-hobby:  # hobby (limited: no amlc, 1 disk drive up to 160MB, no PNC) (Intel)
+demo:  # demo (limited: 1-2 amlc, 1 disk drive up to 160MB, one PNC node) (Intel)
 
-	cc -arch i686 -DREV=\"${REV}\" -DNOREGS -DHOBBY -DNOTRACE -DFAST -O em.c -fobey-inline -mdynamic-no-pic -o em
+	cc -DREV=\"${REV}\" -DNOREGS -DDEMO -DNOTRACE -DFAST -O em.c -fobey-inline -mdynamic-no-pic -o em
 	strip em
 
 
-hobbyp: # hobby (limited: no amlc, 1 disk drive up to 160MB, no PNC) (PowerPC)
+demop: # demo (PowerPC)
 
-	cc -arch ppc -DREV=\"${REV}\" -DHOBBY -DNOTRACE -DFAST -O em.c -fobey-inline -mdynamic-no-pic -o em
+	cc -mmacosx-version-min=10.4 -fno-stack-protector -arch ppc -DREV=\"${REV}\" -DNOREGS -DDEMO -DNOTRACE -DFAST -O em.c -fobey-inline -mdynamic-no-pic -o em
 	strip em
 
 

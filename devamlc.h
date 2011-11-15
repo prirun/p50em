@@ -1,4 +1,3 @@
-#ifndef HOBBY
 /* 
   Implements the AMLC subsystem for Primos.  In earlier versions
   (r186), a more hardware-centric implementation was used that closely
@@ -162,8 +161,15 @@ AMLC status word (from AMLCT5):
 
 int devamlc (int class, int func, int device) {
 
-#define MAXLINES 128
-#define MAXBOARDS 8
+#ifdef DEMO
+  #define AMLCLINESPERBOARD 1
+  #define MAXLINES 1
+  #define MAXBOARDS 1
+#else
+  #define AMLCLINESPERBOARD 16
+  #define MAXLINES 128
+  #define MAXBOARDS 8
+#endif
 
   /* check for 1 new connection every .1 seconds */
 
@@ -276,6 +282,7 @@ int devamlc (int class, int func, int device) {
 
   switch (device) {
   case 054: dx = 0; break;
+#ifndef DEMO
   case 053: dx = 1; break;
   case 052: dx = 2; break;
   case 035: dx = 3; break;
@@ -283,6 +290,7 @@ int devamlc (int class, int func, int device) {
   case 016: dx = 5; break;
   case 017: dx = 6; break;
   case 032: dx = 7; break;
+#endif
   default:
     fprintf(stderr, "devamlc: non-AMLC device id '%o ignored\n", device);
     return -1;
@@ -843,7 +851,7 @@ int devamlc (int class, int func, int device) {
 	allbusy = 1;
 	for (j=!haveob; j<2; j++)
 	  for (i=0; dc[i].deviceid && i<MAXBOARDS; i++)
-	    for (lx=0; lx<16; lx++) {
+	    for (lx=0; lx<AMLCLINESPERBOARD; lx++) {
 	      /* NOTE: don't allow connections on clock line */
 	      if (lx == 15 && (i+1 == MAXBOARDS || !dc[i+1].deviceid))
 		  break;
@@ -862,8 +870,9 @@ int devamlc (int class, int func, int device) {
 	    }
   endconnect:
 	if (allbusy) {
-	  warn("No free AMLC connection");
-	  write(fd, "\rAll AMLC lines are in use!\r\n", 29);
+	  //warn("No free AMLC connection");
+	  strcpy(buf,"\r\nAll available connections are in use.\r\n\n");
+	  write(fd, buf, strlen(buf));
 	  close(fd);
 	} else {
 	  int optval, tsflags;
@@ -1296,4 +1305,3 @@ dorecv:
   }
   }
 }
-#endif

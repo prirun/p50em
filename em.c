@@ -764,7 +764,7 @@ int readlicense(int first) {
   if (first)
     license = newlicense;
 
-#ifndef HOBBY
+#ifndef DEMO
 
   if ((licensefile = fopen("license", "r")) == NULL) {
     printf("em: no license file.\n");
@@ -1767,7 +1767,7 @@ static int devpoll[64] = {0};
 
 /* I/O device map table, containing function pointers to handle device I/O */
 
-#ifdef HOBBY
+#ifdef DEMO
 
 /* this is the "hobby system" controller configuration:
    
@@ -1776,6 +1776,7 @@ static int devpoll[64] = {0};
    '14 = devmt: mag tape controller (4 drives)
    '20 = devcp: clock / VCP / SOC
    '26 = devdisk: 1st disk controller
+   '54 = devamlc: 1st AMLC (16 lines)
 */
 
 static int (*devmap[64])(int, int, int) = {
@@ -1784,12 +1785,11 @@ static int (*devmap[64])(int, int, int) = {
   /* '2x */ devcp,devnone,devnone,devnone,devnone,devnone,devdisk,devnone,
   /* '3x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
   /* '4x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
-  /* '5x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
+  /* '5x */ devnone,devnone,devnone,devnone,devamlc,devnone,devnone,devnone,
   /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
   /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
 
-#else
-#if 0
+#elif 0
 
 /* this is the "full system" configuration supported by the emulator */
 
@@ -1846,7 +1846,6 @@ static int (*devmap[64])(int, int, int) = {
   /* '5x */ devnone,devnone,devnone,devnone,devamlc,devnone,devnone,devnone,
   /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
   /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
-#endif
 #endif
 
 
@@ -1935,6 +1934,7 @@ static void fatal(char *msg) {
 #endif
   if (lseek(2, 0, SEEK_END) > 0)
     printf("Check error.log for more information\n");
+  printf("\n");
   exit(1);
 }
 
@@ -2565,7 +2565,6 @@ static unsigned short dumppcb(unsigned short pcb) {
 
 static ea_t stex(unsigned int framesize) {
   short stackrootseg, stackseg;
-  unsigned long utempl;
   ea_t stackfp, fpva;
 
   if (framesize > 0xFFFF)
@@ -2836,7 +2835,7 @@ static argt() {
 
 static pcl (ea_t ecbea) {
   short i,j;
-  unsigned long utempl;
+  unsigned int utempl;
   unsigned short access;
   unsigned short ecb[9];
   short bit;                  /* bit offset for args */
@@ -4401,7 +4400,7 @@ main (int argc, char **argv) {
   unsigned short trapvalue;
   ea_t trapaddr;
   unsigned short access;
-  unsigned long immu32;
+  unsigned int immu32;
   unsigned long long immu64;
   short fcode;
   unsigned short zresult, zclen1, zclen2, zaccess;
@@ -4628,14 +4627,12 @@ main (int argc, char **argv) {
       } else
 	fatal("-nport needs an argument\n");
 
-#ifndef HOBBY
     } else if (strcmp(argv[i],"-tport") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
 	tport = templ;
       } else
 	fatal("-tport needs an argument\n");
-#endif
 
 #ifndef NOTRACE
     } else if (strcmp(argv[i],"-trace") == 0) {
