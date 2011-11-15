@@ -8634,7 +8634,7 @@ dfcmdr:
   case 011:
     TRACE(T_FLOW, " LH\n");
     if (*(int *)&ea < 0) {
-      TRACE(T_FLOW, " ea=%x, immu32=%lx, gr%d=%x\n", ea, immu32, dr, getgr32(dr));
+      TRACE(T_FLOW, " ea=%x, immu32=%x, gr%d=%x\n", ea, immu32, dr, getgr32(dr));
       putgr16(dr, immu32 >> 16);
     } else
       putgr16(dr, get16(ea));
@@ -9239,7 +9239,7 @@ imodepcl:
   case 055:
     if (*(int *)&ea < 0) {
       TRACE(T_FLOW, " ACP\n");
-      TRACE(T_INST, " before acp, gr%d=%o/%o, immu32=%lu, CP(dr)=%d\n", dr, getgr32(dr)>>16, getgr32(dr)&0xFFFF, immu32, EACP(getgr32(dr)));
+      TRACE(T_INST, " before acp, gr%d=%o/%o, immu32=%u, CP(dr)=%d\n", dr, getgr32(dr)>>16, getgr32(dr)&0xFFFF, immu32, EACP(getgr32(dr)));
       utempl = EACP(getgr32(dr));
       utempl += *(int *)&immu32;
       putgr32(dr, CPEA(getgr32(dr), utempl));

@@ -14,7 +14,7 @@ em:     # production (Intel)
 
 emp:    # production (PowerPC)
 
-	cc -arch ppc -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -mmacosx-version-min=10.4 -DNOREGS -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	strip em
 	rm em.o
 
@@ -27,7 +27,7 @@ debug:   # gdb (Intel)
 
 debugp:  # gdb (PowerPC)
 
-	cc -arch ppc -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOTRACE -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -mmacosx-version-min=10.4 -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOTRACE -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 
@@ -38,7 +38,7 @@ trace:   # tracing + gdb (Intel)
 
 tracep: # tracing + gdb (PowerPC)
 
-	cc -arch ppc -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -mmacosx-version-min=10.4 -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
 vfy:   # prod + tracing to verify em changes (Intel)
@@ -48,7 +48,7 @@ vfy:   # prod + tracing to verify em changes (Intel)
 
 vfyp: # prod + tracing to verify em changes (PowerPC)
 
-	cc -arch ppc -DREV=\"\" -O -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -mmacosx-version-min=10.4 -DREV=\"\" -O -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
 fixed:  # fixed clock rate, gdb (Intel)
@@ -59,7 +59,7 @@ fixed:  # fixed clock rate, gdb (Intel)
 
 fixedp: # fixed clock rate, gdb (PowerPC)
 
-	cc -arch ppc -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -mmacosx-version-min=10.4 -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 
