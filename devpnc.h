@@ -47,16 +47,11 @@
   the Primenet config node-to-node password becomes redundant and
   should probably be left blank for ease in configuration. Cool, eh?
 
-  UNIMPLEMENTED IDEA 1: the IP address in ring.cfg could be specified
-  as 0.0.0.0:0 or --- to mean "this node is incoming only, don't try
-  to connect to it, but let it connect to me".  This might be useful
-  for nodes that are usually offline, to keep devpnc from sending them
-  connect packets every 30 seconds.
-
   UNIMPLEMENTED IDEA 2: when a connect comes in, we could/should check
   that the IP address in ring.cfg matches the IP address of the
   connect.  Then again, that means you can't network an emulator when
-  away from your home location.
+  away from your home location, and it breaks "incoming-only"
+  connections
 
   Prior to rev 19.3, each Primenet node sends periodic "timer"
   messages to all nodes it knows about.  If the message returns ACK'd,
@@ -491,7 +486,7 @@ pncaccept(time_t timenow) {
     goto disc;
   }
   if (ni[i].cstate > PNCCSDISC) {
-    TRACE(T_RIO, " devpnc: already connected to node %d, uid %s\n", i, uid);
+    TRACE(T_RIO, " devpnc: already connected to node %d with uid %s\n", i, uid);
     if (memcmp(uid, ni[myid].uid, MAXUIDLEN) < 0)
       goto disc;
     else
@@ -584,10 +579,12 @@ pncconnect(time_t timenow) {
   if (myid == 0)
     return;
   nodeid = prevnode;
-  while (1) {
+  do {
     nodeid = (nodeid % MAXNODEID) + 1;
     if (nodeid == myid)          /* don't connect to myself */
       continue;
+    if (ni[nodeid].port == 0)    /* incoming-only connection */
+      continue;               
     if (ni[nodeid].cstate == PNCCSCONN) {
       pncauth1(nodeid, timenow);
       break;
@@ -597,9 +594,7 @@ pncconnect(time_t timenow) {
       pncconn1(nodeid, timenow);
       break;
     }
-    if (nodeid == prevnode)      /* went round once? */
-      break;
-  }
+  } while (nodeid != prevnode);      /* went round once? */
   prevnode = nodeid;
 }
 
@@ -692,11 +687,16 @@ pncrecv() {
 
   /* do a select on all active nodes to see if there's any data available */
 
+  n = -1;
   FD_ZERO(&fds);
   for (nodeid=0; nodeid<=MAXNODEID; nodeid++)
-    if (ni[nodeid].cstate == PNCCSAUTH)
-      FD_SET(ni[nodeid].fd, &fds);
-  n = select(nodeid, &fds, NULL, NULL, &timeout);
+    if (ni[nodeid].cstate == PNCCSAUTH) {
+      fd = ni[nodeid].fd;
+      FD_SET(fd, &fds);
+      if (fd > n)
+	n = fd;
+    }
+  n = select(n+1, &fds, NULL, NULL, &timeout);
   if (n == -1) {
     if (errno == EINTR || errno == EAGAIN)
       return 0;
@@ -709,15 +709,13 @@ pncrecv() {
   }
 
   nodeid = prevnode;
-  while (1) {
+  do {
     nodeid = (nodeid % MAXNODEID) + 1;
     fd = ni[nodeid].fd;
     if (fd >= 0 && FD_ISSET(fd, &fds))
       if (pncrecv1(nodeid))
 	break;
-    if (nodeid == prevnode)      /* went round once? */
-      break;
-  }
+  } while (nodeid != prevnode);      /* went round once? */
   prevnode = nodeid;
 }
 
@@ -855,6 +853,7 @@ int devpnc (int class, int func, int device) {
           nodeid = node's id (1-247) on my ring
           host = the remote emulator's TCP/IP address or name
 	  port = the remote emulator's TCP/IP PNC port
+	  NOTE: host:port may be - for incoming-only nodes
 	  uid = up to 16 byte password, no spaces
 	  NOTE: use od -h /dev/urandom|head to create a uid
     */
@@ -916,18 +915,20 @@ int devpnc (int class, int func, int device) {
 
 	/* parse the port number from the IP address */
 
-	tempport = -1;
-	if ((p=strtok(temphost, PDELIM)) != NULL) {
-	  strcpy(ni[tempid].host, p);
-	  if ((p=strtok(NULL, PDELIM)) != NULL) {
-	    tempport = atoi(p);
-	    if (tempport < 1 || tempport > 65000)
-	      fprintf(stderr,"Line %d of ring.cfg ignored: port number out of range 1-65000\n", linenum);
+	tempport = 0;
+	if (strcmp(temphost, "-") != 0) {
+	  if ((p=strtok(temphost, PDELIM)) != NULL) {
+	    strcpy(ni[tempid].host, p);
+	    if ((p=strtok(NULL, PDELIM)) != NULL) {
+	      tempport = atoi(p);
+	      if (tempport < 1 || tempport > 65000)
+		fprintf(stderr,"Line %d of ring.cfg ignored: port number out of range 1-65000\n", linenum);
+	    }
 	  }
-	}
-	if (tempport <= 0) {
-	  fprintf(stderr, "Line %d of ring.cfg ignored: can't parse port number from %s\n", linenum, temphost);
-	  continue;
+	  if (tempport <= 0) {
+	    fprintf(stderr, "Line %d of ring.cfg ignored: can't parse port number from %s\n", linenum, temphost);
+	    continue;
+	  }
 	}
 	ni[tempid].cstate = PNCCSDISC;
 	ni[tempid].port = tempport;
