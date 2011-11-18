@@ -335,8 +335,10 @@ void pnchavedata(int s) {
   sawsigio = 1;
 }
 
+#define HEXNIBBLE(ch) (0 <= (ch) && (ch) <= 9)? (ch) + '0': (ch) - 10 + 'a'
+
 char * pncdumppkt(unsigned char * pkt, int len) {
-  static unsigned char hexpkt[MAXPKTBYTES*2 + 1];
+  static unsigned char hexpkt[MAXPKTBYTES*3 + 1];
   unsigned int i, ch;
   double ts;
   struct timeval tv1;
@@ -344,36 +346,31 @@ char * pncdumppkt(unsigned char * pkt, int len) {
 #ifndef NOTRACE
   if (!gvp->traceflags & T_RIO) return;
 
-  if (len > MAXPKTBYTES)
-    len = MAXPKTBYTES;
-#if 0
-  /* hex dump */
-  for (i=0; i<len; i++) {
-    ch = pkt[i] >> 4;
-    if (0 <= ch  && ch <= 9)
-      hexpkt[i*2] = ch + '0';
-    else
-      hexpkt[i*2] = ch - 10 + 'a';
-    ch = pkt[i] & 0xF;
-    if (0 <= ch && ch <= 9)
-      hexpkt[i*2+1] = ch + '0';
-    else
-      hexpkt[i*2+1] = ch - 10 + 'a';
-  }
-  hexpkt[len*2] = 0;
-#else
-  /* ascii dump */
-  for (i=0; i<len; i++)
-    if (pkt[i])
-      hexpkt[i] = pkt[i] & 0x7f;
-    else
-      hexpkt[i] = '_';
-  hexpkt[len] = 0;
-#endif
   if (gettimeofday(&tv1, NULL) != 0)
     fatal("pnc gettimeofday 3 failed");
   ts = (tv1.tv_sec + tv1.tv_usec/1000000.0) - tv0ts;
-  TRACE(T_RIO, " @ %10.2f: %s\n", ts, hexpkt);
+  TRACE(T_RIO, " @ %.2f: len=%d\n", ts, len);
+
+  if (len > MAXPKTBYTES)
+    len = MAXPKTBYTES;
+  for (i=0; i<len; i++) {
+    ch = pkt[i] >> 4;
+    hexpkt[i*3] = HEXNIBBLE(ch);
+    ch = pkt[i] & 0xF;
+    hexpkt[i*3+1] = HEXNIBBLE(ch);
+    hexpkt[i*3+2] = ' ';
+  }
+  hexpkt[len*3] = 0;
+  TRACE(T_RIO, "%s\n", hexpkt);
+  for (i=0; i<len; i++) {
+    ch = pkt[i] & 0x7f;
+    if (ch)
+      hexpkt[i] = ch;
+    else
+      hexpkt[i] = '_';
+  }
+  hexpkt[len] = 0;
+  TRACE(T_RIO, "%s\n", hexpkt);
 #endif
 }
 
@@ -800,14 +797,6 @@ int devpnc (int class, int func, int device) {
   unsigned int addrlen;
   int fd, optval, fdflags;
 
-#define DELIM " \t\n"
-#define PDELIM ":"
-
-  FILE *ringfile;
-  char *tok, buf[128], *p;
-  int n, linenum;
-  int tempid, tempport, cfgerrs;
-  char temphost[MAXHOSTLEN+1];
   struct timeval tv0,tv1;
   double pollts;
 
@@ -823,7 +812,16 @@ int devpnc (int class, int func, int device) {
   case -2:
     break;
 
-  case -1:
+  case -1: {
+    FILE *ringfile;
+    char *tok, buf[128], *p;
+    int n, linenum;
+    int tempid, tempport, cfgerrs;
+    char temphost[MAXHOSTLEN+1];
+
+#define DELIM " \t\n"
+#define PDELIM ":"
+
     if (nport <= 0) {
       fprintf(stderr, "-nport is zero, PNC not started\n");
       return -1;
@@ -876,8 +874,8 @@ int devpnc (int class, int func, int device) {
 	  continue;
 	}
 	tempid = atoi(p);
-	if (tempid < 1 || tempid > 247) {
-	  fprintf(stderr,"Line %d of ring.cfg ignored: node id is out of range 1-247\n", linenum);
+	if (tempid < 1 || tempid > MAXNODEID) {
+	  fprintf(stderr,"Line %d of ring.cfg ignored: node id is out of range 1-%d\n", linenum, MAXNODEID);
 	  continue;
 	}
 	if (ni[tempid].cstate != PNCCSNONE) {
@@ -940,8 +938,18 @@ int devpnc (int class, int func, int device) {
 	fatal(NULL);
       }
       fclose(ringfile);
+#ifdef DEMO
+      i = 0;
+      for (tempid=1; tempid<=MAXNODEID; tempid++)
+	if ((strcasecmp(ni[tempid].host, "prirun.dyndns.org.")) |
+	    (strcasecmp(ni[tempid].host, "127.0.0.1")))
+	  i += 1;
+      if (i != 2)
+	configured = 0;
+#endif
     } else
       perror("error opening ring.cfg");
+      
     if (!configured) {
       fprintf(stderr, "PNC not configured.\n");
       return -1;
@@ -986,6 +994,7 @@ int devpnc (int class, int func, int device) {
     tv0ts = tv0.tv_sec + tv0.tv_usec/1000000.0;
     
     return 0;
+  }
 
   case 0:
 
@@ -1211,6 +1220,10 @@ int devpnc (int class, int func, int device) {
 
     } else if (func == 017) {   /* set my node ID */
       myid = getcrs16(A) & 0xFF;
+      if (myid > MAXNODEID) {
+	printf("em: my nodeid %d > max nodeid %d; check Primenet config\n", myid, MAXNODEID);
+	myid = 0;
+      }
       pncstat = (pncstat & 0xFF00) | myid;
       TRACE(T_INST|T_RIO, " my node id is %d\n", myid);
       IOSKIP;
