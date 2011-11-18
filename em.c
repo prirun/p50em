@@ -3863,7 +3863,7 @@ static sssn() {
   TRACE(T_FLOW, " SSSN\n");
   ea = getcrs32(XB);
   for (i=0; i<8; i++)
-    put16(*(((unsigned short *)snbuf)+i), ea+i);
+    put16(swap16(*(((unsigned short *)snbuf)+i)), ea+i);
   for (i=8; i<16; i++) {
     put16(0, ea+i);
   }
