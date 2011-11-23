@@ -406,7 +406,11 @@ pncinitfd(int fd) {
     perror("setsockopt 3 failed for PNC");
     fatal(NULL);
   }
+#ifndef NOREGS
+  fdflags |= O_NONBLOCK;
+#else
   fdflags |= O_NONBLOCK+O_ASYNC;
+#endif
   if (fcntl(fd, F_SETFL, fdflags) == -1) {
     perror("unable to set fdflags for PNC");
     fatal(NULL);

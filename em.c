@@ -4478,7 +4478,9 @@ main (int argc, char **argv) {
 
   signal (SIGTERM, sensorcheck);
 
+#ifdef NOREGS
   signal (SIGQUIT, sigquit);
+#endif
 
 #ifndef NOTRACE
 

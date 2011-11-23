@@ -3,25 +3,25 @@
 
 REV=${shell hg id -n}
 
-.PHONY:	broken em emp debug debugp trace tracep vfy vfyp fixed fixedp demo demop dongle lmserver magrst parts smad smag mtread mtwrite
+.PHONY:	broken em emp debug debugp trace tracep vfy vfyp fixed fixedp demo demop dongleprog lmserver magrst parts smad smag mtread mtwrite
 
 em:     # production (Intel)
 
-	cc -arch i686 -DREV=\"${REV}\" -DNOREGS -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch i686 -o em em.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i686 -DREV=\"${REV}\" -DNOREGS -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API;g++ -arch i686 -o em em.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 	strip em
 	rm em.o
 
 
 emp:    # production (PowerPC)
 
-	cc -arch ppc -mmacosx-version-min=10.4 -DNOREGS -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -mmacosx-version-min=10.4 -DWITHREGS -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/ppc/api;g++ -arch ppc -o em em.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	strip em
 	rm em.o
 
 
 debug:   # gdb (Intel)
 
-	cc -arch i686 -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOTRACE -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch i686 -o em em.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i686 -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOTRACE -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API;g++ -arch i686 -o em em.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 
@@ -33,7 +33,7 @@ debugp:  # gdb (PowerPC)
 
 trace:   # tracing + gdb (Intel)
 
-	cc -arch i686 -DREV=\"${REV}\" -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch i686 -o em em.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i686 -DREV=\"${REV}\" -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API;g++ -arch i686 -o em em.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
 tracep: # tracing + gdb (PowerPC)
@@ -43,7 +43,7 @@ tracep: # tracing + gdb (PowerPC)
 
 vfy:   # prod + tracing to verify em changes (Intel)
 
-	cc -arch i686 -DREV=\"\" -O -DNOREGS -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch i686 -o em em.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i686 -DREV=\"\" -O -DNOREGS -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API;g++ -arch i686 -o em em.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
 vfyp: # prod + tracing to verify em changes (PowerPC)
@@ -53,7 +53,7 @@ vfyp: # prod + tracing to verify em changes (PowerPC)
 
 fixed:  # fixed clock rate, gdb (Intel)
 
-	cc -arch i686 -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch i686 -o em em.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i686 -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API;g++ -arch i686 -o em em.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 
@@ -71,14 +71,14 @@ demo:  # demo (limited: 1-2 amlc, 1 disk drive up to 160MB, one PNC node) (Intel
 
 demop: # demo (PowerPC)
 
-	cc -mmacosx-version-min=10.4 -fno-stack-protector -arch ppc -DREV=\"${REV}\" -DNOREGS -DDEMO -DNOTRACE -DFAST -O em.c -fobey-inline -mdynamic-no-pic -o em
+	cc -mmacosx-version-min=10.4 -fno-stack-protector -arch ppc -DREV=\"${REV}\" -DWITHREGS -DDEMO -DNOTRACE -DFAST -O em.c -fobey-inline -mdynamic-no-pic -o em
 	strip em
 
 
-dongle: # utility to program a dongle
+dongleprog: # utility to program a dongle
 
-	cc -arch ppc -DREV=\"${REV}\" -c dongle.c -Idongle/mx/ppc/api;g++ -arch ppc -o dongle dongle.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
-	rm dongle.o
+	cc -arch ppc -DREV=\"${REV}\" -c dongleprog.c -Idongle/mx/ppc/api;g++ -arch ppc -o dongleprog dongleprog.o dongle/mx/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	rm dongleprog.o
 
 
 lmserver: # license server
@@ -121,11 +121,11 @@ smag: # Unix create Prime pdev
 
 broken: # production (Intel)
 
-	cc -arch i686 -O -c broken.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch i686 -o broken broken.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i686 -O -c broken.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API;g++ -arch i686 -o broken broken.o dongle/mx/Universal/API/10_6/libmxmac260.dylib -framework IOKit -framework CoreFoundation
 
 brokenp: # production (Intel)
 
-	cc -arch ppc -O -c broken.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch ppc -o brokenp broken.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -O -c broken.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API;g++ -arch ppc -o brokenp broken.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 brokeno: # production (Intel)
 
@@ -133,6 +133,6 @@ brokeno: # production (Intel)
 
 brokenf: # production (Intel)
 
-	cc -arch i686 -O -c broken.c -Idongle/mx.fix/Universal/api;g++ -arch i686 -o brokenf broken.o dongle/mx.fix/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch i686 -O -c broken.c -Idongle/mx.fix/Universal/API;g++ -arch i686 -o brokenf broken.o dongle/mx.fix/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 
 
