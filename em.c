@@ -4422,6 +4422,7 @@ main (int argc, char **argv) {
   struct timezone tz;
 
   printf("[Prime Emulator ver %s %s]\n", REV, __DATE__);
+  printf("[Copyright (C) 2005-2011 Prirun LLC]\n");
   if (argc > 1 && (strcmp(argv[1],"--version") == 0)) {
     exit(0);
   }
@@ -4605,8 +4606,17 @@ main (int argc, char **argv) {
 	sscanf(argv[++i],"%d", &templ);
 	if (0 <= templ && templ <= 44)
 	  cpuid = templ;
-	else
-	  fatal("-cpuid arg range is 0 to 44\n");
+	else {
+	  cpuid = 9999;
+	  for (j=0; cputab[j].cpumodel; j++) {
+	    if (templ == cputab[j].cpumodel) {
+	      cpuid = cputab[j].cputype;
+	      break;
+	    }
+	  }
+	  if (cpuid > 44)
+	    fatal("-cpuid arg range is 0 to 44 or model name: 400, 550, 9950, etc\n");
+	}
       } else
 	fatal("-cpuid needs an argument\n");
 
@@ -6187,6 +6197,8 @@ d_stpm:  /* 000024 */
     for (i=0; i<8; i++)
       put16(0, ea+i);
     put16(cpuid, ea+1);
+    if (sscanf(REV, "%d", &templ))
+      put16((short)templ, ea+3);
     goto fetch;
   }
 
