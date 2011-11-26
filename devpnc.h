@@ -944,17 +944,13 @@ int devpnc (int class, int func, int device) {
       fclose(ringfile);
 #ifdef DEMO
       i = 0;
-      for (tempid=1; tempid<=MAXNODEID; tempid++){
-	printf("i=%d, tempid=%d, host=%s, state=%d\n", i, tempid, ni[tempid].host, ni[tempid].cstate);
+      for (tempid=1; tempid<=MAXNODEID; tempid++)
 	if (ni[tempid].cstate != PNCCSNONE)
 	  if (i == 0 && (strcasecmp(ni[tempid].host, "prirun.dyndns.org.") == 0) ||
              (i == 1 && (strcasecmp(ni[tempid].host, "127.0.0.1") == 0)))
 	      i += 1;
-	  else {
-	    printf("unconfigure, i=%d, tempid=%d, host=%s\n", i, tempid, ni[tempid].host);
+	  else
 	    configured = 0;
-	  }
-      }
 #endif
     } else
       perror("error opening ring.cfg");
@@ -1233,7 +1229,7 @@ int devpnc (int class, int func, int device) {
 	printf("em: my nodeid %d > max nodeid %d; check Primenet config\n", myid, MAXNODEID);
 	myid = 0;
       }
-      if (ni[myid].cstate == PNCCSNONE) {
+      if (myid != 0 && ni[myid].cstate == PNCCSNONE) {
 	printf("em: my nodeid %d not in ring.cfg; PNC disabled\n", myid);
 	myid = 0;
       }
