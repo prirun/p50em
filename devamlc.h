@@ -228,7 +228,12 @@ int devamlc (int class, int func, int device) {
 #define TN_BINARY 0   /* put telnet client in binary mode */
 #define TN_ECHO 1     /* we echo, not telnet client */
 #define TN_SGA 3      /* means this is a full-duplex connection */
+#define TN_LINEMODE 34 /* negotiate linemode to pass ctrl-o (flush) through */
 #define TN_SUBOPT 250
+
+  /* telnet linemode options */
+
+#define TN_MODE 1
 
   static short inited = 0;
   static int wascti = 0;
@@ -904,6 +909,21 @@ int devamlc (int class, int func, int device) {
 	  buf[6] = TN_IAC;
 	  buf[7] =   TN_DO;
 	  buf[8] =   TN_BINARY;
+
+	  /* this is to allow ctrl-o, flushoutput, to pass through;
+	     but it isn't finished.  See:
+	     http://tools.ietf.org/html/rfc1116 */
+
+	  buf[9] = TN_IAC;
+	  buf[10] =   TN_DO;
+	  buf[11] =   TN_LINEMODE;
+	  buf[12] = TN_IAC;
+	  buf[13] =   TN_SUBOPT;
+	  buf[14] =      TN_LINEMODE;
+	  buf[15] =         TN_MODE;
+	  buf[16] =         0  /* mask */;
+	  buf[12] = TN_IAC;
+	  buf[13] =    TN_SUBOPT;
 	  write(fd, buf, 9);
 
 	  /* send out the ttymsg greeting */
