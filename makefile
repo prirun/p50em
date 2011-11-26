@@ -3,7 +3,7 @@
 
 REV=${shell hg id -n}
 
-.PHONY:	broken em emp debug debugp trace tracep vfy vfyp fixed fixedp demo demop dongleprog lmserver magrst parts smad smag mtread mtwrite
+.PHONY:	broken em emp debug debugp trace tracep vfy vfyp fixed fixedp demo demop dongleprog lmserver magrst magsav parts smad smag mtread mtwrite
 
 em:     # production (Intel)
 
