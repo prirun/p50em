@@ -29,6 +29,14 @@
     clock-line board generates EOR interrupts in this implementation.
     AMLDIM does not fill output queues on just an EOR interrupt.
 
+  - AMLDIM ignores the "buffer number" bit on a status request.
+    Instead, it switches buffers only when the current buffer is
+    completely full.  This means, for example, it isn't possible to do
+    an EOR interrupt when a single character comes in and switch to
+    the other buffer, because AMLDIM will not check the other buffer.
+    Basically, there is a race condition between the hardware and
+    AMLDIM if the bufnum status bit is used, so Prime didn't use it.
+
   - AMLDIM fills *every* AMLC board's output queue only when the
     clock line board interrupts with the "character time interrupt"
     (CTI) bit set; it also reads *every* AMLC board's input.  This
@@ -578,19 +586,17 @@ int devamlc (int class, int func, int device) {
     } else if (func == 07) {       /* input AMLC status */
       dc[dx].interrupting = 0;
       putcrs16(A, 040000 | (dc[dx].bufnum<<8) | (dc[dx].intenable<<5) | (1<<4));
-      if (anyeor) {
-	putcrs16(A, getcrs16(A) | 0100000);
-	for (dx=0; dx<MAXBOARDS; dx++)
-	  dc[dx].eor = 0;
-	anyeor = 0;
-      }
       if (wascti) {
 	putcrs16(A, getcrs16(A) | 0x8f);    /* last line cti */
 	wascti = 0;
       }
       //printf("INA '07%02o returns 0x%x\n", device, getcrs16(A));
       IOSKIP;
-      if (getcrs16(A) & 0100000) {
+      if (anyeor) {
+	putcrs16(A, getcrs16(A) | 0100000);
+	for (dx=0; dx<MAXBOARDS; dx++)
+	  dc[dx].eor = 0;
+	anyeor = 0;
 	maxxmit = 0;               /* ugh! sloppy... */
 	goto dorecv;
       }
@@ -1007,7 +1013,7 @@ int devamlc (int class, int func, int device) {
 		struct sockaddr_in raddr;
   
 		dc[dx].obtimer[lx] = tv.tv_sec + AMLCCONNECT;
-		printf("em: trying to connect to 0x%08x:%d\n", dc[dx].obhost[lx], dc[dx].obport[lx]);
+		//printf("em: trying to connect to 0x%08x:%d\n", dc[dx].obhost[lx], dc[dx].obport[lx]);
 		fd = socket(AF_INET, SOCK_STREAM, 0);
 		if (fd < 0) {
 		  perror("em: unable to create socket for outbound AMLC connection");
@@ -1032,7 +1038,7 @@ int devamlc (int class, int func, int device) {
 		}
 		dc[dx].fd[lx] = fd;
 		dc[dx].connected |= BITMASK16(lx+1);
-		printf("em: connected to 0x%08x:%d, fd=%d\n", dc[dx].obhost[lx], dc[dx].obport[lx], fd);
+		//printf("em: connected to 0x%08x:%d, fd=%d\n", dc[dx].obhost[lx], dc[dx].obport[lx], fd);
 	      }
 	    } else {
 	      //printf("Draining output queue on line %d\n", lx);
