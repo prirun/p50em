@@ -260,7 +260,7 @@
 #define MAXPKTBYTES (MAXPNCBYTES+4)   /* adds 16-bit length word to each end */
 
 #ifdef DEMO
-  #define MAXNODEID 2        /* 0 is a dummy, 255 is broadcast */
+  #define MAXNODEID 3        /* 0 is a dummy, 255 is broadcast */
 #else
   #define MAXNODEID 254      /* 0 is a dummy, 255 is broadcast */
 #endif
@@ -944,12 +944,17 @@ int devpnc (int class, int func, int device) {
       fclose(ringfile);
 #ifdef DEMO
       i = 0;
-      for (tempid=1; tempid<=MAXNODEID; tempid++)
-	if ((strcasecmp(ni[tempid].host, "prirun.dyndns.org.")) |
-	    (strcasecmp(ni[tempid].host, "127.0.0.1")))
-	  i += 1;
-      if (i != 2)
-	configured = 0;
+      for (tempid=1; tempid<=MAXNODEID; tempid++){
+	printf("i=%d, tempid=%d, host=%s, state=%d\n", i, tempid, ni[tempid].host, ni[tempid].cstate);
+	if (ni[tempid].cstate != PNCCSNONE)
+	  if (i == 0 && (strcasecmp(ni[tempid].host, "prirun.dyndns.org.") == 0) ||
+             (i == 1 && (strcasecmp(ni[tempid].host, "127.0.0.1") == 0)))
+	      i += 1;
+	  else {
+	    printf("unconfigure, i=%d, tempid=%d, host=%s\n", i, tempid, ni[tempid].host);
+	    configured = 0;
+	  }
+      }
 #endif
     } else
       perror("error opening ring.cfg");
@@ -1226,6 +1231,10 @@ int devpnc (int class, int func, int device) {
       myid = getcrs16(A) & 0xFF;
       if (myid > MAXNODEID) {
 	printf("em: my nodeid %d > max nodeid %d; check Primenet config\n", myid, MAXNODEID);
+	myid = 0;
+      }
+      if (ni[myid].cstate == PNCCSNONE) {
+	printf("em: my nodeid %d not in ring.cfg; PNC disabled\n", myid);
 	myid = 0;
       }
       pncstat = (pncstat & 0xFF00) | myid;
