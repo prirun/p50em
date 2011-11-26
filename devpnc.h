@@ -553,7 +553,7 @@ pncauth1(int nodeid, time_t timenow) {
   if (n == -1) {
     if (errno == EWOULDBLOCK || errno == EINTR || errno == EAGAIN || errno == EINPROGRESS)
       return;
-    if (errno != EPIPE)
+    if (errno != EPIPE && errno != ENOTCONN)
       perror("error sending PNC uid");
   } else
     fprintf(stderr, "devpnc: expected %d bytes, only wrote %d bytes for uid\n", MAXUIDLEN, n);
