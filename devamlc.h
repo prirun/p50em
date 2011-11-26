@@ -281,7 +281,7 @@ int devamlc (int class, int func, int device) {
   } dc[MAXBOARDS];
 
   int dx, dxsave, lx;
-  char buf[1024];      /* max size of DMQ buffer */
+  char buf[2048];       /* max size of DMQ or socket read buffer */
   int i, j;
   int maxxmit;
 
