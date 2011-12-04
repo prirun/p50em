@@ -406,7 +406,7 @@ typedef struct {
   //char shared;                /* 1 if page is shared and can't be cached */
   //char valid;                 /* 1 if STLB entry is valid, zero otherwise */
 #ifndef NOTRACE
-  unsigned long load_ic;      /* instruction where STLB was loaded, (debug) */
+  unsigned int load_ic;      /* instruction where STLB was loaded, (debug) */
 #endif
 } stlbe_t;
 
@@ -520,7 +520,7 @@ typedef struct {
 
   int intvec;                   /* currently raised interrupt (if >= zero) */
 
-  unsigned long instcount;      /* global instruction count */
+  unsigned int instcount;       /* global instruction count */
 
   brp_t brp[BRP_SIZE];          /* PB, SB, LB, XB, RP, S0, F0, F1, UN */
 
@@ -571,7 +571,7 @@ typedef struct {
   unsigned short traceuser;     /* OWNERL to trace */
   short traceseg;               /* RPH segment # to trace */
   short numtraceprocs;          /* # of procedures we're tracing */
-  unsigned long traceinstcount; /* only trace if instcount > this */
+  unsigned int traceinstcount;  /* only trace if instcount > this */
   short tracetriggered;         /* Ctrl-T on console toggles tracing */
   short tracerpqx;              /* rpq index to store next RP */
   unsigned int tracerpq[MAXRPQ];/* last 16 locations executed */
@@ -1850,7 +1850,7 @@ static int (*devmap[64])(int, int, int) = {
 
 
 static void warn(char *msg) {
-  printf("emulator warning:\n  instruction #%lu at %o/%o: %o %o keys=%o, modals=%o\n  %s\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, get16t(gvp->prevpc), get16t(gvp->prevpc+1),getcrs16(KEYS), getcrs16(MODALS), msg);
+  printf("emulator warning:\n  instruction #%u at %o/%o: %o %o keys=%o, modals=%o\n  %s\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, get16t(gvp->prevpc), get16t(gvp->prevpc+1),getcrs16(KEYS), getcrs16(MODALS), msg);
 }
     
 
@@ -1889,7 +1889,7 @@ static void fatal(char *msg) {
   printf("Fatal error");
   if (msg)
     printf(": %s", msg);
-  printf("\ninstruction #%lu at %o/%o %s\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d\nowner=%o %s, keys=%o, modals=%o\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X), getcrs16(OWNERL), searchloadmap(getcrs32(OWNER),' '), getcrs16(KEYS), getcrs16(MODALS));
+  printf("\ninstruction #%u at %o/%o %s\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d\nowner=%o %s, keys=%o, modals=%o\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X), getcrs16(OWNERL), searchloadmap(getcrs32(OWNER),' '), getcrs16(KEYS), getcrs16(MODALS));
   
   /* dump concealed stack entries */
 
@@ -2016,7 +2016,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
     faultnamep = faultname[fvec-FIRSTFAULT];
   else
     faultnamep = faultname[LASTFAULT-FIRSTFAULT+1];
-  TRACE(T_FAULT, "#%lu: fault '%o (%s), fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", gvp->instcount, fvec, faultnamep, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
+  TRACE(T_FAULT, "#%u: fault '%o (%s), fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", gvp->instcount, fvec, faultnamep, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
 
   if (getcrs16(MODALS) & 010) {   /* process exchange is enabled */
     ring = (RPH>>13) & 3;                     /* save current ring */
@@ -2088,7 +2088,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
       RP = m;                /* NOTE: changes RP(segno) to segment 0 */
       INCRP;
     } else {
-      printf("#%lu: fault '%o, fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", gvp->instcount, fvec, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
+      printf("#%u: fault '%o, fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", gvp->instcount, fvec, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
       fatal("Fault vector is zero, process exchange is disabled.");
     }
   }
@@ -4754,7 +4754,7 @@ main (int argc, char **argv) {
   else
     TRACEA("Tracing enabled for all users\n");
   if (gvp->traceinstcount != 0)
-    TRACEA("Tracing enabled after instruction %lu\n", gvp->traceinstcount);
+    TRACEA("Tracing enabled after instruction %u\n", gvp->traceinstcount);
   for (i=0; i<gvp->numtraceprocs; i++) {
     for (j=0; j<numsyms; j++) {
       if (strcasecmp(mapsym[j].symname, traceprocs[i].name) == 0 && mapsym[j].symtype == 'e') {
@@ -5119,7 +5119,7 @@ fetch:
 
 	putcrs16(TIMERH, getcrs16(TIMERH) + 1);
 	if (getcrs16(TIMERH) == 0) {
-	  TRACE(T_PX,  "#%lu: pcb %o timer overflow\n", gvp->instcount, getcrs16(OWNERL));
+	  TRACE(T_PX,  "#%u: pcb %o timer overflow\n", gvp->instcount, getcrs16(OWNERL));
 	  ea = getcrs32ea(OWNER);
 	  m = get16r0(ea+4) | 1;       /* set process abort flag */
 	  put16r0(m, ea+4);
@@ -5246,7 +5246,7 @@ xec:
 #endif
 
 #if 0
-  TRACE(T_FLOW, "\n			#%lu [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X=%o/%d Y=%o/%d%s%s%s%s K=%o M=%o\n", gvp->instcount, searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16s(TIMERH), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS));
+  TRACE(T_FLOW, "\n			#%u [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X=%o/%d Y=%o/%d%s%s%s%s K=%o M=%o\n", gvp->instcount, searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16s(TIMERH), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS));
 #else
   TRACE(T_FLOW, "\n			[%s %o] SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X=%o/%d Y=%o/%d%s%s%s%s K=%o M=%o\n", searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS) & 0177437);
 #endif
@@ -6348,7 +6348,7 @@ d_hlt:  /* 000000 */
   TRACE(T_FLOW, " HLT\n");
   RESTRICT();
   if (bootarg) {
-    printf("\nCPU halt, instruction #%lu at %o/%o %s: %o %o\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d", gvp->instcount, RPH, RPL, searchloadmap(gvp->prevpc,' '), get16t(gvp->prevpc), get16t(gvp->prevpc+1), getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X));
+    printf("\nCPU halt, instruction #%u at %o/%o %s: %o %o\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d", gvp->instcount, RPH, RPL, searchloadmap(gvp->prevpc,' '), get16t(gvp->prevpc), get16t(gvp->prevpc+1), getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X));
     while (1) {
       printf("\nPress Enter to continue, h to halt... ");
       utempa = getchar();
@@ -7624,7 +7624,7 @@ d_smcs:  /* 0101200 */
 
 d_badgen:
   TRACEA(" unrecognized generic instruction!\n");
-  printf("em: #%lu %o/%o: Unrecognized generic instruction '%o!\n", gvp->instcount, RPH, RPL, inst);
+  printf("em: #%u %o/%o: Unrecognized generic instruction '%o!\n", gvp->instcount, RPH, RPL, inst);
   fault(UIIFAULT, RPL, RP);
   fatal(NULL);
 
@@ -9148,7 +9148,7 @@ dfcmdr:
 imodepcl:
       stopwatch_push(&sw_pcl);
 #if 0
-      TRACE(T_FLOW|T_PCL, "#%lu %o/%0o: PCL %o/%o %s\n", gvp->instcount, RPH, RPL-2, ea>>16, ea&0xFFFF, searchloadmap(ea, 'e'));
+      TRACE(T_FLOW|T_PCL, "#%u %o/%0o: PCL %o/%o %s\n", gvp->instcount, RPH, RPL-2, ea>>16, ea&0xFFFF, searchloadmap(ea, 'e'));
 #else
       TRACE(T_FLOW|T_PCL, "%o/%0o: PCL %o/%o %s\n", RPH, RPL-2, ea>>16, ea&0xFFFF, searchloadmap(ea, 'e'));
 #endif

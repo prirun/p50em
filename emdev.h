@@ -476,7 +476,7 @@ readasr:
 	}
       } else if (n == 1) {
 	if (!(getcrs16(MODALS) & 010) && (ch == '')) {
-	  printf("\nRebooting at instruction #%lu\n", gvp->instcount);
+	  printf("\nRebooting at instruction #%u\n", gvp->instcount);
 	  // gvp->savetraceflags = ~T_MAP;  /****/
 	  longjmp(bootjmp, 1);
 	}
@@ -1417,15 +1417,15 @@ int devcp (int class, int func, int device) {
   static unsigned short clkvec = 0;
   static short clkpic = -947;
   static float clkrate = 3.2;
-  static unsigned long ticks = -1;
-  static unsigned long absticks = -1;
+  static unsigned int ticks = -1;
+  static unsigned int absticks = -1;
   static struct timeval start_tv;
   static ea_t datnowea = 0;
   static struct timeval prev_tv;
-  static unsigned long previnstcount=0; /* value of instcount corresponding to above */
+  static unsigned int previnstcount=0; /* value of instcount corresponding to above */
 
   struct timeval tv;
-  unsigned long elapsedms,targetticks;
+  unsigned int elapsedms,targetticks;
   int i;
 
 #define SETCLKPOLL devpoll[device] = gvp->instpermsec*(-clkpic*clkrate)/1000;
@@ -1629,7 +1629,7 @@ int devcp (int class, int func, int device) {
 	      ((tv.tv_sec-prev_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-prev_tv.tv_usec)/1000);
 	    if (i > 0)
 	      gvp->instpermsec = i;
-	    //printf("gvp->instcount = %u, previnstcount = %u, diff=%u, instpermsec=%d\n", gvp->instcount, previnstcount, gvp->instcount-previnstcount, gvp->instpermsec);
+	    printf("instcount = %u, previnstcount = %u, diff=%u, instpermsec=%d\n", gvp->instcount, previnstcount, gvp->instcount-previnstcount, gvp->instpermsec);
 #ifdef NOIDLE
 	    //printf("\ninstpermsec=%d\n", gvp->instpermsec);
 #endif
