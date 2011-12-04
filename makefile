@@ -71,7 +71,7 @@ demo:  # demo (limited: 1-2 amlc, 1 disk drive up to 160MB, one PNC node) (Intel
 
 demop: # demo (PowerPC)
 
-	cc -mmacosx-version-min=10.4 -fno-stack-protector -arch ppc -DREV=\"${REV}\" -DWITHREGS -DDEMO -DNOTRACE -DFAST -O em.c -fobey-inline -mdynamic-no-pic -o em
+	cc -DNOREGS -mmacosx-version-min=10.4 -fno-stack-protector -arch ppc -DREV=\"${REV}\" -DDEMO -DNOTRACE -DFAST -O em.c -fobey-inline -mdynamic-no-pic -o em
 	strip em
 
 
