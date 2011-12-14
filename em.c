@@ -1088,7 +1088,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       put16mem(stlbp->pmaddr, get16mem(stlbp->pmaddr) & ~020000);    /* reset unmodified bit in memory */
     }
     pa = stlbp->ppa | (ea & 0x3FF);
-    TRACE(T_MAP,"        for ea %o/%o, iacc=%d, stlbix=%d, pa=%o	loaded at #%lu\n", ea>>16, ea&0xffff, intacc, stlbix, pa, stlbp->load_ic);
+    TRACE(T_MAP,"        for ea %o/%o, iacc=%d, stlbix=%d, pa=%o	loaded at #%u\n", ea>>16, ea&0xffff, intacc, stlbix, pa, stlbp->load_ic);
   } else {
     pa = ea & MEMMASK;
   }
