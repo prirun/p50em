@@ -331,6 +331,7 @@ unsigned long long frn(unsigned long long dp, int *oflow) {
       frac64 = norm(frac64, oflow);
       return frac64;
     }
+    return dp;
   }
 }
 
