@@ -150,11 +150,14 @@ AMLC status word (from AMLCT5):
 
 */
 
-/* this macro closes an AMLC connection - used in several places */
+/* this macro closes an AMLC connection - used in several places
+
+   NOTE: don't print disconnect message on dedicated lines */
 
 #define AMLC_CLOSE_LINE \
   /* printf("em: closing AMLC line %d on device '%o\n", lx, device); */ \
-  write(dc[dx].fd[lx], "\r\nPrime session disconnected\r\n", 30); \
+  if (dc[dx].ctype[lx] != CT_DEDIP)					\
+    write(dc[dx].fd[lx], "\r\nPrime session disconnected\r\n", 30); \
   close(dc[dx].fd[lx]); \
   dc[dx].fd[lx] = -1; \
   dc[dx].dss &= ~BITMASK16(lx+1); \
@@ -1006,7 +1009,7 @@ int devamlc (int class, int func, int device) {
 	    /* no line is connected; if this is a dedicated outbound
 	       line, try to re-connect; otherwise, just drain queue */
 
-	    if (dc[dx].ctype[lx] == CT_DEDIP) {
+	    if (dc[dx].ctype[lx] == CT_DEDIP && dc[dx].obport[lx] != 0) {
 	      if (dc[dx].obtimer[lx] < tv.tv_sec) {
 
 		int fd, sockflags;
