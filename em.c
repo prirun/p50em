@@ -1835,6 +1835,7 @@ static int (*devmap[64])(int, int, int) = {
    '26 = devdisk: 1st disk controller (8 drives)
    '27 = devdisk: 2nd disk controller (8 drives)
    '54 = 1st amlc (terminal) controller (16 lines)
+   '53 = devamlc: 2nd AMLC (16 lines)
 */
 
 static int (*devmap[64])(int, int, int) = {
@@ -1843,7 +1844,7 @@ static int (*devmap[64])(int, int, int) = {
   /* '2x */ devcp,devnone,devnone,devnone,devnone,devnone,devdisk,devdisk,
   /* '3x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
   /* '4x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
-  /* '5x */ devnone,devnone,devnone,devnone,devamlc,devnone,devnone,devnone,
+  /* '5x */ devnone,devnone,devnone,devamlc,devamlc,devnone,devnone,devnone,
   /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
   /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
 #endif
@@ -4450,7 +4451,7 @@ main (int argc, char **argv) {
   gvp->intvec = -1;
   gvp->instcount = 0;
   gvp->inhcount = 0;
-  gvp->instpermsec = 15000;
+  gvp->instpermsec = 2000;
   gvp->livereglim = 040;
   gvp->mapvacalls = 0;
   gvp->mapvamisses = 0;
@@ -5245,7 +5246,7 @@ xec:
     gvp->traceflags = 0;
 #endif
 
-#if 0
+#if 1
   TRACE(T_FLOW, "\n			#%u [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X=%o/%d Y=%o/%d%s%s%s%s K=%o M=%o\n", gvp->instcount, searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16s(TIMERH), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS));
 #else
   TRACE(T_FLOW, "\n			[%s %o] SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X=%o/%d Y=%o/%d%s%s%s%s K=%o M=%o\n", searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS) & 0177437);
