@@ -1575,7 +1575,7 @@ int devcp (int class, int func, int device) {
 	  if (datnowea != 0)
 	    initclock(datnowea);
 	} 
-	elapsedms = (tv.tv_sec-start_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-start_tv.tv_usec)/1000;
+	elapsedms = (tv.tv_sec-start_tv.tv_sec)*1000.0 + (tv.tv_usec-start_tv.tv_usec)/1000.0;
 	targetticks = elapsedms/(-clkpic*clkrate/1000);
 #if 0
 	absticks++;
@@ -1615,26 +1615,29 @@ int devcp (int class, int func, int device) {
 	}
 #endif
 
-	/* update instpermsec every 5 seconds.  Check for instcount
-	   overflow and reset when it occurs.  Also, suspend can cause
-	   instpermsec to be zero.  That causes hangs in the BDX idle
-	   code, so don't update instpermsec in that case.
+	/* update instpermsec every IPMTIME milliseconds.  Check for
+	   instcount overflow and reset when it occurs.  Also, suspend
+	   can cause instpermsec to be zero.  That causes hangs in the
+	   BDX idle code, so don't update instpermsec in that case.
 
 	   XXX: this code should probably be done whether or not the
 	   clock is running */
 
-	if ((gvp->instcount < previnstcount) || (gvp->instcount-previnstcount > gvp->instpermsec*1000*5)) {
-	  if (gvp->instcount-previnstcount > gvp->instpermsec*1000*5) {
+#define IPMTIME 5000
+
+	if ((gvp->instcount < previnstcount) || (gvp->instcount-previnstcount > gvp->instpermsec*IPMTIME)) {
+	  if (gvp->instcount-previnstcount > gvp->instpermsec*IPMTIME) {
 	    i = (gvp->instcount-previnstcount) /
-	      ((tv.tv_sec-prev_tv.tv_sec-1)*1000 + (tv.tv_usec+1000000-prev_tv.tv_usec)/1000);
-	    if (i > 0)
+	      ((tv.tv_sec-prev_tv.tv_sec)*1000.0 + (tv.tv_usec-prev_tv.tv_usec)/1000.0);
+	    if (i > 0) {
+	      //printf("ic= %u, prev= %u, diff= %u, ipmsec= %d, prev= %d, diff= %d\n", gvp->instcount, previnstcount, gvp->instcount-previnstcount, i, gvp->instpermsec, i-gvp->instpermsec);
 	      gvp->instpermsec = i;
-	    printf("instcount = %u, previnstcount = %u, diff=%u, instpermsec=%d\n", gvp->instcount, previnstcount, gvp->instcount-previnstcount, gvp->instpermsec);
+	    }
 #ifdef NOIDLE
 	    //printf("\ninstpermsec=%d\n", gvp->instpermsec);
 #endif
 
-	    /* call the security check code every 5 seconds */
+	    /* call the security check code */
 
 	    secure(tv);
 	  }

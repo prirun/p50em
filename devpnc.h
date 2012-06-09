@@ -206,7 +206,7 @@
 
 #define PNCNSRCVINT    0x8000  /* bit 1 rcv interrupt (rcv complete) */
 #define PNCNSXMITINT   0x4000  /* bit 2 xmit interrupt (xmit complete) */
-  //#define PNCNSPNC2      0x2000  /* bit 3 PNC II = 1 (aka pncbooster) */
+#define PNCNSPNC2      0x2000  /* bit 3 PNC II = 1 (aka pncbooster) */
   //#define PNCNSNEWMODE   0x1000  /* bit 4 PNC in "new"/II mode */
   //#define PNCNSERROR     0x0800  /* bit 5 u-verify failure or bad command (II) */
 #define PNCNSCONNECTED 0x0400  /* bit 6 connected to ring */
@@ -832,6 +832,7 @@ int devpnc (int class, int func, int device) {
     }
 
     pncstat = 0;
+    pncstat = PNCNSPNC2;      /* this enables PNC II */
     intstat = 0;
     rcvstat = 0;
     xmitstat = 0;
@@ -1010,7 +1011,7 @@ int devpnc (int class, int func, int device) {
       rcv.state = PNCBSIDLE;
       rcvstat = PNCRSBUSY;
       xmitstat = PNCXSBUSY;
-      pncstat &= PNCNSNODEIDMASK;
+      pncstat &= (PNCNSPNC2 | PNCNSNODEIDMASK);
 
     } else if (func == 01) {    /* OCP '0107 connect to the ring */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - connect\n", func, device);
@@ -1140,6 +1141,9 @@ int devpnc (int class, int func, int device) {
     TRACE(T_INST|T_RIO, " OTA '%02o%02o\n", func, device);
     if (func == 011) {          /* output diagnostic register */
       pncdiag = getcrs16(A);
+      IOSKIP;
+
+    } else if (func == 0) {     /* PNC2: set statistics update frequency */
       IOSKIP;
 
     } else if (func == 014) {   /* initiate recv, dma chan in A */
