@@ -443,11 +443,11 @@ int devamlc (int class, int func, int device) {
 		}
 	      } else
 		tempport = 0;
-	      dc[dx].obhost[lx] = *(unsigned int *)host->h_addr;
+	      dc[dx].obhost[lx] = ntohl(*(unsigned int *)host->h_addr);
 	      dc[dx].obport[lx] = tempport;
 	      dc[dx].ctype[lx] = CT_DEDIP;
 	      haveob = 1;
-	      //printf("Dedicated socket, host=%x, port=%d, cont=%d, line=%d\n", dc[dx].obhost[lx], tempport, dx, lx);
+	      //printf("Dedicated socket, host=%x, port=%d, cont=%d, line=%d\n", dc[dx].obhost[lx], tempport, dx, lx); /***/
 	    }
 	  }
 	}
@@ -634,6 +634,7 @@ int devamlc (int class, int func, int device) {
       case CT_SOCKET:
       case CT_DEDIP:
 	if (!(getcrs16(A) & 0x400) && dc[dx].fd[lx] >= 0) {  /* if DTR drops, disconnect */
+	  //printf("Closing amlc fd %d, dtr dropped\n", dc[dx].fd[lx]);
 	  AMLC_CLOSE_LINE;
 	}
 	break;
@@ -1016,7 +1017,7 @@ int devamlc (int class, int func, int device) {
 		struct sockaddr_in raddr;
   
 		dc[dx].obtimer[lx] = tv.tv_sec + AMLCCONNECT;
-		//printf("em: trying to connect to 0x%08x:%d\n", dc[dx].obhost[lx], dc[dx].obport[lx]);
+		//printf("em: trying to connect to 0x%08x:%d\n", dc[dx].obhost[lx], dc[dx].obport[lx]); /***/
 		fd = socket(AF_INET, SOCK_STREAM, 0);
 		if (fd < 0) {
 		  perror("em: unable to create socket for outbound AMLC connection");
@@ -1033,15 +1034,15 @@ int devamlc (int class, int func, int device) {
 		}
 		bzero((char *) &raddr, sizeof(raddr));
 		raddr.sin_family = AF_INET;
-                raddr.sin_addr.s_addr = dc[dx].obhost[lx];
-		raddr.sin_port = dc[dx].obport[lx];
+                raddr.sin_addr.s_addr = htonl(dc[dx].obhost[lx]);
+		raddr.sin_port = htons(dc[dx].obport[lx]);
 		if (connect(fd, (struct sockaddr *)&raddr, sizeof(raddr)) < 0 && errno != EINPROGRESS) {
 		  perror("em: outbound AMLC connection failed");
 		  continue;
 		}
 		dc[dx].fd[lx] = fd;
 		dc[dx].connected |= BITMASK16(lx+1);
-		//printf("em: connected to 0x%08x:%d, fd=%d\n", dc[dx].obhost[lx], dc[dx].obport[lx], fd);
+		//printf("em: connected to 0x%08x:%d, fd=%d\n", dc[dx].obhost[lx], dc[dx].obport[lx], fd);  /***/
 	      }
 	    } else {
 	      //printf("Draining output queue on line %d\n", lx);
@@ -1086,6 +1087,7 @@ int devamlc (int class, int func, int device) {
 		AMLC_CLOSE_LINE;
 
 	      } else if (errno == EPIPE || errno == ECONNRESET) {
+		//printf("Closing amlc fd %d, errno=%d\n", dc[dx].fd[lx], errno);
 		AMLC_CLOSE_LINE;
 
 	      } else {
