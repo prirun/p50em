@@ -784,9 +784,7 @@ int readlicense(int first) {
   newlicense.rserver = gethostbyname(newlicense.server);
   if (newlicense.rserver == NULL) {
     printf("em: can't lookup IP address for license server %s.  Check license file or DNS.\n", newlicense.server);
-    newlicense.rserver = gethostbyname("localhost");
-    if (newlicense.rserver == NULL)
-      return 0;
+    return 0;
   }
   bcopy((char *)newlicense.rserver->h_addr, (char *)&raddr.sin_addr.s_addr, newlicense.rserver->h_length);
   license = newlicense;
@@ -4423,7 +4421,7 @@ main (int argc, char **argv) {
   struct timezone tz;
 
   printf("[Prime Emulator ver %s %s]\n", REV, __DATE__);
-  printf("[Copyright (C) 2005-2011 Prirun LLC]\n");
+  printf("[Copyright (C) 2005-2012 Prirun LLC prirun@gmail.com]\n");
   if (argc > 1 && (strcmp(argv[1],"--version") == 0)) {
     exit(0);
   }
