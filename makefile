@@ -3,6 +3,15 @@
 
 REV=${shell hg id -n}
 
+# for Intel, registers can't be used
+# for PPC, registers are faster but some features are disabled:
+# - PNC can't use signals to interrupt, so it's much slower
+# - SIGTERM and SIGQUIT can't be trapped and handled gracefully
+# for PPC debug, don't use registers
+
+REGS=-DNOREGS
+REGS=
+
 .PHONY:	broken em emp debug debugp trace tracep vfy vfyp fixed fixedp demo demop demol dongleprog lmserver lmserverp magrst magsav parts smad smag mtread mtwrite
 
 em:     # production (Intel)
@@ -16,10 +25,9 @@ em:     # production (Intel)
 emp:    # production (PowerPC)
 
 	rm -rf em.o
-	cc -arch ppc -DKEYID=${KEYID} -DNOREGS -mmacosx-version-min=10.4 -fno-stack-protector -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch ppc -o em em.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DKEYID=${KEYID} ${REGS} -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch ppc -o em em.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	strip em
 	rm em.o
-
 
 debug:   # gdb (Intel)
 
@@ -45,7 +53,7 @@ trace:   # tracing + gdb (Intel)
 tracep: # tracing + gdb (PowerPC)
 
 	rm -rf em.o
-	cc -arch ppc -DKEYID=${KEYID} -mmacosx-version-min=10.4 -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/PPC/api;g++ -arch ppc -o em em.o dongle/mx/PPC/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DKEYID=${KEYID} ${REGS} -DREV=\"${REV}\" -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch ppc -o em em.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm -rf em.o
 
 
@@ -73,7 +81,7 @@ fixed:  # fixed clock rate, gdb (Intel)
 fixedp: # fixed clock rate, gdb (PowerPC)
 
 	rm -rf em.o
-	cc -arch ppc -mmacosx-version-min=10.4 -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DNOREGS -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/PPC/api;g++ -arch ppc -o em em.o dongle/mx/PPC/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -mmacosx-version-min=10.4 -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE ${REGS} -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/PPC/api;g++ -arch ppc -o em em.o dongle/mx/PPC/api/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 
@@ -88,7 +96,7 @@ demo:  # demo (limited: 1-2 amlc, 1 disk drive up to 160MB, one PNC node) (Intel
 demop: # demo (PowerPC)
 
 	rm -rf em.o
-	cc -DNOREGS -mmacosx-version-min=10.4 -fno-stack-protector -arch ppc -DREV=\"${REV}\" -DDEMO -DNOTRACE -DFAST -O em.c -fobey-inline -mdynamic-no-pic -o em
+	cc ${REGS} -mmacosx-version-min=10.4 -fno-stack-protector -arch ppc -DREV=\"${REV}\" -DDEMO -DNOTRACE -DFAST -O em.c -fobey-inline -mdynamic-no-pic -o em
 	strip em
 	rm -rf em.o
 

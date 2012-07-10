@@ -778,6 +778,8 @@ int readlicense(int first) {
     return 0;
   }
   fclose(licensefile);
+  if (first)
+    license = newlicense;
 
   /* lookup the license server's address */
 
@@ -1585,27 +1587,35 @@ static put64r(long long value, ea_t ea, ea_t rpring) {
   }
 }
 
-/* flag a sensor check when SIGTERM signal is generated.  This is
-   checked when a new process is dispatched, sets the process abort
-   flags for the sensor check if the new process is user 1, causing
-   Primos to flush all disk buffers and shutdown gracefully.
+/* flag a hardware sensor check if process exchange is enabled and
+   SIGTERM occurs.  The sensorabort flag is checked when a new process
+   is dispatched, sets the process abort flags for the hardware sensor
+   check if the new process is user 1, causing Primos to flush all
+   disk buffers and shutdown gracefully.
 
    NOTE: it may take up to 1 minute for Primos to see the sensor
    check.  User 1 will usually be at the OK, prompt, waiting on 
    input, and the check will occur when the 1-minute abort occurs.
 
-   A flag is used here instead of just setting the abort flag directly,
-   because signals mess up the registers, so if RP is being stored in
-   a register, it gets trashed and it's not possible to reset it.
+   NOTE: these are inactive if the emulator is using dedicated
+   registers, because signals trash the registers and it's not
+   possible to save & restore them.
  */
 
 void sensorcheck () {
-
-  sensorabort = 1;
+  if (getcrs16(MODALS) & 010) {     /* PX enabled */
+    printf("\nem: sigterm received, Primos may shutdown soon\n");
+    sensorabort = 1;
+  }
 }
 
 void sigquit() {
-  fatal("Quit");
+  if (sensorabort || (getcrs16(MODALS) & 010) == 0)
+    fatal("Quit");
+  else {
+    printf("\nem: sigquit received, Primos may shutdown soon\n");
+    sensorabort = 1;
+  }
 }
 
 /* machine check handler, called with check vector locations
@@ -4367,6 +4377,7 @@ main (int argc, char **argv) {
   char *bootarg;                       /* argument to -boot, if any */
   char bootfile[16];                   /* boot file to load (optional) */
   int bootfd=-1;                       /* initial boot file fd */
+  int lockfd=-1;                       /* fd of /tmp/em.lck lock file */
   int bootctrl, bootunit;              /* boot device controller and unit */
   int bootskip=0;                      /* skip this many bytes on boot dev */
   unsigned char boottaphdr[4];
@@ -4437,12 +4448,26 @@ main (int argc, char **argv) {
     exit(1);
   }
 
+#if (!defined(DEMO) && (KEYID!=0))
+  lockfd = open("/tmp/em.lck", O_WRONLY+O_CREAT, 0644);
+  if (lockfd == -1) {
+    fprintf(stderr, "Error opening /tmp/em.lck: %s\n", strerror(errno));
+    exit(1);
+  }
+  if (flock(lockfd, LOCK_EX+LOCK_NB) == -1) {
+    fprintf(stderr, "Already running\n");
+    exit(1);
+  }
+#endif
+
   /* initialize global variables */
 
+#ifndef NOREGS
   if (sizeof(gv) > 16*1024) {
-    printf("em: size of global vars = %lu\n", sizeof(gv));
+    fprintf(stderr, "em: size of global vars = %lu\n", sizeof(gv));
     fatal(NULL);
   }
+#endif
 
   gvp = &gv;
   gvp->physmem = physmem;
@@ -4476,9 +4501,8 @@ main (int argc, char **argv) {
 
   /* on SIGTERM, shutdown the emulator with a Prime sensor check */
 
-  signal (SIGTERM, sensorcheck);
-
 #ifdef NOREGS
+  signal (SIGTERM, sensorcheck);
   signal (SIGQUIT, sigquit);
 #endif
 
@@ -6709,6 +6733,13 @@ d_bdx:  /* 0140734 */
 
 	/* NOTE: on OSX, a signal (sigio for pnc) will interrupt usleep */
 
+	{
+	  static int firsttime=1;
+	  if (firsttime) {
+	    signal (SIGTERM, sensorcheck);
+	    firsttime = 0;
+	  }
+	}
 	usleep(delayusec);
 	if (gettimeofday(&tv1, NULL) != 0)
 	  fatal("em: gettimeofday 1 failed");
