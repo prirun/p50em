@@ -12,7 +12,7 @@ REV=${shell hg id -n}
 REGS=-DNOREGS
 REGS=
 
-.PHONY:	broken em emp debug debugp trace tracep vfy vfyp fixed fixedp demo demop demol dongleprog lmserver lmserverp magrst magsav parts smad smag mtread mtwrite
+.PHONY:	broken brokenp em emp debug debugp trace tracep vfy vfyp fixed fixedp demo demop demol dongleprog lmserver lmserverp magrst magsav parts smad smag mtread mtwrite
 
 em:     # production (Intel)
 
@@ -25,7 +25,7 @@ em:     # production (Intel)
 emp:    # production (PowerPC)
 
 	rm -rf em.o
-	cc -arch ppc -DKEYID=${KEYID} ${REGS} -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch ppc -o em em.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DKEYID=${KEYID} ${REGS} -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API;g++ -arch ppc -o em em.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 	strip em
 	rm em.o
 
@@ -53,7 +53,7 @@ trace:   # tracing + gdb (Intel)
 tracep: # tracing + gdb (PowerPC)
 
 	rm -rf em.o
-	cc -arch ppc -DKEYID=${KEYID} ${REGS} -DREV=\"${REV}\" -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/api;g++ -arch ppc -o em em.o dongle/mx/Universal/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DKEYID=${KEYID} ${REGS} -DREV=\"${REV}\" -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API;g++ -arch ppc -o em em.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm -rf em.o
 
 
@@ -172,19 +172,7 @@ broken: # production (Intel)
 	rm -rf broken.o
 	cc -arch i686 -O -c broken.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API;g++ -arch i686 -o broken broken.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 
-brokenp: # production (Intel)
+brokenp: # production (PPC)
 
 	rm -rf broken.o
 	cc -arch ppc -O -c broken.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API;g++ -arch ppc -o brokenp broken.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
-
-brokeno: # production (Intel)
-
-	rm -rf broken.o
-	cc -arch ppc -O -c broken.c -fobey-inline -mdynamic-no-pic -Idongle/mx.orig/ppc/api;g++ -arch ppc -o brokeno broken.o dongle/mx.orig/ppc/api/libmxmac260.a -framework IOKit -framework CoreFoundation
-
-brokenf: # production (Intel)
-
-	rm -rf broken.o
-	cc -arch i686 -O -c broken.c -Idongle/mx.fix/Universal/API;g++ -arch i686 -o brokenf broken.o dongle/mx.fix/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
-
-
