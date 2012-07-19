@@ -1,3 +1,14 @@
+/* this is for testing what happens if gettimeofday is overridden */
+
+#if 0
+int gettimeofday(struct timeval *tv, struct timezone *tz) {
+  tv->tv_sec = 0;
+  tv->tv_sec = 1342600000;
+  tv->tv_usec = 0;
+  return 0;
+}
+#endif
+
 /* emdev.h, Jim Wilcoxson (prirun@gmail.com), April 17, 2005
    Device handlers for pio instructions.  Use devnull as a template for
    new handlers.
@@ -336,9 +347,9 @@ int devasr (int class, int func, int device) {
 
     origterminfo = terminfo;
 
-    /* NOTE: some of these are not restored by the host OS after the
-       emulator is suspended (VSUSP) then restarted, eg, the VSUSP and
-       VINTR characters */
+    /* NOTE: on OSX 10.4, these are not restored by the fg command
+       after the emulator is suspended (VSUSP) then restarted; so
+       suspend has been disabled altogether */
 
     terminfo.c_iflag &= ~(INLCR | ICRNL | IXOFF | IXON);
     terminfo.c_lflag &= ~(ECHOCTL | ICANON);
@@ -347,7 +358,11 @@ int devasr (int class, int func, int device) {
     terminfo.c_cc[VDSUSP] = _POSIX_VDISABLE; /* disable ^Y dsuspend */
     terminfo.c_cc[VLNEXT] = _POSIX_VDISABLE; /* disable ^V lnext */
     terminfo.c_cc[VDISCARD] = _POSIX_VDISABLE; /* disable ^O discard */
-    terminfo.c_cc[VSUSP] = '';  /* change ^Z to ^]
+#if 0
+    terminfo.c_cc[VSUSP] = '';  /* change ^Z to ^] */
+#else
+  terminfo.c_cc[VSUSP] = _POSIX_VDISABLE;  /* disable suspend */
+#endif
     terminfo.c_cc[VMIN] = 0;
     terminfo.c_cc[VTIME] = 0;
     if (tcsetattr(ttydev, TCSANOW, &terminfo) == -1) {
