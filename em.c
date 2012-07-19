@@ -130,6 +130,7 @@ gvp->tracetriggered = 1; this simulates the Ctrl-t.
 #include <sys/select.h>
 #include <termios.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
@@ -334,6 +335,7 @@ typedef struct {
 } license_t;
 
 license_t license;
+static int mypid;
 
 #ifdef NOTRACE
   #define TRACE(flags, formatargs...)
@@ -592,6 +594,8 @@ brp_t *eap;
 static  jmp_buf jmpbuf;               /* for longjumps to the fetch loop */
 static  jmp_buf bootjmp;               /* for longjumps to the fetch loop */
 
+static unsigned long bootuid;
+
 /* The standard Prime physical memory limit on early machines is 8MB.
    Later machines have higher memory capacities, up to 1024MB, using 
    32-bit page tables. 
@@ -791,7 +795,7 @@ int readlicense(int first) {
   bcopy((char *)newlicense.rserver->h_addr, (char *)&raddr.sin_addr.s_addr, newlicense.rserver->h_length);
   license = newlicense;
   if (first)
-    printf("License id: %08x server %s [%s:%d]\n", license.id, license.server, (char *) inet_ntoa(raddr.sin_addr.s_addr), license.sport);
+    printf("License id %08x, server %s [%s:%d]\n", license.id, license.server, (char *) inet_ntoa(raddr.sin_addr.s_addr), license.sport);
 
 #endif
   return 1;
@@ -1610,7 +1614,7 @@ void sensorcheck () {
 }
 
 void sigquit() {
-  if (sensorabort || (getcrs16(MODALS) & 010) == 0)
+  if (sensorabort || ((getcrs16(MODALS) & 010) == 0))
     fatal("Quit");
   else {
     printf("\nem: sigquit received, Primos may shutdown soon\n");
@@ -3516,9 +3520,9 @@ static dispatcher() {
   /* if this process' abort flags are set, clear them and take process fault */
 
   utempa = get16r0(pcbp+PCBABT);
-  if (pcbw == 0100100 && sensorabort) {
+  if (pcbw == 0100100 && sensorabort == 1) {
     utempa |= 01000;    /* set user 1's sensor check abort flag */
-    sensorabort = 0;
+    sensorabort = 2;
   }
   if (utempa != 0) {
     TRACE(T_PX, "dispatch: abort flags for %o are %o\n", getcrs16(OWNERL), utempa);
@@ -4437,6 +4441,8 @@ main (int argc, char **argv) {
     exit(0);
   }
 
+  mypid = getpid();
+
   /* re-open stderr as error.log */
 
   close(2);
@@ -4939,6 +4945,17 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
   if (lseek(bootfd, bootskip, SEEK_CUR) == -1) {
     perror("Error skipping on boot device");
     fatal(NULL);
+  }
+
+  /* save boot file inode; this gets sent in security checks */
+
+  {
+    struct stat statbuf;
+    if ((i=fstat(bootfd, &statbuf)) == -1) {
+      perror("Error fstat on boot file");
+      fatal(NULL);
+    }
+    bootuid = statbuf.st_ino;
   }
   close(bootfd);
 
