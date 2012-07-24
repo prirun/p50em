@@ -6747,8 +6747,9 @@ d_bdx:  /* 0140734 */
       if (delayusec > 1000) {
 	if (gettimeofday(&tv0, NULL) != 0)
 	  fatal("em: gettimeofday 0 failed");
-
-	/* NOTE: on OSX, a signal (sigio for pnc) will interrupt usleep */
+	
+	/* for some reason, the SIGTERM signal handler gets reset
+	   during emulator initialization; this re-installs it */
 
 	{
 	  static int firsttime=1;
@@ -6757,6 +6758,9 @@ d_bdx:  /* 0140734 */
 	    firsttime = 0;
 	  }
 	}
+
+	/* NOTE: on OSX, a signal (sigio for pnc) will interrupt usleep */
+
 	usleep(delayusec);
 	if (gettimeofday(&tv1, NULL) != 0)
 	  fatal("em: gettimeofday 1 failed");

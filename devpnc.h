@@ -991,10 +991,15 @@ int devpnc (int class, int func, int device) {
     }
     TRACE(T_RIO, "PNC configured\n");
     devpoll[device] = PNCPOLL*gvp->instpermsec;
+
+    /* can't use signals with NOREGS, so PNC I/O is very slow */
+
+#ifdef NOREGS
     if (signal(SIGIO, pnchavedata) == SIG_ERR) {
       perror("installing SIGIO handler");
       fatal(NULL);
     }
+#endif
     if (gettimeofday(&tv0, NULL) != 0)
       fatal("pnc gettimeofday 1 failed");
     tv0ts = tv0.tv_sec + tv0.tv_usec/1000000.0;
