@@ -1,0 +1,96 @@
+July 7, 2012
+Emulator Version 247
+
+Updates to the Prime Emulator since rev 102:
+
+- the emulator runs on both PowerPC and Intel CPU architectures.
+  It cannot be built as a "Universal" program (runs on both Intel and
+  PPC); there are separate PPC and Intel versions.
+
+- the format of the licensing information stored on the dongle has
+  changed.  It is possible to run either the old emulator or new
+  emulator with the same dongle, but when switching between old and
+  new, the machine must be connected to the Internet.
+
+- one copy of the emulator can run on one machine.
+
+- the dongle is updated as soon as the Prime starts.  If your Prime
+  is rebooting very often for some reason, like many times per hour,
+  and is not connected to the Internet, it may deplete the dongle
+  charge sooner than expected.  Connect to the Internet if this
+  happens and the dongle will recharge.
+
+- AMLC handling is much more efficient (uses less CPU time) and
+  allocates resources more fairly among active AMLC lines
+
+- AMLC telnet negotiation has been fixed, so it's not necessary to use
+  /NOWAIT with Kermit
+
+- AMLC baud rates have changed from:
+    1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200
+  to:
+     300, 1200, 9600, 19200, 9600*, 38400, 57600, 115200
+  * this is the AMLCLK speed; the default is 9600 like a real Prime
+
+- AMLCLK can be used to set the 4th (starting at 0) baud rate,
+  like on a real Prime; the default speed is 9600
+
+- the AMLC config filename has been changed from "amlc" to "amlc.cfg"
+
+- assigned AMLC lines can be used for TCP/IP printing in amlc.cfg.
+  Here is an example config line in amlc.cfg:
+    010 192.168.1.1:9100
+  This will connect AMLC line 8 (decimal) to this IP address & port.
+  If the printer disconnects, the emulator will try to re-establish
+  the connection the next time there is data to send.  If DTR is
+  dropped, for example by T$AMLC, the emulator will drop the connection.
+  When DTR is raised, the emulator will re-establish the connection
+  the next time there is data to send.
+
+- supports PNC emulation (Prime "RingNet") over TCP/IP
+
+- support added for old-style Prime T&M hardware diagnostics;
+  new-style DIAG diagnostics already ran.  The emulator passes
+  nearly all CPU diagnostics.  It is difficult to pass all Prime
+  diagnostics because many of them expect certain microcode bugs
+  to be present for certain models.
+
+- if a SIGTERM signal is received, the emulator will try to do a
+  graceful Primos shutdown.  This is useful when a UPS battery
+  backup is used and the UPS is connected to a USB port: when
+  the UPS battery gets low, OSX will send SIGTERM to all running
+  processes.  The emulator sees SIGTERM, passes it on to Primos,
+  and Primos shuts down all disk drives.  This prevents disk
+  corruption than can occur when a Prime is abruptly halted.
+  It is also possible to send SIGTERM with: kill -TERM n, where
+  n is the emulator's process id.
+
+- hitting Ctrl \ on the system console will cause the emulator
+  to shutdown Primos.  If this doesn't work for some reason, a
+  second Ctrl \ will cause an immediate halt.
+
+  IMPORTANT NOTE: these last 2 features do not work with the faster,
+  dedicated register PowerPC build, because signals trash the
+  registers.
+
+- hitting Ctrl ] on the system console caused the old emulator
+  to suspend, and "fg" would continue.  But it changed the
+  system console terminal settings.  This key has been disabled.
+
+- the emulator prints a reminder to check error.log if it is
+  not empty.  Error and warning messages are written here.
+
+- indirect loops in address calculations are now limited like on a
+  real Prime.  Before, there was no limit, so it was possible to
+  "hang" the emulator with a specially constructed indirect
+  instruction.
+
+- previously, the -cpuid option took a number from 0 to 44 to
+  indicate the CPU model.  Now it also accepts model numbers
+  like 750, 2250, 4050, 9950, etc.
+
+- Ctrl Y, Ctrl V, and Ctrl O work on the system console
+
+- several Prime disk drives had track limits that were off
+  by 1 or 2.  This could cause seek errors, especially when
+  running Prime diagnostics.

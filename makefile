@@ -39,7 +39,7 @@ debug:   # gdb (Intel)
 debugp:  # gdb (PowerPC)
 
 	rm -rf em.o
-	cc -arch ppc -DKEYID=${KEYID} -mmacosx-version-min=10.4 -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOTRACE -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/PPC/api;g++ -arch ppc -o em em.o dongle/mx/PPC/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DKEYID=${KEYID} -mmacosx-version-min=10.4 -DREV=\"${REV}\" -DNOREGS -g -O0 -DNOTRACE -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API/10_6;g++ -arch ppc -o em em.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 
@@ -53,7 +53,7 @@ trace:   # tracing + gdb (Intel)
 tracep: # tracing + gdb (PowerPC)
 
 	rm -rf em.o
-	cc -arch ppc -DKEYID=${KEYID} ${REGS} -DREV=\"${REV}\" -DFAST -DNOMEM -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API;g++ -arch ppc -o em em.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DKEYID=${KEYID} ${REGS} -DREV=\"${REV}\" -DFAST -O -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API;g++ -arch ppc -o em em.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm -rf em.o
 
 
@@ -67,7 +67,7 @@ vfy:   # prod + tracing to verify em changes (Intel)
 vfyp: # prod + tracing to verify em changes (PowerPC)
 
 	rm -rf em.o
-	cc -arch ppc -mmacosx-version-min=10.4 -DREV=\"\" -O -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/PPC/api;g++ -arch ppc -o em em.o dongle/mx/PPC/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -mmacosx-version-min=10.4 -DREV=\"\" -O -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API/10_6;g++ -arch ppc -o em em.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm -rf em.o
 
 
@@ -81,7 +81,7 @@ fixed:  # fixed clock rate, gdb (Intel)
 fixedp: # fixed clock rate, gdb (PowerPC)
 
 	rm -rf em.o
-	cc -arch ppc -mmacosx-version-min=10.4 -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE ${REGS} -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/PPC/api;g++ -arch ppc -o em em.o dongle/mx/PPC/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -mmacosx-version-min=10.4 -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE ${REGS} -g -O0 -DFAST -c em.c -fobey-inline -mdynamic-no-pic -Idongle/mx/Universal/API/10_6;g++ -arch ppc -o em em.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm em.o
 
 
@@ -111,7 +111,7 @@ demol:  # demo (limited: 1-2 amlc, 1 disk drive up to 160MB, one PNC node) (Inte
 
 dongleprog: # utility to program a dongle
 
-	cc -arch ppc -DREV=\"${REV}\" -c dongleprog.c -Idongle/mx/PPC/api;g++ -arch ppc -o dongleprog dongleprog.o dongle/mx/PPC/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DREV=\"${REV}\" -c dongleprog.c -Idongle/mx/Universal/API/10_6;g++ -arch ppc -o dongleprog dongleprog.o dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm dongleprog.o
 
 
@@ -124,7 +124,7 @@ lmserver: # license server
 lmserverp: # license server
 
 	rm -rf lmserver.o
-	cc -arch ppc -DREV=\"${REV}\" -c lmserver.c -Idongle/mx/PPC/api;g++ -arch ppc lmserver.o -o lmserver dongle/mx/PPC/api/libmxmac260.a -framework IOKit -framework CoreFoundation
+	cc -arch ppc -DREV=\"${REV}\" -c lmserver.c -Idongle/mx/Universal/API/10_6;g++ -arch ppc lmserver.o -o lmserver dongle/mx/Universal/API/10_6/libmxmac260.a -framework IOKit -framework CoreFoundation
 	rm lmserver.o
 
 mtread: # Dump a tape to a .tap disk file (Linux only)
