@@ -1441,7 +1441,7 @@ int devcp (int class, int func, int device) {
 
   struct timeval tv;
   unsigned int elapsedms,targetticks;
-  unsigned short realkeys;
+  ea_t realrp;
   int i;
 
 #define SETCLKPOLL devpoll[device] = gvp->instpermsec*(-clkpic*clkrate)/1000;
@@ -1641,11 +1641,11 @@ int devcp (int class, int func, int device) {
 
 #define IPMTIME 5000
 
-	realkeys = getcrs16(KEYS);
+	realrp = RP;
 	if ((gvp->instcount < previnstcount) || (gvp->instcount-previnstcount > gvp->instpermsec*IPMTIME)) {
 	  if (gvp->instcount-previnstcount > gvp->instpermsec*IPMTIME) {
 #ifndef DEMO
-	    putcrs16(KEYS, 0xFFFF);                /* install bad keys */
+	    RP = MAKEVA(07777, 0);  /* set bad RP */
 #endif
 	    i = (gvp->instcount-previnstcount) /
 	      ((tv.tv_sec-prev_tv.tv_sec)*1000.0 + (tv.tv_usec-prev_tv.tv_usec)/1000.0);
@@ -1659,7 +1659,7 @@ int devcp (int class, int func, int device) {
 
 	    /* call the security check code */
 
-	    secure(tv, realkeys);
+	    secure(tv, realrp);
 	  }
 	  previnstcount = gvp->instcount;
 	  prev_tv = tv;
