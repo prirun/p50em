@@ -870,7 +870,7 @@ int devamlc (int class, int func, int device) {
 	      /* NOTE: don't allow connections on clock line */
 	      if (lx == 15 && (i+1 == MAXBOARDS || !dc[i+1].deviceid))
 		  break;
-	      if ((j == 0 && dc[i].ctype[lx] == CT_DEDIP && dc[i].obhost[lx] == ipaddr) ||
+	      if ((j == 0 && dc[i].ctype[lx] == CT_DEDIP && dc[i].obhost[lx] == ipaddr && dc[i].obport[lx] == 0) ||
 		  (j == 1 && dc[i].ctype[lx] == CT_SOCKET && dc[i].fd[lx] < 0)) {
 		allbusy = 0;
 		if (dc[i].fd[lx] >= 0)
@@ -938,7 +938,7 @@ int devamlc (int class, int func, int device) {
 
 	  /* send out the ttymsg greeting */
 
-	  if ((ttyfd = open("ttymsg", O_RDONLY, 0)) >= 0) {
+	  if (dc[i].ctype[lx] == CT_SOCKET && (ttyfd = open("ttymsg", O_RDONLY, 0)) >= 0) {
 	    int n;
 	    n = read(ttyfd, buf, sizeof(buf));
 	    if (n > 0)
