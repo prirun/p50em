@@ -1,10 +1,20 @@
-/* this is for testing what happens if gettimeofday is overridden */
+/* this is to test what happens when gettimeofday is overridden.  On
+   an idle machine, a little more than one second ticks every hour.
+
+   The dongle is still required but it does allow the emulator to run
+   w/o a license.  However there are several bad time-related
+   side-effects.  The worst seems to be that timeslicing doesn't work,
+   so a CPU-bound job more-or-less locks up the machine.
+*/
 
 #if 0
-int gettimeofday(struct timeval *tv, struct timezone *tz) {
+int ctr = 0;
+int gettimeofday(struct timeval *tv, void *tz) {
   tv->tv_sec = 0;
-  tv->tv_sec = 1342600000;
-  tv->tv_usec = 0;
+  tv->tv_sec = 1342600000 + ctr/1000000;
+  tv->tv_usec = ctr % 1000000;
+  ctr++;
+  if (ctr % 1000000 == 0) printf("%d\n", ctr);
   return 0;
 }
 #endif
@@ -2129,8 +2139,8 @@ int devdisk (int class, int func, int device) {
 	  break;
 	}
 	if (u == 1) u = 0;
-#ifndef DEMO
 	else if (u == 2) u = 1;
+#ifndef DEMO
 	else if (u == 4) u = 2;
 	else if (u == 8) u = 3;
 	else if (u == 16) u = 4;

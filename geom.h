@@ -1,7 +1,7 @@
   /* static structure for disk file suffixes and config data */
 
 #ifdef DEMO
-#define MAXDRIVES 1
+#define MAXDRIVES 2
 #define MAXCTRL 1     /* 1 controller supported at device address '26 */
 
 #define NUMGEOM 7
