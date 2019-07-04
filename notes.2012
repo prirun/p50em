@@ -61,7 +61,7 @@ Updates to the Prime Emulator since rev 102:
   the UPS battery gets low, OSX will send SIGTERM to all running
   processes.  The emulator sees SIGTERM, passes it on to Primos,
   and Primos shuts down all disk drives.  This prevents disk
-  corruption than can occur when a Prime is abruptly halted.
+  corruption that can occur when a Prime is abruptly halted.
   It is also possible to send SIGTERM with: kill -TERM n, where
   n is the emulator's process id.
 
