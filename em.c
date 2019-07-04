@@ -1785,7 +1785,7 @@ static int devpoll[64] = {0};
    
    '04 = devasr: system console
    '07 = devpnc: Primenet Node Controller aka PNC (Ringnet)
-   '14 = devmt: mag tape controller (4 drives)
+   '14 = devmt: mag tape controller (1 drive)
    '20 = devcp: clock / VCP / SOC
    '26 = devdisk: 1st disk controller
    '54 = devamlc: 1st AMLC (16 lines)
