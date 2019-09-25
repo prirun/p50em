@@ -259,7 +259,7 @@
 #define MAXPNCBYTES MAXPNCWORDS*2     /* same in bytes */
 #define MAXPKTBYTES (MAXPNCBYTES+4)   /* adds 16-bit length word to each end */
 
-#ifdef DEMO
+#ifdef DEMOXXX
   #define MAXNODEID 3        /* 0 is a dummy, 255 is broadcast */
 #else
   #define MAXNODEID 254      /* 0 is a dummy, 255 is broadcast */
@@ -402,10 +402,12 @@ pncinitfd(int fd) {
     perror("setsockopt 2 failed for PNC");
     fatal(NULL);
   }
+#ifdef __APPLE__
   if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &optval, sizeof(optval))) {
     perror("setsockopt 3 failed for PNC");
     fatal(NULL);
   }
+#endif
 #ifndef NOREGS
   fdflags |= O_NONBLOCK;
 #else
@@ -943,7 +945,7 @@ int devpnc (int class, int func, int device) {
 	fatal(NULL);
       }
       fclose(ringfile);
-#ifdef DEMO
+#ifdef DEMOXXX
       i = 0;
       for (tempid=1; tempid<=MAXNODEID; tempid++)
 	if (ni[tempid].cstate != PNCCSNONE)
@@ -974,10 +976,12 @@ int devpnc (int class, int func, int device) {
       perror("setsockopt failed for PNC listen");
       fatal(NULL);
     }
+#ifdef __APPLE__
     if (setsockopt(pncfd, SOL_SOCKET, SO_NOSIGPIPE, &optval, sizeof(optval))) {
       perror("setsockopt 1 failed for PNC");
       fatal(NULL);
     }
+#endif
     addr.sin_family = AF_INET;
     addr.sin_port = htons(nport);
     addr.sin_addr.s_addr = INADDR_ANY;

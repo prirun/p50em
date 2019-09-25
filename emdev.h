@@ -365,7 +365,9 @@ int devasr (int class, int func, int device) {
     terminfo.c_lflag &= ~(ECHOCTL | ICANON);
     terminfo.c_oflag &= ~(TOSTOP);
     terminfo.c_cc[VINTR] = _POSIX_VDISABLE;  /* disable ^C interrupt; use ^\ */
+#ifdef __APPLE__
     terminfo.c_cc[VDSUSP] = _POSIX_VDISABLE; /* disable ^Y dsuspend */
+#endif
     terminfo.c_cc[VLNEXT] = _POSIX_VDISABLE; /* disable ^V lnext */
     terminfo.c_cc[VDISCARD] = _POSIX_VDISABLE; /* disable ^O discard */
 #if 0

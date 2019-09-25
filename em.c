@@ -1803,7 +1803,7 @@ static int (*devmap[64])(int, int, int) = {
 
 #elif 0
 
-/* this is the "full system" configuration supported by the emulator */
+/* this is the "full system" configuration supported by the emulator
 
    '04 = devasr: system console
    '07 = devpnc: Primenet Node Controller aka PNC (Ringnet)
@@ -1825,6 +1825,7 @@ static int (*devmap[64])(int, int, int) = {
    '52 = devamlc: 3rd AMLC (16 lines)
    '53 = devamlc: 2nd AMLC (16 lines)
    '54 = devamlc: 1st AMLC (16 lines)
+*/
 
 static int (*devmap[64])(int, int, int) = {
   /* '0x */ devnone,devnone,devnone,devnone,devasr,devnone,devnone,devpnc,

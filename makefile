@@ -85,10 +85,10 @@ fixedp: # fixed clock rate, gdb (PowerPC)
 	rm em.o
 
 
-demo:  # demo (limited: 1-2 amlc, 1 disk drive up to 160MB, one PNC node) (Intel)
+demo:  # demo (limited: 1-2 amlc, 2 disk drive up to 160MB) (Intel)
 
 	rm -rf em.o
-	cc -DREV=\"${REV}\" -DNOREGS -DDEMO -DNOTRACE -DFAST -O em.c -fobey-inline -mdynamic-no-pic -o em
+	cc -DREV=\"${REV}\" -DNOREGS -DDEMO -DNOTRACE -DFAST -D__LITTLE_ENDIAN__ -O em.c -o em
 	strip em
 	rm -rf em.o
 

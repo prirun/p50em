@@ -174,7 +174,7 @@ int devamlc (int class, int func, int device) {
 
 #ifdef DEMO
   #define AMLCLINESPERBOARD 1
-  #define MAXLINES 1
+  #define MAXLINES 2
   #define MAXBOARDS 1
 #else
   #define AMLCLINESPERBOARD 16
@@ -405,9 +405,9 @@ int devamlc (int class, int func, int device) {
 	  //printf("devamlc: lc=%d, line '%o (%d) set to device %s\n", lc, i, i, devname);
 	  dx = i/16;
 	  lx = i & 0xF;
-	  if (devname[0] == '/') {      /* USB serial port */
+	  if (devname[0] == '/') {      /* USB serial port (not tested on Linux) */
 	    int fd;
-	    if ((fd = open(devname, O_RDWR | O_NONBLOCK | O_EXLOCK)) == -1) {
+	    if ((fd = open(devname, O_RDWR | O_NONBLOCK)) == -1 || flock(fd, LOCK_EX) == -1) {
 	      printf("em: error connecting AMLC line '%o (%d) to device %s: %s\n", i, i, devname, strerror(errno));
 	      continue;
 	    }
@@ -562,6 +562,7 @@ int devamlc (int class, int func, int device) {
 #define TIOCM_CD 0x0100    
 
     if (func == 00) {             /* input Data Set Sense (carrier) */
+#ifdef __APPLE__
       if (dc[dx].serial) {        /* any serial connections? */
 	if (--dc[dx].dsstime == 0) {
 	  dc[dx].dsstime = DSSCOUNTDOWN;
@@ -585,7 +586,7 @@ int devamlc (int class, int func, int device) {
       //printf("devamlc: dss for device '%o = 0x%x\n", device, dc[dx].dss);
       putcrs16(A, ~dc[dx].dss);    /* to the outside world, 1 = no carrier */
       IOSKIP;
-
+#endif
     } else if (func == 07) {       /* input AMLC status */
       dc[dx].interrupting = 0;
       putcrs16(A, 040000 | (dc[dx].bufnum<<8) | (dc[dx].intenable<<5) | (1<<4));
@@ -750,6 +751,7 @@ int devamlc (int class, int func, int device) {
 
 	/* set DTR high (02000) or low if it has changed */
 
+#ifdef __APPLE__
 	if ((getcrs16(A) ^ dc[dx].lconf[lx]) & 02000) {
 	  int modemstate;
 	  //printf("devamlc: DTR state changed\n");
@@ -762,6 +764,7 @@ int devamlc (int class, int func, int device) {
 	  }
 	  ioctl(fd, TIOCMSET, &modemstate);
 	}
+#endif
 	break;
       }
 
