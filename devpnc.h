@@ -388,15 +388,20 @@ unsigned short pncdisc(nodeid) {
 
 void pncinitfd(int fd) {
   int optval, fdflags;
-
+  
+  optval = 1;
+  if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval))) {
+    perror("setsockopt TCP_NODELAY failed for PNC");
+    fatal(NULL);
+  }
 #ifdef __APPLE__
   optval = MAXPKTBYTES;
   if (setsockopt(fd, SOL_SOCKET, SO_SNDLOWAT, &optval, sizeof(optval))) {
-    perror("setsockopt 2 failed for PNC");
+    perror("setsockopt SO_SNDLOWAT failed for PNC");
     fatal(NULL);
   }
   if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &optval, sizeof(optval))) {
-    perror("setsockopt 3 failed for PNC");
+    perror("setsockopt SO_NOSIGPIPE failed for PNC");
     fatal(NULL);
   }
 #endif
@@ -962,12 +967,12 @@ int devpnc (int class, int func, int device) {
     pncinitfd(pncfd);
     optval = 1;
     if (setsockopt(pncfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval))) {
-      perror("setsockopt failed for PNC listen");
+      perror("setsockopt SO_REUSEADDR failed for PNC listen");
       fatal(NULL);
     }
 #ifdef __APPLE__
     if (setsockopt(pncfd, SOL_SOCKET, SO_NOSIGPIPE, &optval, sizeof(optval))) {
-      perror("setsockopt 1 failed for PNC");
+      perror("setsockopt SO_NOSIGPIPE failed for PNC");
       fatal(NULL);
     }
 #endif
