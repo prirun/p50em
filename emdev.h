@@ -1545,6 +1545,7 @@ int devcp (int class, int func, int device) {
       TRACE(T_INST, "Clock interrupt vector address = '%o\n", clkvec);
 
     } else if (func == 017) {     /* write lights */
+      lights = getcrs16(A);
 
     } else {
       printf("Unimplemented OTA device '%02o function '%02o, A='%o\n", device, func, getcrs16(A));

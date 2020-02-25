@@ -348,6 +348,7 @@ static struct {
 
 static unsigned short sswitch = 014114;     /* sense switches, set with -ss & -boot */
 static unsigned short dswitch = 0;          /* data (down) switches, set with -sd */
+static unsigned short lights = 0;           /* control panel lights */
 static unsigned short bootregs = 0;         /* load regs and keys from rvec */
 static unsigned short sensorabort = 0;      /* if 1, causes a sensor check */
 static unsigned short firstbdx = 0;         /* backstop sleep flag */
@@ -1798,7 +1799,7 @@ static void fatal(char *msg) {
   printf("Fatal error");
   if (msg)
     printf(": %s", msg);
-  printf("\ninstruction #%u at %o/%o %s\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d\nowner=%o %s, keys=%o, modals=%o\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X), getcrs16(OWNERL), searchloadmap(getcrs32(OWNER),' '), getcrs16(KEYS), getcrs16(MODALS));
+  printf("\ninstruction #%u at %o/%o %s ^%06o^\nA='%o/%d  B='%o/%d  L='%o/%d  X='%o/%d\nowner=%o %s, keys=%o, modals=%o\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), lights, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X), getcrs16(OWNERL), searchloadmap(getcrs32(OWNER),' '), getcrs16(KEYS), getcrs16(MODALS));
   
   /* dump concealed stack entries */
 
@@ -6242,7 +6243,7 @@ d_hlt:  /* 000000 */
   TRACE(T_FLOW, " HLT\n");
   RESTRICT();
   if (bootarg) {
-    printf("\nCPU halt, instruction #%u at %o/%o %s: %o %o\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d", gvp->instcount, RPH, RPL, searchloadmap(gvp->prevpc,' '), get16t(gvp->prevpc), get16t(gvp->prevpc+1), getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X));
+    printf("\nCPU halt, instruction #%u at %o/%o %s: %o %o ^%06o^\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d", gvp->instcount, RPH, RPL, searchloadmap(gvp->prevpc,' '), get16t(gvp->prevpc), get16t(gvp->prevpc+1), lights, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X));
     while (1) {
       printf("\nPress Enter to continue, h to halt... ");
       utempa = getchar();
