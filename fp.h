@@ -38,7 +38,7 @@ http://tima-cmp.imag.fr/~guyot/Cours/Oparithm/english/Op_Ar2.htm
 /* getdp unpacks a Prime DPFP into 48-bit sign + mantissa (left
    justified in 64 bits) and a 32-bit signed exponent */
 
-inline getdp (unsigned long long p, long long *frac64, int *exp32) {
+inline void getdp (unsigned long long p, long long *frac64, int *exp32) {
 
   *frac64 = p & 0xFFFFFFFFFFFF0000LL;  /* unpack fraction */
   *exp32 = (short) (p & 0xFFFFLL);     /* unpack SIGNED exponent */

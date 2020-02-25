@@ -1,5 +1,7 @@
 #include <stdint.h>
 
+#define __LITTLE_ENDIAN__ 1
+
 #if !defined(__BIG_ENDIAN__) && !defined(__LITTLE_ENDIAN__)
 #  error Either __BIG_ENDIAN__ or __LITTLE_ENDIAN__ must be defined.
 #endif

@@ -259,11 +259,7 @@
 #define MAXPNCBYTES MAXPNCWORDS*2     /* same in bytes */
 #define MAXPKTBYTES (MAXPNCBYTES+4)   /* adds 16-bit length word to each end */
 
-#ifdef DEMOXXX
-  #define MAXNODEID 3        /* 0 is a dummy, 255 is broadcast */
-#else
-  #define MAXNODEID 254      /* 0 is a dummy, 255 is broadcast */
-#endif
+#define MAXNODEID 254      /* 0 is a dummy, 255 is broadcast */
 
 #define MAXHOSTLEN 64        /* max length of remote host name */
 #define MAXUIDLEN 16         /* max length of unique id/password */
@@ -390,42 +386,39 @@ unsigned short pncdisc(nodeid) {
 
 /* initialize a socket fd for PNC emulation */
 
-pncinitfd(int fd) {
+void pncinitfd(int fd) {
   int optval, fdflags;
 
-  if ((fdflags = fcntl(fd, F_GETFL, 0)) == -1) {
-    perror("unable to get ts flags for PNC");
-    fatal(NULL);
-  }
+#ifdef __APPLE__
   optval = MAXPKTBYTES;
   if (setsockopt(fd, SOL_SOCKET, SO_SNDLOWAT, &optval, sizeof(optval))) {
     perror("setsockopt 2 failed for PNC");
     fatal(NULL);
   }
-#ifdef __APPLE__
   if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &optval, sizeof(optval))) {
     perror("setsockopt 3 failed for PNC");
     fatal(NULL);
   }
 #endif
-#ifndef NOREGS
-  fdflags |= O_NONBLOCK;
-#else
-  fdflags |= O_NONBLOCK+O_ASYNC;
-#endif
-  if (fcntl(fd, F_SETFL, fdflags) == -1) {
-    perror("unable to set fdflags for PNC");
-    fatal(NULL);
-  }
   if (fcntl(fd, F_SETOWN, getpid()) == -1) {
     perror("unable to SETOWN for PNC");
     fatal(NULL);
   }
+  if ((fdflags = fcntl(fd, F_GETFL, 0)) == -1) {
+    perror("unable to get ts flags for PNC");
+    fatal(NULL);
+  }
+  fdflags |= O_NONBLOCK+O_ASYNC;
+  if (fcntl(fd, F_SETFL, fdflags) == -1) {
+    perror("unable to set fdflags for PNC");
+    fatal(NULL);
+  }
 }
 
-/* process a new incoming connection */
+/* process a new incoming connection.  This may require multiple calls
+   to pncaccept, hence the static variables for the accept state */
 
-pncaccept(time_t timenow) {
+void pncaccept(time_t timenow) {
   static time_t accepttime = 0;
   static int fd = -1;
   static struct sockaddr_in addr;
@@ -499,6 +492,7 @@ pncaccept(time_t timenow) {
   ni[i].cstate = PNCCSAUTH;
   ni[i].rcvlen = 0;
   ni[i].fd = fd;
+  pncinitfd(fd);
   fd = -1;
   return;
 
@@ -509,10 +503,9 @@ disc:
 
 /* connect to a node, without blocking */
 
-unsigned short pncconn1(nodeid, timenow) {
+void pncconn1(nodeid, timenow) {
   struct hostent* server;
   struct sockaddr_in addr;
-  unsigned int addrlen;
   int fd;
 
   TRACE(T_RIO, "try connect to node %d\n", nodeid);
@@ -543,7 +536,7 @@ unsigned short pncconn1(nodeid, timenow) {
 
 /* send authorization uid / password after a connect */
 
-pncauth1(int nodeid, time_t timenow) {
+void pncauth1(int nodeid, time_t timenow) {
   int n;
 
   n = write(ni[nodeid].fd, ni[myid].uid, MAXUIDLEN);
@@ -575,7 +568,7 @@ pncauth1(int nodeid, time_t timenow) {
    MAXACCEPTTIME seconds.  It's fine for the 5-6 node case though.
  */
 
-pncconnect(time_t timenow) {
+void pncconnect(time_t timenow) {
   static int prevnode=MAXNODEID;
   int nodeid;
 
@@ -603,7 +596,7 @@ pncconnect(time_t timenow) {
 
 /* initialize a dma transfer */
 
-pncinitdma(t_dma *iob, char *iotype) {
+void pncinitdma(t_dma *iob, char *iotype) {
   if (getcrs16(A) > 037)
     fatal("PNC doesn't support chaining, DMC, or DMA reg > 037");
   (*iob).dmachan = getcrs16(A);
@@ -677,7 +670,7 @@ unsigned short pncxmit(t_dma *iob) {
    1 connection has a complete packet, then return that packet to the
    Prime */
 
-pncrecv() {
+void pncrecv() {
   static int prevnode=MAXNODEID;
   static struct timeval timeout = {0, 0};
   int nodeid, n, fd;
@@ -702,13 +695,13 @@ pncrecv() {
   n = select(n+1, &fds, NULL, NULL, &timeout);
   if (n == -1) {
     if (errno == EINTR || errno == EAGAIN)
-      return 0;
+      return;
     perror("unable to do read select on PNC fds");
     fatal(NULL);
   }
   if (n == 0) {
     TRACE(T_RIO, " pncrecv: no data\n");
-    return 0;
+    return;
   }
 
   nodeid = prevnode;
@@ -729,7 +722,7 @@ pncrecv() {
    2. got the length, but have more to read
 */
 
-pncrecv1(int nodeid) {
+int pncrecv1(int nodeid) {
   int pktlen, nw;
 
   TRACE(T_RIO, " pncrecv1: read node %d\n", nodeid);
@@ -775,7 +768,7 @@ pncrecv1(int nodeid) {
 
 /* read nbytes from a connection, return true if that many were read */
 
-pncread (int nodeid, int nbytes) {
+int pncread (int nodeid, int nbytes) {
   int n;
 
   n = read(ni[nodeid].fd, ni[nodeid].rcvpkt+ni[nodeid].rcvlen, nbytes);
@@ -800,8 +793,7 @@ int devpnc (int class, int func, int device) {
   unsigned short dmaword;
   time_t timenow;
   struct sockaddr_in addr;
-  unsigned int addrlen;
-  int fd, optval, fdflags;
+  int optval;
 
   struct timeval tv0,tv1;
   double pollts;
@@ -820,9 +812,9 @@ int devpnc (int class, int func, int device) {
 
   case -1: {
     FILE *ringfile;
-    char *tok, buf[128], *p;
-    int n, linenum;
-    int tempid, tempport, cfgerrs;
+    char buf[128], *p;
+    int linenum;
+    int tempid, tempport;
     char temphost[MAXHOSTLEN+1];
 
 #define DELIM " \t\n"
@@ -945,22 +937,19 @@ int devpnc (int class, int func, int device) {
 	fatal(NULL);
       }
       fclose(ringfile);
-#ifdef DEMOXXX
-      i = 0;
-      for (tempid=1; tempid<=MAXNODEID; tempid++)
-	if (ni[tempid].cstate != PNCCSNONE)
-	  if (i == 0 && (strcasecmp(ni[tempid].host, "prirun.dyndns.org.") == 0) ||
-             (i == 1 && (strcasecmp(ni[tempid].host, "127.0.0.1") == 0)))
-	      i += 1;
-	  else
-	    configured = 0;
-#endif
     } else
       perror("error opening ring.cfg");
       
     if (!configured) {
       fprintf(stderr, "PNC not configured.\n");
       return -1;
+    }
+
+    /* set async I/O signal handler */
+
+    if (signal(SIGIO, pnchavedata) == SIG_ERR) {
+      perror("installing SIGIO handler");
+      fatal(NULL);
     }
 
     /* start listening on the network port */
@@ -985,25 +974,17 @@ int devpnc (int class, int func, int device) {
     addr.sin_family = AF_INET;
     addr.sin_port = htons(nport);
     addr.sin_addr.s_addr = INADDR_ANY;
-    if(bind(pncfd, (struct sockaddr *)&addr, sizeof(addr))) {
+    if (bind(pncfd, (struct sockaddr *)&addr, sizeof(addr))) {
       perror("bind: unable to bind for PNC");
       fatal(NULL);
     }
-    if(listen(pncfd, 10)) {
+    if (listen(pncfd, 10)) {
       perror("listen failed for PNC");
       fatal(NULL);
     }
     TRACE(T_RIO, "PNC configured\n");
     devpoll[device] = PNCPOLL*gvp->instpermsec;
 
-    /* can't use signals with NOREGS, so PNC I/O is very slow */
-
-#ifdef NOREGS
-    if (signal(SIGIO, pnchavedata) == SIG_ERR) {
-      perror("installing SIGIO handler");
-      fatal(NULL);
-    }
-#endif
     if (gettimeofday(&tv0, NULL) != 0)
       fatal("pnc gettimeofday 1 failed");
     tv0ts = tv0.tv_sec + tv0.tv_usec/1000000.0;

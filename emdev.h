@@ -1,24 +1,3 @@
-/* this is to test what happens when gettimeofday is overridden.  On
-   an idle machine, a little more than one second ticks every hour.
-
-   The dongle is still required but it does allow the emulator to run
-   w/o a license.  However there are several bad time-related
-   side-effects.  The worst seems to be that timeslicing doesn't work,
-   so a CPU-bound job more-or-less locks up the machine.
-*/
-
-#if 0
-int ctr = 0;
-int gettimeofday(struct timeval *tv, void *tz) {
-  tv->tv_sec = 0;
-  tv->tv_sec = 1342600000 + ctr/1000000;
-  tv->tv_usec = ctr % 1000000;
-  ctr++;
-  if (ctr % 1000000 == 0) printf("%d\n", ctr);
-  return 0;
-}
-#endif
-
 /* emdev.h, Jim Wilcoxson (prirun@gmail.com), April 17, 2005
    Device handlers for pio instructions.  Use devnull as a template for
    new handlers.
@@ -120,7 +99,6 @@ int gettimeofday(struct timeval *tv, void *tz) {
    would support 4-8 physical drives, depending on the controller type.
 */
 
-#include "secure.h"
 
 /* this macro is used when I/O is successful.  In VI modes, it sets
    the EQ condition code bit.  In SR modes, it does a skip */
@@ -305,7 +283,7 @@ int devasr (int class, int func, int device) {
 
 #define MAXASRBUF 1024
 
-  static initialized = 0;
+  static int initialized = 0;
   static FILE *conslog;
   static int ttydev;
   static int ttyflags;
@@ -967,13 +945,11 @@ int devmt (int class, int func, int device) {
   unsigned short iobuf[MAXTAPEWORDS+4]; /* 16-bit WORDS! */
   unsigned short *iobufp;
   unsigned short dmxreg;                /* DMA/C register address */
-  short dmxnch;                         /* number of DMX channels - 1 */
   unsigned int dmxaddr;
   unsigned int dmcpair;
   short dmxnw, dmxtotnw;
   int i,n;
   char reclen[4];
-  unsigned short ioword;
 
   switch (class) {
 
@@ -1239,6 +1215,7 @@ int devmt (int class, int func, int device) {
 	    fatal("Tape write is too big");
 	  for (i=0; i < dmxnw; i++) {
 #if 0
+	    unsigned short ioword;
 	    ioword = get16io(dmxaddr+i);
 	    if (i%10 == 0)
 	      TRACE(T_TIO, "\n %04d: ", i);
@@ -1253,6 +1230,7 @@ int devmt (int class, int func, int device) {
 	    dmxnw = dmxtotnw;
 	  for (i=0; i < dmxnw; i++) {
 #if 0
+	    unsigned short ioword;
 	    ioword = *iobufp++;
 	    if (i%10 == 0)
 	      TRACE(T_TIO, "\n %04d: ", i);
@@ -1266,7 +1244,7 @@ int devmt (int class, int func, int device) {
 	TRACE(T_TIO, " transferred %d words\n", dmxnw);
 	if (dmxchan & 0x0800) {                    /* if DMC... */
 	  put16io(dmxaddr+dmxnw, dmxreg);          /* update starting address */
-	} else {                                   /* if DMA...
+	} else {                                   /* if DMA... */
 	  putar16(REGDMX16+dmxreg, getar16(REGDMX16+dmxreg) + (dmxnw<<4));   /* increment # words */
 	  putar16(REGDMX16+dmxreg+1, getar16(REGDMX16+dmxreg+1) + dmxnw);    /* increment address */
 	}
@@ -1416,9 +1394,9 @@ int devmt (int class, int func, int device) {
 
 /* initclock sets Primos' real-time clock variable */
 
-initclock(ea_t datnowea) {
+void initclock(ea_t datnowea) {
   short olddatnow;
-  int datnow, i;
+  int datnow;
   time_t unixtime;
   struct tm *tms;
 
@@ -1445,7 +1423,6 @@ int devcp (int class, int func, int device) {
   static short clkpic = -947;
   static float clkrate = 3.2;
   static unsigned int ticks = -1;
-  static unsigned int absticks = -1;
   static struct timeval start_tv;
   static ea_t datnowea = 0;
   static struct timeval prev_tv;
@@ -1453,7 +1430,6 @@ int devcp (int class, int func, int device) {
 
   struct timeval tv;
   unsigned int elapsedms,targetticks;
-  ea_t realrp;
   int i;
 
 #define SETCLKPOLL devpoll[device] = gvp->instpermsec*(-clkpic*clkrate)/1000;
@@ -1653,12 +1629,8 @@ int devcp (int class, int func, int device) {
 
 #define IPMTIME 5000
 
-	realrp = RP;
 	if ((gvp->instcount < previnstcount) || (gvp->instcount-previnstcount > gvp->instpermsec*IPMTIME)) {
 	  if (gvp->instcount-previnstcount > gvp->instpermsec*IPMTIME) {
-#ifndef DEMO
-	    RP = MAKEVA(07777, 0);  /* set bad RP */
-#endif
 	    i = (gvp->instcount-previnstcount) /
 	      ((tv.tv_sec-prev_tv.tv_sec)*1000.0 + (tv.tv_usec-prev_tv.tv_usec)/1000.0);
 	    if (i > 0) {
@@ -1668,10 +1640,6 @@ int devcp (int class, int func, int device) {
 #ifdef NOIDLE
 	    //printf("\ninstpermsec=%d\n", gvp->instpermsec);
 #endif
-
-	    /* call the security check code */
-
-	    secure(tv, realrp);
 	  }
 	  previnstcount = gvp->instcount;
 	  prev_tv = tv;
@@ -1738,8 +1706,6 @@ int globdisk (char *devfile, int size, int device, int unit) {
 
  */
 
-#include "geomhash.h"
-
 int devdisk (int class, int func, int device) {
 
 #include "geom.h"
@@ -1785,7 +1751,7 @@ int devdisk (int class, int func, int device) {
 
   unsigned short order;
   unsigned short m,m1,m2;
-  short head, track, rec, recsize, nwords;
+  short head, track, rec, recsize;
   unsigned short dmareg;
   unsigned int dmaaddr;
   unsigned char *hashp;
@@ -1793,15 +1759,11 @@ int devdisk (int class, int func, int device) {
 
   unsigned short iobuf[1040];             /* local I/O buf (for mapped I/O) */
   unsigned short *iobufp;
-  unsigned short access;
-  short dmanw, dmanw1, dmanw2;
-  unsigned int utempl;
+  short dmanw;
   char ordertext[8];
   int phyra;
   int nb;                   /* number of bytes returned from read/write */
   char devfile[16];
-  char rtfile[16];          /* read trace file name */
-  int rtnw;                 /* total number of words read (all channels) */
 
   /* map device id to device context index
 
@@ -1811,7 +1773,6 @@ int devdisk (int class, int func, int device) {
 
   switch (device) {
   case 026: dx = 0; break;
-#ifndef DEMO
   case 027: dx = 1; break;
   case 022: dx = 2; break;
   case 023: dx = 3; break;
@@ -1819,7 +1780,6 @@ int devdisk (int class, int func, int device) {
   case 025: dx = 5; break;
   case 045: dx = 6; break;
   case 046: dx = 7; break;
-#endif
   default:
     fprintf(stderr, "devdisk: non-disk device id '%o ignored\n", device);
     return -1;
@@ -1838,10 +1798,6 @@ int devdisk (int class, int func, int device) {
     dc[dx].state = S_HALT;
     dc[dx].status = 0100000;
     dc[dx].usel = -1;
-#ifdef DEMO
-    if (geomcksum != geomhash((char *)geom, sizeof(geom)))
-      RP=MAKEVA(01000,0);
-#endif
     for (u=0; u<MAXDRIVES; u++) {
       dc[dx].unit[u].rtfd = -1;
       dc[dx].unit[u].heads = -1;
@@ -2142,14 +2098,12 @@ int devdisk (int class, int func, int device) {
 	}
 	if (u == 1) u = 0;
 	else if (u == 2) u = 1;
-#ifndef DEMO
 	else if (u == 4) u = 2;
 	else if (u == 8) u = 3;
 	else if (u == 16) u = 4;
 	else if (u == 32) u = 5;
 	else if (u == 64) u = 6;
 	else if (u == 128) u = 7;
-#endif
 	else u = 99;
 	if (u >= MAXDRIVES) {
 	  fprintf(stderr," Device '%o, bad select '%o\n", device, u);

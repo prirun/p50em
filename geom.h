@@ -1,35 +1,5 @@
   /* static structure for disk file suffixes and config data */
 
-#ifdef DEMO
-#define MAXDRIVES 2
-#define MAXCTRL 1     /* 1 controller supported at device address '26 */
-
-#define NUMGEOM 7
-
-  static struct {
-    short model;
-    char suffix[5];
-    short heads;
-    short spt;
-    short maxtrack;
-  } geom[NUMGEOM] = {
-     1,  "80M",  5,   9,  823,
-     4,  "68M",  3,   9, 1120,
-     5, "158M",  7,   9, 1120,
-     6, "160M", 10,   9,  822,
-    10,  "84M",  5,   8, 1016,   /* MODEL_4714 */
-    11,  "60M",  4,   7, 1020,   /* MODEL_4711 */
-    12, "120M",  8,   7, 1020,   /* MODEL_4715 */
-};
-
-#ifdef __LITTLE_ENDIAN__
-  static int geomcksum = 0x15488c73;
-#else
-  static int geomcksum = 0x156bbb96;
-#endif
-
-#else
-
 #define NUMGEOM 25
 #define MAXDRIVES 8
 #define MAXCTRL 8
@@ -67,4 +37,3 @@
     24, "1G",   31, 254,   65,   /* MODEL_4734 */
     25, "2G",   31, 254,  122,   /* MODEL_4736 */
 };
-#endif

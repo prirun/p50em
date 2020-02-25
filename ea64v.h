@@ -5,7 +5,6 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
 
   ea_t ea;                                       /* full seg/word va */
   unsigned short ea_s;                           /* eff address segno */
-  unsigned short ea_r;                           /* eff address ring */
   unsigned short ea_w;                           /* eff address wordno */
   unsigned short br;
   unsigned short i;

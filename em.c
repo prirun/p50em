@@ -1,5 +1,5 @@
 /* Pr1me Computer emulator, Jim Wilcoxson (prirun@gmail.com), April 4, 2005
-   Copyright (C) 2005-2007, Jim Wilcoxson.  All Rights Reserved.
+   Copyright (C) 2005-2019, Jim Wilcoxson.  All Rights Reserved.
 
    Emulates a Prime Computer system by:
    - booting from a Prime disk image (normal usage)
@@ -320,23 +320,6 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 #define BITMASK16(b) (0x8000 >> ((b)-1))
 #define BITMASK32(b) ((unsigned int)(0x80000000) >> ((b)-1))
 
-/* license data structure.  Part is read from file "license" file:
-   - field 1: license id
-   - field 2: license server Internet name
-   - field 3: license server port (TCP)
-*/
-
-typedef struct {
-  int  id;
-  char server[65];
-  int  sport;
-  int  sockfd;
-  struct hostent *rserver;
-} license_t;
-
-license_t license;
-static int mypid;
-
 #ifdef NOTRACE
   #define TRACE(flags, formatargs...)
   #define TRACEA(formatargs...)
@@ -583,18 +566,11 @@ typedef struct {
 
 static gv_t gv;
 
-#ifndef NOREGS
-register gv_t *gvp asm ("r28");
-register brp_t *eap asm ("r27");   /* effective address brp pointer */
-#else
 gv_t *gvp;
 brp_t *eap;
-#endif
 
 static  jmp_buf jmpbuf;               /* for longjumps to the fetch loop */
 static  jmp_buf bootjmp;               /* for longjumps to the fetch loop */
-
-static unsigned long bootuid;
 
 /* The standard Prime physical memory limit on early machines is 8MB.
    Later machines have higher memory capacities, up to 1024MB, using 
@@ -740,67 +716,6 @@ char *brp_name() {
 
 #include "stopwatch.h"
 
-/* reads and parses the license file and sets the license global
-   variable structure.  The license file is not used in the hobby
-   version.  This routine also does the name->IP DNS lookup so that
-   errors can be detected early.
-
-   The first arg is non-zero for startup, meaning to print messages and
-   exit.  If zero, no messages are printed and the return code is set.
-
-   Returns 1 if everything is okay, 0 if not (or exits if first is non-zero).
-*/
-
-int readlicense(int first) {
-
-  struct sockaddr_in raddr;
-  int  raddrlen;  
-  license_t newlicense;
-
-  FILE *licensefile;
-  char line[100];
-
-  newlicense.id = 0;
-  newlicense.server[0] = 0;
-  newlicense.sport = 0;
-  newlicense.sockfd = -1;
-  newlicense.rserver = NULL;
-  if (first)
-    license = newlicense;
-
-#ifndef DEMO
-
-  if ((licensefile = fopen("license", "r")) == NULL) {
-    printf("em: no license file.\n");
-    return 0;
-  }
-
-  if (fgets(line, sizeof(line), licensefile) == NULL 
-      || sscanf(line, "%x %s %d", &newlicense.id, newlicense.server, &newlicense.sport) != 3) {
-    printf("em: unable to read license file.  Format is: id server port\n");
-    fclose(licensefile);
-    return 0;
-  }
-  fclose(licensefile);
-  if (first)
-    license = newlicense;
-
-  /* lookup the license server's address */
-
-  newlicense.rserver = gethostbyname(newlicense.server);
-  if (newlicense.rserver == NULL) {
-    printf("em: can't lookup IP address for license server %s.  Check license file or DNS.\n", newlicense.server);
-    return 0;
-  }
-  bcopy((char *)newlicense.rserver->h_addr, (char *)&raddr.sin_addr.s_addr, newlicense.rserver->h_length);
-  license = newlicense;
-  if (first)
-    printf("License id %08x, server %s [%s:%d]\n", license.id, license.server, (char *) inet_ntoa(raddr.sin_addr.s_addr), license.sport);
-
-#endif
-  return 1;
-}
-
 
 /* returns an index to a symbol, based on an address and type
    match; if the address isn't found exactly, the index returned
@@ -842,7 +757,7 @@ int findsym(ea_t addr, char type) {
 }
 
 
-addsym(char *sym, unsigned short seg, unsigned short word, char type) {
+void addsym(char *sym, unsigned short seg, unsigned short word, char type) {
   short symlen,ix,ix2;
   ea_t addr;
 
@@ -862,7 +777,7 @@ addsym(char *sym, unsigned short seg, unsigned short word, char type) {
 }
 
 
-readloadmap(char *filename, int showerr) {
+void readloadmap(char *filename, int showerr) {
   FILE *mapf;
   char line[100];
   int lc,ix;
@@ -988,11 +903,18 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
 
   stopwatch_push(&sw_mapva);
 
+#if 0
   /* fault bit set on EA means an address trap, which should be
-     handled at a higher lever and never make it this far */
+     handled at a higher level and never make it this far
+
+     NOTE: this is commented out because if a stack frame is trashed
+     and stackroot gets its fault bit set, PRTN will cause this error,
+     halting the emulator.  Without this check, an illegal segno or
+     access fault occurs.  Thanks Dennis! */
 
   if (ea & 0x80000000)
     fatal("mapva: fault bit set on EA");
+#endif
 
   /* map virtual address if segmentation is enabled */
 
@@ -1118,7 +1040,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
    returned if not in mapped I/O mode), or a 2-bit segment number and
    16-bit word number for mapped I/O.  A physical address is returned. */
 
-const static unsigned int mapio(ea_t ea) {
+static unsigned int mapio(ea_t ea) {
   int iotlbix;
 
   ea &= 0x3FFFF;
@@ -1231,7 +1153,6 @@ static unsigned short get16trap(ea_t ea) {
 }
 
 static inline unsigned short get16t(ea_t ea) {
-  unsigned short access;
 
   /* sign bit is set for live register access */
 
@@ -1264,7 +1185,6 @@ static unsigned short get16r(ea_t ea, ea_t rpring) {
 /* get32m always uses the map and isn't inlined */
 
 static unsigned int get32m(ea_t ea) {
-  pa_t pa;
   unsigned short access;
 
 #ifdef DBG
@@ -1288,8 +1208,6 @@ static unsigned int get32m(ea_t ea) {
 /* get32 tries to use the cache and is inlined */
 
 static inline unsigned int get32(ea_t ea) {
-  pa_t pa;
-  unsigned short access;
 
 #ifdef DBG
   if (ea & 0x80000000) {
@@ -1408,7 +1326,6 @@ unsigned short iget16t(ea_t ea) {
 }
 
 static inline unsigned short iget16(ea_t ea) {
-  unsigned short access;
 
   if ((ea & 0x8FFFFC00) == (gvp->brp[RPBR].vpn & 0x0FFFFFFF))
     return swap16(gvp->brp[RPBR].memp[ea & 0x3FF]);
@@ -1421,7 +1338,7 @@ static inline unsigned short iget16(ea_t ea) {
 #define iget16t(ea) get16t((ea))
 #endif
 
-static inline put16(unsigned short value, ea_t ea) {
+static inline void put16(unsigned short value, ea_t ea) {
   unsigned short access;
 
 #ifdef DBG
@@ -1456,7 +1373,7 @@ static inline put16(unsigned short value, ea_t ea) {
 #endif
 }
 
-static put16r(unsigned short value, ea_t ea, ea_t rpring) {
+static void put16r(unsigned short value, ea_t ea, ea_t rpring) {
   unsigned short access;
 
 #ifdef DBG
@@ -1468,15 +1385,17 @@ static put16r(unsigned short value, ea_t ea, ea_t rpring) {
 
   /* if passed-in ring == RP ring, use put16 and maybe avoid mapva */
 
-  if (((rpring ^ RP) & RINGMASK32) == 0)
-    return put16(value, ea);
+  if (((rpring ^ RP) & RINGMASK32) == 0) {
+    put16(value, ea);
+    return;
+  }
 
   put16mem(mapva(ea, rpring, WACC, &access), value);
 }
 
 /* put16trap handles stores that ARE address traps */
 
-static put16trap(unsigned short value, ea_t ea) {
+static void put16trap(unsigned short value, ea_t ea) {
 
   ea = ea & 0xFFFF;
   if (ea < 7)
@@ -1498,7 +1417,7 @@ static put16trap(unsigned short value, ea_t ea) {
 
 /* put16t handles stores that MIGHT address trap */
 
-static inline put16t(unsigned short value, ea_t ea) {
+static inline void put16t(unsigned short value, ea_t ea) {
 
   if (*(int *)&ea >= 0)
     put16(value, ea);
@@ -1507,10 +1426,8 @@ static inline put16t(unsigned short value, ea_t ea) {
 }
 
 
-static put32(unsigned int value, ea_t ea) {
-  pa_t pa;
+static void put32(unsigned int value, ea_t ea) {
   unsigned short access;
-  unsigned short *m;
 
 #ifdef DBG
   if (ea & 0x80000000) {
@@ -1540,10 +1457,9 @@ static put32(unsigned int value, ea_t ea) {
   }
 }
 
-static put32r(unsigned int value, ea_t ea, ea_t rpring) {
+static void put32r(unsigned int value, ea_t ea, ea_t rpring) {
   pa_t pa;
   unsigned short access;
-  unsigned short *m;
 
 #ifdef DBG
   if (ea & 0x80000000) {
@@ -1554,8 +1470,10 @@ static put32r(unsigned int value, ea_t ea, ea_t rpring) {
 
   /* if passed-in ring == RP ring, use put32 and maybe avoid mapva */
 
-  if (((rpring ^ RP) & RINGMASK32) == 0)
-    return put32(value, ea);
+  if (((rpring ^ RP) & RINGMASK32) == 0) {
+    put32(value, ea);
+    return;
+  }
 
   pa = mapva(ea, rpring, WACC, &access);
   if ((pa & 01777) <= 01776)
@@ -1566,10 +1484,9 @@ static put32r(unsigned int value, ea_t ea, ea_t rpring) {
   }
 }
 
-static put64r(long long value, ea_t ea, ea_t rpring) {
+static void put64r(long long value, ea_t ea, ea_t rpring) {
   pa_t pa;
   unsigned short access;
-  unsigned short *m;
 
   /* check for live register access */
 
@@ -1669,7 +1586,7 @@ void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int dswsta
 
 static int rtq(ea_t qcbea, unsigned short *qent, ea_t rp) {
 
-  unsigned short qtop, qbot, qtemp;
+  unsigned short qtop, qbot;
   unsigned short qseg, qmask;
   ea_t qentea;
 
@@ -1723,7 +1640,7 @@ static int abq(ea_t qcbea, unsigned short qent, ea_t rp) {
 
 static int rbq(ea_t qcbea, unsigned short *qent, ea_t rp) {
 
-  unsigned short qtop, qbot, qtemp;
+  unsigned short qtop, qbot;
   unsigned short qseg, qmask;
   ea_t qentea;
 
@@ -1779,29 +1696,7 @@ static int devpoll[64] = {0};
 
 /* I/O device map table, containing function pointers to handle device I/O */
 
-#ifdef DEMO
-
-/* this is the "hobby system" controller configuration:
-   
-   '04 = devasr: system console
-   '07 = devpnc: Primenet Node Controller aka PNC (Ringnet)
-   '14 = devmt: mag tape controller (1 drive)
-   '20 = devcp: clock / VCP / SOC
-   '26 = devdisk: 1st disk controller
-   '54 = devamlc: 1st AMLC (16 lines)
-*/
-
-static int (*devmap[64])(int, int, int) = {
-  /* '0x */ devnone,devnone,devnone,devnone,devasr,devnone,devnone,devpnc,
-  /* '1x */ devnone,devnone,devnone,devnone,devmt,devnone, devnone, devnone,
-  /* '2x */ devcp,devnone,devnone,devnone,devnone,devnone,devdisk,devnone,
-  /* '3x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
-  /* '4x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
-  /* '5x */ devnone,devnone,devnone,devnone,devamlc,devnone,devnone,devnone,
-  /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
-  /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
-
-#elif 0
+#if 0
 
 /* this is the "full system" configuration supported by the emulator
 
@@ -1956,7 +1851,7 @@ static void fatal(char *msg) {
 
 /* set new processor keys */
 
-static newkeys (unsigned short new) {
+static void newkeys (unsigned short new) {
 
   switch ((new & 016000) >> 10) {
   case 0:                     /* 16S */
@@ -2482,7 +2377,7 @@ static inline void mathexception(unsigned char extype, unsigned short fcode, ea_
 
 #include "fp.h"
 
-static dumpregs() {
+static void dumpregs() {
   int rs, i;
   unsigned int val;
   unsigned short v1, v2;
@@ -2501,7 +2396,7 @@ static dumpregs() {
 
 /* XXX: doesn't handle both page map formats */
 
-static dumpsegs() {
+static void dumpsegs() {
   short seg,nsegs,i,page,segno;
   unsigned short pte,xxx;
   unsigned int dtar,staddr,sdw,ptaddr,pmaddr;
@@ -2621,10 +2516,7 @@ static ea_t stex(unsigned int framesize) {
 static inline void prtn() {
   unsigned short stackroot;
   ea_t newrp,newsb,newlb;
-  ea_t fpva;
-  unsigned short fpseg;
   unsigned short keys;
-  int maxloop;
 
   eap = &gvp->brp[SBBR];
   stackroot = get16(getcrs32(SB)+1);
@@ -2742,13 +2634,12 @@ static inline ea_t pclea(unsigned short brsave[6], ea_t rp, unsigned short *bita
    - LB is the caller's saved LB
 */
 
-static argt() {
+static void argt() {
   unsigned short brsave[6];
   unsigned short argsleft, argdisp, bit;
   short lastarg, store;
   unsigned int utempl;
-  unsigned short ecby;          /* last offset where ecb temp ea was stored */
-  ea_t ea, stackfp, rp, ecbea;
+  ea_t ea, stackfp, rp;
   unsigned short advancepb, advancey;
 
   TRACE(T_PCL, "Entered ARGT\n");
@@ -2847,21 +2738,14 @@ static argt() {
 }
 
 
-static pcl (ea_t ecbea) {
+static void pcl (ea_t ecbea) {
   short i,j;
-  unsigned int utempl;
   unsigned short access;
   unsigned short ecb[9];
-  short bit;                  /* bit offset for args */
   ea_t newrp;                 /* start of new proc */
   ea_t ea;
-  ea_t rp;                    /* return pointer */
   short stackrootseg, stackseg;
   unsigned short framesize;
-  short store;                /* true if store bit set on AP */
-  short storedargs;           /* # of arguments that have been stored */
-  short lastarg;              /* true if "last" bit seen in PCL arglist */
-  ea_t argp;                  /* where to store next arg in new frame */
   ea_t stackfp;               /* new stack frame pointer */
   ea_t fpva;                  /* virtual address of the free pointer */
   pa_t pa;                    /* physical address of ecb */
@@ -3201,7 +3085,7 @@ static void calf(ea_t ea) {
    - adding "wait" arg and only saving base registers fixed Case 63
 */
 
-static pxregsave(unsigned short wait) {
+static void pxregsave(unsigned short wait) {
   ea_t pcbp, regp;
   int i;
   unsigned short mask;
@@ -3246,9 +3130,9 @@ static pxregsave(unsigned short wait) {
    NOTE: RP must be set by the caller since this happens whenever
    a process is dispatched - not just when registers are loaded */
 
-static pxregload (ea_t pcbp) {
+static void pxregload (ea_t pcbp) {
   ea_t regp;
-  unsigned short mask, modals;
+  unsigned short mask;
   int i;
 
   TRACE(T_PX, "pxregload loading registers for process %o/%o\n", pcbp>>16, pcbp&0xFFFF);
@@ -3275,7 +3159,7 @@ static pxregload (ea_t pcbp) {
 /* selects a register set and sets modals and crs/crsl to that register set.
    pcbw is OWNERL of the process that will use the register set. */
 
-static ors(unsigned short pcbw) {
+static void ors(unsigned short pcbw) {
   static short regq[] = {0,1,2,3,4,5,6,7};
   short i,rx;
   unsigned short ownerl, currs, rs;
@@ -3360,7 +3244,7 @@ static ors(unsigned short pcbw) {
    for an external interrupt.
 */
 
-static dispatcher() {
+static void dispatcher() {
   ea_t pcbp, rlp;
   unsigned short pcbw;      /* pcb word address */
   unsigned short rsnum;
@@ -3543,8 +3427,8 @@ idle:
    passed in.  The dispatcher should always be entered after this
    routine. */
 
-static unready (ea_t waitlist, unsigned short newlink) {
-  unsigned short level, bol, eol;
+static void unready (ea_t waitlist, unsigned short newlink) {
+  unsigned short bol, eol;
   unsigned int rl;
   ea_t rlp, pcbp;
 
@@ -3600,7 +3484,7 @@ unready: I'm not first on the ready list
 static unsigned short ready (ea_t pcbp, unsigned short begend) {
   ea_t rlp;
   ea_t xpcbp;
-  unsigned short bol,eol,pcbw,level,resched;
+  unsigned short pcbw,level,resched;
   unsigned int rl;
 
   if ((pcbp & 0xFFFF) == getcrs16(OWNERL))
@@ -3650,14 +3534,13 @@ static unsigned short ready (ea_t pcbp, unsigned short begend) {
 }
 
 
-static pwait() {
+static void pwait() {
   ea_t ea;
   ea_t pcbp, prevpcbp;
   unsigned int utempl;
   unsigned int pcblevnext;      /* pcb level and link */
   unsigned short bol;
   unsigned short pcblev;
-  unsigned short pcbnext;
   unsigned short mylev;
   short count;
 
@@ -3732,8 +3615,8 @@ owner=71600 DUMPCB, keys=14000, modals=77           */
    - 001217 = INBC, notify to beg, CAI
 */
 
-static nfy(unsigned short inst) {
-  unsigned short resched, begend, bol, rsnum;
+static void nfy(unsigned short inst) {
+  unsigned short resched, begend, bol;
   ea_t ea, pcbp;
   unsigned int utempl;
   short scount;
@@ -3793,7 +3676,7 @@ static nfy(unsigned short inst) {
 }
 
 
-static lpsw() {
+static void lpsw() {
   ea_t ea;
   unsigned short m;
 
@@ -3865,7 +3748,7 @@ static lpsw() {
 }
 
 
-static sssn() {
+static void sssn() {
 #if 1
   static char snbuf[] = "FN      123456  ";  /* dummy serial number for DIAG */
 #else
@@ -3948,7 +3831,7 @@ static inline unsigned short ldc(int n, unsigned short result) {
 }
 
 
-static inline stc(int n, unsigned short ch) {
+static void inline stc(int n, unsigned short ch) {
   unsigned int utempl;
   unsigned short m;
   unsigned int far, flr;
@@ -3991,7 +3874,7 @@ static inline stc(int n, unsigned short ch) {
 
 /* add a bit offset, passed in "val", to field address register n */
 
-static inline arfa(int n, int val) {
+static void inline arfa(int n, int val) {
   int utempl;
 
   TRACE(T_FLOW, " before add, FAR=%o/%o, FLR=%o\n", getgr32(FAR0+2*n)>>16, getgr32(FAR0+2*n)&0xFFFF, getgr32(FLR0+2*n));
@@ -4265,7 +4148,7 @@ static int add16(unsigned short a1, unsigned short a2, unsigned short a3, ea_t e
 }
 
 
-static inline adlr(int dr) {
+static void inline adlr(int dr) {
 
   if (getcrs16(KEYS) & 020000)
     putgr32(dr, add32(getgr32(dr), 1, 0, 0));
@@ -4276,7 +4159,7 @@ static inline adlr(int dr) {
 }
 
 
-static inline cgt(unsigned short n) {
+static void inline cgt(unsigned short n) {
   unsigned short utempa;
 
   utempa = iget16(RP);              /* get number of words */
@@ -4287,7 +4170,7 @@ static inline cgt(unsigned short n) {
 }
 
 
-static inline pimh(int dr) {
+static void inline pimh(int dr) {
   int templ, templ2;
 
   templ = getgr32(dr);
@@ -4308,7 +4191,6 @@ static inline pimh(int dr) {
    variable, based on the cpuid */
 
 static int ldar(ea_t ea) {
-  unsigned short utempa;
   unsigned int result;
 
   if (ea & 040000) {       /* absolute RF addressing */
@@ -4336,7 +4218,7 @@ static int ldar(ea_t ea) {
 }
 
 
-static star(unsigned int val32, ea_t ea) {
+static void star(unsigned int val32, ea_t ea) {
 
   if (ea & 040000) {       /* absolute RF addressing */
     RESTRICT();
@@ -4360,7 +4242,7 @@ static star(unsigned int val32, ea_t ea) {
    word is passed in as an argument to handle EIO (Execute I/O) in
    V/I modes. */
 
-static pio(unsigned int inst) {
+static void pio(unsigned int inst) {
   int class;
   int func;
   int device;
@@ -4375,7 +4257,7 @@ static pio(unsigned int inst) {
   stopwatch_pop(&sw_io);
 }
 
-main (int argc, char **argv) {
+int main (int argc, char **argv) {
 
   static short bootdiskctrl[4] = {026, 027, 022, 023};
 
@@ -4388,11 +4270,11 @@ main (int argc, char **argv) {
   unsigned char boottaphdr[4];
 
   short tempa,tempa1,tempa2;
-  unsigned short utempa,utempa1,utempa2;
+  unsigned short utempa;
   int templ,templ1,templ2;
   long long templl,templl1,templl2;
-  unsigned long long utempll, utempll1, utempll2;
-  unsigned int utempl,utempl1,utempl2,utempl3,utempl4;
+  unsigned long long utempll;
+  unsigned int utempl,utempl1,utempl2;
   double tempd,tempd1,tempd2;
   ea_t tempea;
   ea_t ea;                             /* final MR effective address */
@@ -4404,20 +4286,16 @@ main (int argc, char **argv) {
   unsigned short opcode, opix;
   short i,j,x;
   unsigned short savemask;
-  unsigned short class;
   int nw,nw2;
   unsigned short rvec[9];    /* SA, EA, P, A, B, X, keys, dummy, dummy */
   unsigned short inst;
-  unsigned short m,m2;
-  unsigned short qtop,qbot,qseg,qmask,qtemp;
-  ea_t qea;
+  unsigned short m;
   short scount;                          /* shift count */
   unsigned short trapvalue;
   ea_t trapaddr;
   unsigned short access;
   unsigned int immu32;
   unsigned long long immu64;
-  short fcode;
   unsigned short zresult, zclen1, zclen2, zaccess;
   unsigned int zlen1, zlen2;
   ea_t zea1, zea2;
@@ -4437,12 +4315,22 @@ main (int argc, char **argv) {
   struct timezone tz;
 
   printf("[Prime Emulator ver %s %s]\n", REV, __DATE__);
-  printf("[Copyright (C) 2005-2012 Prirun LLC prirun@gmail.com]\n");
+  printf("[Copyright (C) 2005-2019 Jim Wilcoxson prirun@gmail.com]\n");
   if (argc > 1 && (strcmp(argv[1],"--version") == 0)) {
     exit(0);
   }
 
-  mypid = getpid();
+  /* don't let 2 emulators run in the same directory */
+
+  lockfd = open(".lock", O_WRONLY+O_CREAT, 0644);
+  if (lockfd == -1) {
+    fprintf(stderr, "Error opening .lock: %s\n", strerror(errno));
+    exit(1);
+  }
+  if (flock(lockfd, LOCK_EX+LOCK_NB) == -1) {
+    fprintf(stderr, "Already running\n");
+    exit(1);
+  }
 
   /* re-open stderr as error.log */
 
@@ -4455,26 +4343,7 @@ main (int argc, char **argv) {
     exit(1);
   }
 
-#if (!defined(DEMO) && (KEYID!=0))
-  lockfd = open("/tmp/em.lck", O_WRONLY+O_CREAT, 0644);
-  if (lockfd == -1) {
-    fprintf(stderr, "Error opening /tmp/em.lck: %s\n", strerror(errno));
-    exit(1);
-  }
-  if (flock(lockfd, LOCK_EX+LOCK_NB) == -1) {
-    fprintf(stderr, "Already running\n");
-    exit(1);
-  }
-#endif
-
   /* initialize global variables */
-
-#ifndef NOREGS
-  if (sizeof(gv) > 16*1024) {
-    fprintf(stderr, "em: size of global vars = %lu\n", sizeof(gv));
-    fatal(NULL);
-  }
-#endif
 
   gvp = &gv;
   gvp->physmem = physmem;
@@ -4508,10 +4377,8 @@ main (int argc, char **argv) {
 
   /* on SIGTERM, shutdown the emulator with a Prime sensor check */
 
-#ifdef NOREGS
   signal (SIGTERM, sensorcheck);
   signal (SIGQUIT, sigquit);
-#endif
 
 #ifndef NOTRACE
 
@@ -4576,10 +4443,6 @@ main (int argc, char **argv) {
   gvp->memlimit = MEMSIZE;
   tport = 0;
   nport = 0;
-
-  /* read license file: id, server name, port; print error if it fails */
-
-  readlicense(1);
 
   /* check args */
 
@@ -4948,16 +4811,6 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
     fatal(NULL);
   }
 
-  /* save boot file inode; this gets sent in security checks */
-
-  {
-    struct stat statbuf;
-    if ((i=fstat(bootfd, &statbuf)) == -1) {
-      perror("Error fstat on boot file");
-      fatal(NULL);
-    }
-    bootuid = statbuf.st_ino;
-  }
   close(bootfd);
 
   /* check we got it all */
@@ -5287,9 +5140,9 @@ xec:
 #endif
 
 #if 1
-  TRACE(T_FLOW, "\n			#%u [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X=%o/%d Y=%o/%d%s%s%s%s K=%o M=%o\n", gvp->instcount, searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16s(TIMERH), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS));
+  TRACE(T_FLOW, "\n			#%u [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X='%o/%d Y='%o/%d%s%s%s%s K=%o M=%o\n", gvp->instcount, searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16s(TIMERH), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS));
 #else
-  TRACE(T_FLOW, "\n			[%s %o] SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X=%o/%d Y=%o/%d%s%s%s%s K=%o M=%o\n", searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS) & 0177437);
+  TRACE(T_FLOW, "\n			[%s %o] SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X='%o/%d Y='%o/%d%s%s%s%s K=%o M=%o\n", searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS) & 0177437);
 #endif
 
   /* begin instruction decode: generic? */

@@ -249,41 +249,6 @@ static union {
     } sym;
   } regs;
 
-/* the Prime program counter (RP) and pointer to current register set (crsl)
-   can be either in a dedicated register or regular global variables.
-   Putting them in dedicated registers gives about an 11% performance boost
-   and reduces the code size from 146K to 136K */
-
-#ifndef NOREGS
-
-/* store RP and crsl in dedicated registers 29-30 (Power PC) */
-
-static unsigned int grp;      /* global RP for restore after longjmp */
-register union {
-  struct {
-#ifdef __BIG_ENDIAN__
-    unsigned short rph;
-    unsigned short rpl;
-#else
-    unsigned short rpl;
-    unsigned short rph;
-#endif
-  } s;
-  unsigned int ul;
-} rpreg asm ("r29");
-
-static unsigned int *gcrsl;   /* global crs pointer for restore after longjmp */
-register union {
-  short *i16;
-  unsigned short *u16;
-  int *i32;
-  unsigned int *u32;
-  long long *i64;
-  unsigned long long *u64;
-} cr asm ("r30");
-
-#else
-
 union {
   struct {
 #ifdef __BIG_ENDIAN__
@@ -308,7 +273,6 @@ static union {
   long long *i64;
   unsigned long long *u64;
 } cr;
-#endif
 
 #define crs  cr.u16
 #define crsl cr.u32
@@ -327,7 +291,7 @@ static inline uint16_t getcrs16(int offset) {  \
 
 /* store 16-bit unsigned at 16-bit offset */
 //#define putcrs16(offset, val) crs[(offset)] = (val)
-static inline uint16_t putcrs16(int offset, uint16_t val) {  \
+static inline void putcrs16(int offset, uint16_t val) {  \
   crs[(offset)] = swap16(val); \
 }
 
@@ -347,13 +311,13 @@ static inline uint32_t getcrs32(int offset) {  \
 
 /* put 32-bit unsigned at 16-bit offset */
 //#define putcrs32(offset, val) *(unsigned int *)(crs+(offset)) = (val)
-static inline uint32_t putcrs32(int offset, uint32_t val) {  \
+static inline void putcrs32(int offset, uint32_t val) {  \
   *(unsigned int *)(crs+offset) = swap32(val);  \
 }
 
 /* put 32-bit signed at 16-bit offset */
 //#define putcrs32s(offset, val) *(int *)(crs+(offset)) = (val)
-#define putcrs32s(offset, val) (int32_t) putcrs32((offset), (val))
+#define putcrs32s(offset, val) putcrs32((offset), (val))
 
 /* get 32-bit effective address at 16-bit offset */
 //#define getcrs32ea(offset) *(ea_t *)(crs+(offset))
@@ -371,13 +335,13 @@ static inline int64_t getcrs64s(int offset) {  \
 
 /* put 64-bit signed at 16-bit offset */
 //#define putcrs64s(offset, val) *(long long *)(crs+(offset)) = (val)
-static inline int64_t putcrs64s(int offset, int64_t val) {  \
+static inline void putcrs64s(int offset, int64_t val) {  \
   *(long long *)(crs+offset) = swap64(val);  \
 }
 
 /* put 64-bit double at 16-bit offset (remove later) */
 //#define putcrs64d(offset, val) *(double *)(crs+(offset)) = (val)
-static inline double putcrs64d(int offset, double val) {  \
+static inline void putcrs64d(int offset, double val) {  \
   *(unsigned long long *)(crs+offset) = swap64(*(uint64_t *)&val);	  \
 }
 
@@ -387,7 +351,7 @@ static inline uint16_t getar16(int offset) {  \
 }
 
 /* put 16-bit unsigned at 16-bit absolute register file address */
-static inline uint16_t putar16(int offset, uint16_t val) {  \
+static inline void putar16(int offset, uint16_t val) {  \
   regs.u16[(offset)] = swap16(val); \
 }
 
@@ -401,7 +365,7 @@ static inline uint16_t getgr16(int offset) {  \
 
 /* store 16-bit unsigned at 32-bit offset (in left halfword) */
 //#define putgr16(offset, val) crs[(offset)*2] = (val)
-static inline uint16_t putgr16(int offset, uint16_t val) {  \
+static inline void putgr16(int offset, uint16_t val) {  \
   crs[(offset)*2] = swap16(val); \
 }
 
@@ -411,7 +375,7 @@ static inline uint16_t putgr16(int offset, uint16_t val) {  \
 
 /* store 16-bit signed at 32-bit offset (in left halfword) */
 //#define putgr16s(offset, val) *(short *)(crs+(offset)*2) = (val)
-#define putgr16s(offset, val) (short)putgr16((offset), (val))
+#define putgr16s(offset, val) putgr16((offset), (val))
 
 /* fetch 32-bit unsigned at 32-bit offset */
 //#define getgr32(offset) crsl[(offset)]
@@ -421,7 +385,7 @@ static inline uint32_t getgr32(int offset) {  \
 
 /* store 32-bit unsigned at 32-bit offset */
 //#define putgr32(offset, val) crsl[(offset)] = (val)
-static inline uint32_t putgr32(int offset, uint32_t val) {  \
+static inline void putgr32(int offset, uint32_t val) {  \
   crsl[offset] = swap32(val); \
 }
 
@@ -441,7 +405,7 @@ static inline int64_t getgr64s(int offset) {  \
 
 /* store 64-bit signed at 32-bit offset */
 //#define putgr64s(offset, val) *(long long *)(crsl+(offset)) = (val)
-static inline int64_t putgr64s(int offset, int64_t val) {  \
+static inline void putgr64s(int offset, int64_t val) {  \
   *(long long *)(crsl+offset) = swap64(val); \
 }
 
@@ -455,7 +419,7 @@ static inline uint32_t getar32(int offset) {  \
 }
 
 /* put 32-bit unsigned at 32-bit absolute register file address */
-static inline uint32_t putar32(int offset, uint32_t val) {  \
+static inline void putar32(int offset, uint32_t val) {  \
   regs.u32[(offset)] = swap32(val); \
 }
 
@@ -474,14 +438,14 @@ static inline uint64_t getfr64(int offset) {  \
 /* put 64-bit double in FP reg 0 or 1
    For FP 0, offset=0; for FP 1, offset=2 */
 //#define putfr64(offset, val) 
-static inline double putfr64(int offset, unsigned long long val) {  \
+static inline void putfr64(int offset, unsigned long long val) {  \
   *(unsigned long long *)(crsl+FAC0+offset) = swap64((val));
 }
 
 /* put 64-bit double in FP reg 0 or 1
    For FP 0, offset=0; for FP 1, offset=2 */
 //#define putfr64d(offset, val) *(double *)(crsl+FAC0+offset) = (val)
-static inline double putfr64d(int offset, double val) {  \
+static inline void putfr64d(int offset, double val) {  \
   *(unsigned long long *)(crsl+FAC0+offset) = swap64(*(uint64_t *)&val);	  \
 }
 

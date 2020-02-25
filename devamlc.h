@@ -172,15 +172,9 @@ AMLC status word (from AMLCT5):
 
 int devamlc (int class, int func, int device) {
 
-#ifdef DEMO
-  #define AMLCLINESPERBOARD 1
-  #define MAXLINES 2
-  #define MAXBOARDS 1
-#else
-  #define AMLCLINESPERBOARD 16
-  #define MAXLINES 128
-  #define MAXBOARDS 8
-#endif
+#define AMLCLINESPERBOARD 16
+#define MAXLINES 128
+#define MAXBOARDS 8
 
   /* check for 1 new connection every .1 seconds */
 
@@ -298,7 +292,6 @@ int devamlc (int class, int func, int device) {
 
   switch (device) {
   case 054: dx = 0; break;
-#ifndef DEMO
   case 053: dx = 1; break;
   case 052: dx = 2; break;
   case 035: dx = 3; break;
@@ -306,7 +299,6 @@ int devamlc (int class, int func, int device) {
   case 016: dx = 5; break;
   case 017: dx = 6; break;
   case 032: dx = 7; break;
-#endif
   default:
     fprintf(stderr, "devamlc: non-AMLC device id '%o ignored\n", device);
     return -1;
@@ -562,10 +554,10 @@ int devamlc (int class, int func, int device) {
 #define TIOCM_CD 0x0100    
 
     if (func == 00) {             /* input Data Set Sense (carrier) */
-#ifdef __APPLE__
       if (dc[dx].serial) {        /* any serial connections? */
 	if (--dc[dx].dsstime == 0) {
 	  dc[dx].dsstime = DSSCOUNTDOWN;
+#ifdef __APPLE__
 	  for (lx = 0; lx < 16; lx++) {  /* yes, poll them */
 	    if (dc[dx].ctype[lx] == CT_SERIAL) {
 	      int modemstate;
@@ -581,12 +573,12 @@ int devamlc (int class, int func, int device) {
 	      }
 	    }
 	  }
+#endif
 	}
       }
       //printf("devamlc: dss for device '%o = 0x%x\n", device, dc[dx].dss);
       putcrs16(A, ~dc[dx].dss);    /* to the outside world, 1 = no carrier */
       IOSKIP;
-#endif
     } else if (func == 07) {       /* input AMLC status */
       dc[dx].interrupting = 0;
       putcrs16(A, 040000 | (dc[dx].bufnum<<8) | (dc[dx].intenable<<5) | (1<<4));
@@ -972,7 +964,7 @@ int devamlc (int class, int func, int device) {
       for (lx = 0; lx < 16; lx++) {
 	if (dc[dx].xmitenabled & BITMASK16(lx+1)) {
 	  int n, maxn;
-	  unsigned short qtop, qbot, qtemp,qseg, qmask, qents;
+	  unsigned short qtop, qbot, qseg, qmask, qents;
 	  ea_t qentea, qcbea;
 	  n = 0;
 	  qcbea = dc[dx].baseaddr + lx*4;

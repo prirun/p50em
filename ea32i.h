@@ -4,7 +4,6 @@ static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned int *immu32, 
 
   int tm, sr, br, ring;
   unsigned short d;
-  int temp32;
   ea_t ea, ip;
 
   *immu32 = 0xAAAAAAAA;
