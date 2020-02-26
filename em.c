@@ -1764,6 +1764,99 @@ static void warn(char *msg) {
 }
     
 
+/* return a string for the keys
+   C = C bit set
+   D = DBL bit set (S/R)
+   L = L bit set
+   16S, 32S, 32R, 64R, 64V, 32I = addressing mode
+   < = CC "less than" set
+   = = CC "equal" set
+   F = float exceptions enabled
+   I = integer exceptions enabled
+   D = decimal exceptions enabled (V/I)
+   OOO/DD = visible shift count (S/R)
+*/
+
+char *keystring(unsigned short keys) {
+  int i;
+  char *sp;
+  static char s[50];
+  static char modes[9][4] = {"16S", "32S", "64R", "32R", "32I", "M5?", "64V", "M7?"};
+
+  sp = s;
+  if (keys & 0100000)   /* C-bit */
+    *sp++ = 'C';
+  if (keys & 040000)    /* DBL */
+    *sp++ = 'D';
+  if (keys & 020000)    /* L-bit */
+    *sp++ = 'L';
+  memcpy(sp, modes[(keys>>10) & 7], 3);
+  sp += 3;
+  if (keys & 01000 == 0)  /* float exception enabled */
+    *sp++ = 'F';
+  if (keys & 0400)        /* int exception enabled */
+    *sp++ = 'I';
+  if (keys & 010000) {    /* V/I mode */
+    if (keys & 0200)      /* CC LT bit */
+      *sp++ = '<';
+    if (keys & 0100)      /* CC EQ bit */
+      *sp++ = '=';
+    if (keys & 040)       /* dec exception enabled */
+      *sp++ = 'D';
+  } else {                /* R-mode visible shift count */
+    i = keys & 0377;
+    i = sprintf(sp, "%03o/%d ", i, i);
+    sp += i;
+  }
+  *sp = 0;
+  return s;
+}
+
+/* return a string for the modals
+   I = interrupts inhibited, bit 1 = 0
+   E = interrupts enabled, bit 1 = 1
+   
+   V = vectored interrupt mode, bit 2 = 1
+
+   0-7 = CRS, bits 9-11
+
+   M = mapped I/O, bit 12 = 1
+
+   P = process exchange enabled, bit 13 = 1
+
+   S = segmentation enabled, bit 14 = 1
+
+   Machine check mode, bits 15-16:
+   N = no reporting (00)
+   C = report uncorreced mem parity errors
+   R = report unrecovered mem parity errors
+   A = report all errors
+*/
+
+char *modstring(unsigned short m) {
+  char *sp;
+  static char s[50];
+  static char modes[4] = {'N', 'C', 'R', 'A'};
+
+  sp = s;
+  if (m & 0100000)  /* interrupts enabled */
+    *sp++ = 'E';
+  else
+    *sp++ = 'I';
+  if (m & 040000)   /* vectored interrupts */
+    *sp++ = 'V';
+  *sp++ = ((m >> 5) & 7) + '0';  /* CRS */
+  if (m & 020)      /* mapped I/O */
+    *sp++ = 'M';
+  if (m & 010)      /* process exchange */
+    *sp++ = 'P';
+  if (m & 4)        /* segmentation */
+    *sp++ = 'S';
+  *sp++ = modes[m & 3];
+  *sp = 0;
+  return s;
+}
+
 static void fatal(char *msg) {
   static int fatal_called = 0;
   ea_t pcbp, csea;
@@ -1799,7 +1892,7 @@ static void fatal(char *msg) {
   printf("Fatal error");
   if (msg)
     printf(": %s", msg);
-  printf("\ninstruction #%u at %o/%o %s ^%06o^\nA='%o/%d  B='%o/%d  L='%o/%d  X='%o/%d\nowner=%o %s, keys=%o, modals=%o\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), lights, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X), getcrs16(OWNERL), searchloadmap(getcrs32(OWNER),' '), getcrs16(KEYS), getcrs16(MODALS));
+  printf("\ninstruction #%u at %o/%o %s ^%06o^\nA='%o/%d  B='%o/%d  L='%o/%d  X='%o/%d K=%o [%s]\nowner=%o %s, modals=%o [%s]\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), lights, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X), getcrs16(KEYS), keystring(getcrs16(KEYS)), getcrs16(OWNERL), searchloadmap(getcrs32(OWNER),' '), getcrs16(MODALS), modstring(getcrs16(MODALS)));
   
   /* dump concealed stack entries */
 
