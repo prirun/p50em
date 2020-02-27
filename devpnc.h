@@ -295,7 +295,7 @@ static struct {             /* node info for each node in my network */
 
 #define PNCCSNONE 0           /* not configured in ring.cfg */
 #define PNCCSDISC 1           /* not connected */
-#define PNCCSCONN 2           /* connected */
+#define PNCCSCONN 2           /* connecting */
 #define PNCCSAUTH 3           /* unique ID / password sent */
 
 /* xmit/recv buffer states and buffers.  These must be static because
@@ -983,10 +983,22 @@ int devpnc (int class, int func, int device) {
       perror("bind: unable to bind for PNC");
       fatal(NULL);
     }
-    if (listen(pncfd, 10)) {
+    if (listen(pncfd, MAXNODEID)) {
       perror("listen failed for PNC");
       fatal(NULL);
     }
+
+    /* a uid is always sent after a connect, so don't bother with the
+       accept until the uid is received.  This is Linux-specific and
+       can be disabled, though that may cause problems for rings where
+       the max node id > MAXACCEPTTIME because of connect delays */
+
+    optval = MAXNODEID;
+    if (setsockopt(pncfd, IPPROTO_TCP, TCP_DEFER_ACCEPT, &optval, sizeof(optval))) {
+      perror("setsockopt TCP_DEFER_ACCEPT failed for PNC");
+      fatal(NULL);
+    }
+
     TRACE(T_RIO, "PNC configured\n");
     devpoll[device] = PNCPOLL*gvp->instpermsec;
 
