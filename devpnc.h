@@ -446,6 +446,7 @@ void pncaccept(time_t timenow) {
       goto disc;
     }
     TRACE(T_RIO, " new PNC connection, fd %d\n", fd);
+    pncinitfd(fd);
   }
 
   /* PNC connect request seen:
@@ -497,7 +498,6 @@ void pncaccept(time_t timenow) {
   ni[i].cstate = PNCCSAUTH;
   ni[i].rcvlen = 0;
   ni[i].fd = fd;
-  pncinitfd(fd);
   fd = -1;
   return;
 
