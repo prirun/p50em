@@ -47,12 +47,6 @@
   the Primenet config node-to-node password becomes redundant and
   should probably be left blank for ease in configuration. Cool, eh?
 
-  UNIMPLEMENTED IDEA 2: when a connect comes in, we could/should check
-  that the IP address in ring.cfg matches the IP address of the
-  connect.  Then again, that means you can't network an emulator when
-  away from your home location, and it breaks "incoming-only"
-  connections
-
   Prior to rev 19.3, each Primenet node sends periodic "timer"
   messages to all nodes it knows about.  If the message returns ACK'd,
   the remote node is up.  Otherwise, the remote node must be down.
@@ -95,9 +89,9 @@
   necessary since we're emulating a message-based protocol over a
   stream-based interface.  As a precaution, the emulator also adds the
   16-bit byte count at the end of the packet.  If these two counters
-  don't match, there has been some kind of mishap in the PNC
-  emulation.  These fields are similar to the CRC and ack byte of a
-  real PNC: the Prime I/O bus never sees them.
+  don't match, there has been some kind of mishap in the PNC emulation
+  and the connection is dropped.  These fields are similar to the CRC
+  and ack byte of a real PNC: the Prime I/O bus never sees them.
 
   Because of TCP/IP streaming, it is important that a ring packet is
   sent in its entirety or not at all.  If there is a situation where a
@@ -487,12 +481,17 @@ void pncaccept(time_t timenow) {
     TRACE(T_RIO, " devpnc: node %d is disabled\n", i);
     goto disc;
   }
+
+  /* you're now authenticated.  If I'm connecting to you, drop my
+     connection.  If I'm authenticated to you (crossed connections),
+     use memcmp to keep one connection and drop the other */
+
   if (ni[i].cstate > PNCCSDISC) {
     TRACE(T_RIO, " devpnc: already connected to node %d with uid %s\n", i, uid);
-    if (memcmp(uid, ni[myid].uid, MAXUIDLEN) < 0)
-      goto disc;
+    if (ni[i].cstate == PNCCSCONN || memcmp(uid, ni[myid].uid, MAXUIDLEN) > 0)
+      pncdisc(i);  /* and fall through to use new connection */
     else
-      pncdisc(i);
+      goto disc;
   }
   TRACE(T_RIO, " devpnc: node %d authorized, fd %d\n", i, fd);
   ni[i].cstate = PNCCSAUTH;
@@ -506,7 +505,9 @@ disc:
   fd = -1;
 }
 
-/* connect to a node, without blocking */
+/* connect to a node, without blocking
+   State on entry must be PNCCSDISC
+   State on exit will be PNCCSCONN */
 
 void pncconn1(nodeid, timenow) {
   struct hostent* server;
@@ -514,6 +515,10 @@ void pncconn1(nodeid, timenow) {
   int fd;
 
   TRACE(T_RIO, "try connect to node %d\n", nodeid);
+  if (ni[nodeid].cstate != PNCCSDISC) {
+    printf("devpnc: pncconn1 entry state for node %d is %d\n", nodeid, ni[nodeid].cstate);
+    fatal(NULL);
+  }
   ni[nodeid].conntime = timenow;
   if ((fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
     perror ("Unable to create socket");
@@ -560,18 +565,7 @@ void pncauth1(int nodeid, time_t timenow) {
   pncdisc(nodeid);
 }
 
-/* connect to the next unconnected node.  Ideally, we should only try
-   to connect to a remote system once: if they aren't up, we assume
-   they will try to connect to us when they come up.  For now, keep
-   trying every 30 seconds.
-
-   This is buggy for big rings: it tries to connect to each node
-   first, then comes back around and does authorization.  With a 1
-   second poll time and 250 nodes, it'll take 250 seconds to do all
-   the connects, and then 250 seconds to authorize.  None of the
-   authorizations will work because the uid has to be received within
-   MAXACCEPTTIME seconds.  It's fine for the 5-6 node case though.
- */
+/* finish one connection in progress */
 
 void pncconnect(time_t timenow) {
   static int prevnode=MAXNODEID;
@@ -588,11 +582,6 @@ void pncconnect(time_t timenow) {
       continue;               
     if (ni[nodeid].cstate == PNCCSCONN) {
       pncauth1(nodeid, timenow);
-      break;
-    }
-    //TRACE(T_RIO, "pncconnect: node %d, state %d, timenow %d, conntime %d\n", nodeid, ni[nodeid].cstate, timenow, ni[nodeid].conntime);
-    if (ni[nodeid].cstate == PNCCSDISC && timenow - ni[nodeid].conntime > MINCONNTIME) {
-      pncconn1(nodeid, timenow);
       break;
     }
   } while (nodeid != prevnode);      /* went round once? */
@@ -615,22 +604,29 @@ void pncinitdma(t_dma *iob, char *iotype) {
   (*iob).state = PNCBSRDY;
 }
 
+/* transmit to a node.  If the node is disabled, fail.  If not yet
+   connected, initiate a connect.  If connecting, try to authenticate.
+   If authenticated, transmit */
 
 unsigned short pncxmit1(short nodeid, t_dma *iob) {
   int nwritten, ntowrite;
+  time_t timenow;
 
-  if (ni[nodeid].fd == -1) {        /* not connected yet */
-    if (ni[nodeid].cstate != PNCCSNONE)
-      TRACE(T_RIO, " can't transmit: not connected to node %d\n", nodeid);
+  if (ni[nodeid].cstate == PNCCSNONE) {
+    TRACE(T_RIO, " can't transmit: node %d not configured\n", nodeid);
     return 0;
   }
-  if (ni[nodeid].cstate != PNCCSAUTH) { /* not authorized yet */
-    TRACE(T_RIO, " can't transmit: not authorized to node %d\n", nodeid);
+  if (ni[nodeid].cstate == PNCCSDISC) {
+    time(&timenow);
+    pncconn1(nodeid, timenow);
     return 0;
   }
-
-  /* NOTE: setsockopt SO_SNDLOWAT ensures that a partial packet write
-     doesn't occur here */
+  if (ni[nodeid].cstate == PNCCSCONN) {
+    time(&timenow);
+    pncauth1(nodeid, timenow);
+    if (ni[nodeid].cstate != PNCCSAUTH)
+      return 0;
+  }
 
   TRACE(T_RIO, " xmit packet to node %d\n", nodeid);
   ntowrite = (*iob).dmanw*2 + 4;
@@ -663,8 +659,7 @@ unsigned short pncxmit(t_dma *iob) {
   xstat = 0;
   if ((*iob).toid == 255) {
     for (i=1; i<=MAXNODEID; i++)
-      if (i != myid)
-	xstat |= pncxmit1(i, iob);
+      xstat |= pncxmit1(i, iob);
   } else {
     xstat |= pncxmit1((*iob).toid, iob);
   }
@@ -1260,7 +1255,7 @@ int devpnc (int class, int func, int device) {
     pollts = (tv1.tv_sec + tv1.tv_usec/1000000.0) - tv0ts;
     TRACE(T_RIO, " POLL '%02o%02o @ %10.2f\n", func, device, pollts);
 
-    /* on SIGPIPE, reset to the previous poll time and just do reads;
+    /* on SIGIO, reset to the previous poll time and just do reads;
        otherwise, a regularly scheduled poll */
 
     if (sawsigio) {
@@ -1270,7 +1265,7 @@ int devpnc (int class, int func, int device) {
       devpoll[device] = PNCPOLL*gvp->instpermsec;
       time(&timenow);
       pncaccept(timenow);   /* accept 1 new connection each poll */
-      pncconnect(timenow);  /* try to connect to a disconnected node */
+      pncconnect(timenow);  /* finish a pending connection */
     }
 
 rcvexit:
