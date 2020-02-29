@@ -462,11 +462,11 @@ void pncaccept(time_t timenow) {
   if (n == -1) {
     if (errno == EWOULDBLOCK || errno == EINTR || errno == EAGAIN)
       return;
-    perror("error reading PNC uid");
+    fprintf(stderr, "error reading PNC uid from fd %d: %s\n", fd, strerror(errno));
     goto disc;
   }
   if (n != MAXUIDLEN) {
-    fprintf(stderr, "devpnc: error reading uid, expected %d bytes, got %d\n", MAXUIDLEN, n);
+    fprintf(stderr, "devpnc: error reading uid from fd %d, expected %d bytes, got %d\n", fd, MAXUIDLEN, n);
     goto disc;
   }
   TRACE(T_RIO, " uid is %s for new PNC fd %d\n", uid, fd);
@@ -505,6 +505,7 @@ void pncaccept(time_t timenow) {
   return;
 
 disc:
+  TRACE(T_RIO, " devpnc: close new connection from node %d fd %d\n", i, fd);
   close(fd);
   fd = -1;
 }
@@ -563,9 +564,9 @@ void pncauth1(int nodeid, time_t timenow) {
     if (errno == EWOULDBLOCK || errno == EINTR || errno == EAGAIN || errno == EINPROGRESS)
       return;
     if (errno != EPIPE && errno != ENOTCONN)
-      perror("error sending PNC uid");
+      fprintf(stderr, "devpnc: error sending PNC uid to node %d: %s\n", nodeid, strerror(errno));
   } else
-    fprintf(stderr, "devpnc: expected %d bytes, only wrote %d bytes for uid\n", MAXUIDLEN, n);
+    fprintf(stderr, "devpnc: wrote %d of %d uid bytes to node %d\n", n, MAXUIDLEN, nodeid);
   pncdisc(nodeid);
 }
 
@@ -617,7 +618,7 @@ unsigned short pncxmit1(short nodeid, t_dma *iob) {
   time_t timenow;
 
   if (ni[nodeid].cstate == PNCCSNONE) {
-    TRACE(T_RIO, " can't transmit: node %d not configured\n", nodeid);
+    fprintf(stderr, " can't transmit: node %d not configured in ring.cfg\n", nodeid);
     return 0;
   }
   if (ni[nodeid].cstate == PNCCSDISC) {
@@ -646,7 +647,7 @@ unsigned short pncxmit1(short nodeid, t_dma *iob) {
       return 0;
     }
   } else if (nwritten != ntowrite) {
-    fprintf(stderr, "devpnc: pncxmit1 tried to write %d, wrote %d\n", ntowrite, nwritten);
+    fprintf(stderr, "devpnc: pncxmit1 wrote %d of %d bytes to node %d %d; disconnecting\n", nwritten, ntowrite, nodeid);
     pncdisc(nodeid);
     return 0;
   }
@@ -657,13 +658,14 @@ unsigned short pncxmit1(short nodeid, t_dma *iob) {
    255, the broadcast nodeid */
 
 unsigned short pncxmit(t_dma *iob) {
-  short  i;
+  short  nodeid;
   unsigned short xstat;
 
   xstat = 0;
   if ((*iob).toid == 255) {
-    for (i=1; i<=MAXNODEID; i++)
-      xstat |= pncxmit1(i, iob);
+    for (nodeid=1; nodeid<=MAXNODEID; nodeid++)
+      if (ni[nodeid].cstate != PNCCSNONE)
+	xstat |= pncxmit1(nodeid, iob);
   } else {
     xstat |= pncxmit1((*iob).toid, iob);
   }
