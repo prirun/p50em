@@ -354,7 +354,7 @@ char * pncdumppkt(unsigned char * pkt, int len) {
   TRACE(T_RIO, "%s\n", hexpkt);
   for (i=0; i<len; i++) {
     ch = pkt[i] & 0x7f;
-    if (ch)
+    if (' ' <= ch && ch <= '~')
       hexpkt[i] = ch;
     else
       hexpkt[i] = '_';
@@ -369,7 +369,7 @@ char * pncdumppkt(unsigned char * pkt, int len) {
 unsigned short pncdisc(nodeid) {
   if (ni[nodeid].cstate > PNCCSDISC) {
     if (ni[nodeid].cstate > PNCCSCONN)
-      fprintf(stderr, "devpnc: disconnect from node %d\n", nodeid);
+      fprintf(stderr, "devpnc: disconnect from authenticated node %d\n", nodeid);
     TRACE(T_RIO, " pncdisc: disconnect from node %d\n", nodeid);
     close(ni[nodeid].fd);
     ni[nodeid].cstate = PNCCSDISC;
@@ -455,6 +455,10 @@ void pncaccept(time_t timenow) {
     goto disc;
   }
   n = read(fd, uid, MAXUIDLEN);
+  if (n == 0) {
+    TRACE(T_RIO, " read eof on new PNC fd %d\n", fd);
+    goto disc;
+  }
   if (n == -1) {
     if (errno == EWOULDBLOCK || errno == EINTR || errno == EAGAIN)
       return;
@@ -772,8 +776,10 @@ int pncread (int nodeid, int nbytes) {
   int n;
 
   n = read(ni[nodeid].fd, ni[nodeid].rcvpkt+ni[nodeid].rcvlen, nbytes);
-  if (n == 0)
+  if (n == 0) {
+    TRACE(T_RIO, " read eof on node %d, disconnecting\n", nodeid);
     pncdisc(nodeid);
+  }
   if (n == -1) {
     if (errno != EWOULDBLOCK && errno != EINTR && errno != EAGAIN) {
       if (errno != EPIPE)
@@ -865,7 +871,7 @@ int devpnc (int class, int func, int device) {
 	  return -1;
 	}
 	buf[len-1] = 0;
-	if (strcmp(buf,"") == 0 || buf[0] == ';')
+	if (strcmp(buf,"") == 0 || buf[0] == ';' || buf[0] == '#')
 	  continue;
 
 	if ((p=strtok(buf, DELIM)) == NULL) {
