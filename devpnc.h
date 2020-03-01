@@ -973,7 +973,7 @@ int devpnc (int class, int func, int device) {
 #endif
     addr.sin_family = AF_INET;
     addr.sin_port = htons(nport);
-    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_addr.s_addr = bindaddr;
     if (bind(pncfd, (struct sockaddr *)&addr, sizeof(addr))) {
       perror("bind: unable to bind for PNC");
       fatal(NULL);

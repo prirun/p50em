@@ -667,6 +667,7 @@ static int domemdump;                       /* -memdump arg */
 
 static int tport;                           /* -tport option (incoming terminals) */
 static int nport;                           /* -nport option (PNC/Ringnet) */
+static in_addr_t bindaddr = INADDR_ANY;     /* -naddr option (PnC/Ringnet) */
 
 /* load map related data, specified with -map */
 
@@ -4625,6 +4626,12 @@ int main (int argc, char **argv) {
 	nport = templ;
       } else
 	fatal("-nport needs an argument\n");
+
+    } else if (strcmp(argv[i],"-naddr") == 0) {
+      if (i+1 < argc && argv[i+1][0] != '-') {
+	inet_aton(argv[++i], &bindaddr);
+      } else
+	fatal("-naddr needs an argument\n");
 
     } else if (strcmp(argv[i],"-tport") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
