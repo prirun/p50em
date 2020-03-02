@@ -664,7 +664,7 @@ unsigned short pncxmit(t_dma *iob) {
   xstat = 0;
   if ((*iob).toid == 255) {
     for (nodeid=1; nodeid<=MAXNODEID; nodeid++)
-      if (ni[nodeid].cstate != PNCCSNONE)
+      if (nodeid != myid && ni[nodeid].cstate != PNCCSNONE)
 	xstat |= pncxmit1(nodeid, iob);
   } else {
     xstat |= pncxmit1((*iob).toid, iob);
