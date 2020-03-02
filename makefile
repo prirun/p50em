@@ -19,7 +19,7 @@ debug:   # gdb (Intel)
 trace:   # tracing + gdb (Intel)
 
 	rm -rf em.o
-	cc -DREV=\"${REV}\" -DFAST -DNOMEM -g -O0 em.c -o em
+	cc -DREV=\"${REV}\" -DFAST -DNOMEM -O em.c -o em
 
 
 fixed:  # fixed clock rate, gdb (Intel)

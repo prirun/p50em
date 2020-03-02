@@ -354,7 +354,7 @@ char * pncdumppkt(unsigned char * pkt, int len) {
   TRACE(T_RIO, "%s\n", hexpkt);
   for (i=0; i<len; i++) {
     ch = pkt[i] & 0x7f;
-    if (ch)
+    if (' ' <= ch && ch <= '~')
       hexpkt[i] = ch;
     else
       hexpkt[i] = '_';
@@ -369,7 +369,7 @@ char * pncdumppkt(unsigned char * pkt, int len) {
 unsigned short pncdisc(nodeid) {
   if (ni[nodeid].cstate > PNCCSDISC) {
     if (ni[nodeid].cstate > PNCCSCONN)
-      fprintf(stderr, "devpnc: disconnect from node %d\n", nodeid);
+      fprintf(stderr, "devpnc: disconnect from authenticated node %d\n", nodeid);
     TRACE(T_RIO, " pncdisc: disconnect from node %d\n", nodeid);
     close(ni[nodeid].fd);
     ni[nodeid].cstate = PNCCSDISC;
@@ -455,14 +455,18 @@ void pncaccept(time_t timenow) {
     goto disc;
   }
   n = read(fd, uid, MAXUIDLEN);
+  if (n == 0) {
+    TRACE(T_RIO, " read eof on new PNC fd %d\n", fd);
+    goto disc;
+  }
   if (n == -1) {
     if (errno == EWOULDBLOCK || errno == EINTR || errno == EAGAIN)
       return;
-    perror("error reading PNC uid");
+    fprintf(stderr, "error reading PNC uid from fd %d: %s\n", fd, strerror(errno));
     goto disc;
   }
   if (n != MAXUIDLEN) {
-    fprintf(stderr, "devpnc: error reading uid, expected %d bytes, got %d\n", MAXUIDLEN, n);
+    fprintf(stderr, "devpnc: error reading uid from fd %d, expected %d bytes, got %d\n", fd, MAXUIDLEN, n);
     goto disc;
   }
   TRACE(T_RIO, " uid is %s for new PNC fd %d\n", uid, fd);
@@ -501,6 +505,7 @@ void pncaccept(time_t timenow) {
   return;
 
 disc:
+  TRACE(T_RIO, " devpnc: close new connection from node %d fd %d\n", i, fd);
   close(fd);
   fd = -1;
 }
@@ -559,9 +564,9 @@ void pncauth1(int nodeid, time_t timenow) {
     if (errno == EWOULDBLOCK || errno == EINTR || errno == EAGAIN || errno == EINPROGRESS)
       return;
     if (errno != EPIPE && errno != ENOTCONN)
-      perror("error sending PNC uid");
+      fprintf(stderr, "devpnc: error sending PNC uid to node %d: %s\n", nodeid, strerror(errno));
   } else
-    fprintf(stderr, "devpnc: expected %d bytes, only wrote %d bytes for uid\n", MAXUIDLEN, n);
+    fprintf(stderr, "devpnc: wrote %d of %d uid bytes to node %d\n", n, MAXUIDLEN, nodeid);
   pncdisc(nodeid);
 }
 
@@ -613,7 +618,7 @@ unsigned short pncxmit1(short nodeid, t_dma *iob) {
   time_t timenow;
 
   if (ni[nodeid].cstate == PNCCSNONE) {
-    TRACE(T_RIO, " can't transmit: node %d not configured\n", nodeid);
+    fprintf(stderr, " can't transmit: node %d not configured in ring.cfg\n", nodeid);
     return 0;
   }
   if (ni[nodeid].cstate == PNCCSDISC) {
@@ -642,7 +647,7 @@ unsigned short pncxmit1(short nodeid, t_dma *iob) {
       return 0;
     }
   } else if (nwritten != ntowrite) {
-    fprintf(stderr, "devpnc: pncxmit1 tried to write %d, wrote %d\n", ntowrite, nwritten);
+    fprintf(stderr, "devpnc: pncxmit1 wrote %d of %d bytes to node %d %d; disconnecting\n", nwritten, ntowrite, nodeid);
     pncdisc(nodeid);
     return 0;
   }
@@ -653,13 +658,14 @@ unsigned short pncxmit1(short nodeid, t_dma *iob) {
    255, the broadcast nodeid */
 
 unsigned short pncxmit(t_dma *iob) {
-  short  i;
+  short  nodeid;
   unsigned short xstat;
 
   xstat = 0;
   if ((*iob).toid == 255) {
-    for (i=1; i<=MAXNODEID; i++)
-      xstat |= pncxmit1(i, iob);
+    for (nodeid=1; nodeid<=MAXNODEID; nodeid++)
+      if (nodeid != myid && ni[nodeid].cstate != PNCCSNONE)
+	xstat |= pncxmit1(nodeid, iob);
   } else {
     xstat |= pncxmit1((*iob).toid, iob);
   }
@@ -772,8 +778,10 @@ int pncread (int nodeid, int nbytes) {
   int n;
 
   n = read(ni[nodeid].fd, ni[nodeid].rcvpkt+ni[nodeid].rcvlen, nbytes);
-  if (n == 0)
+  if (n == 0) {
+    TRACE(T_RIO, " read eof on node %d, disconnecting\n", nodeid);
     pncdisc(nodeid);
+  }
   if (n == -1) {
     if (errno != EWOULDBLOCK && errno != EINTR && errno != EAGAIN) {
       if (errno != EPIPE)
@@ -865,7 +873,7 @@ int devpnc (int class, int func, int device) {
 	  return -1;
 	}
 	buf[len-1] = 0;
-	if (strcmp(buf,"") == 0 || buf[0] == ';')
+	if (strcmp(buf,"") == 0 || buf[0] == ';' || buf[0] == '#')
 	  continue;
 
 	if ((p=strtok(buf, DELIM)) == NULL) {
