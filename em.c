@@ -83,10 +83,9 @@ OK:
 
 TRACING:
 
-The emulator by default is built with tracing code included.
-Instruction details are spewed to trace.log depending on the trace
-flags, set with -trace.  If -trace is not used, only TRACEA (trace
-all) traces are enabled.
+The trace makefile target includes tracing code.  Instruction details
+are spewed to trace.log depending on the trace flags, set with -trace.
+If -trace is not used, only TRACEA (trace all) traces are enabled.
 
 To activate more tracing, use -trace followed by flags to indicate
 which parts you want to trace, for example -trace map will activate
@@ -103,14 +102,7 @@ gvp->savedtraceflags at the beginning of the instruction emulation.
 To trace from an instruction forward, do the previous and add
 gvp->tracetriggered = 1; this simulates the Ctrl-t.
 
--DNOTRACE disables tracing altogether and increases performance.
-
-   ---------------
-
-   IMPORTANT NOTE: this only runs on a big-endian machine, like the Prime.
-
-   NOTE: basic and dbasic execute R-mode instructions from the Prime
-   register file with the basic statement TRACE ON!
+-DNOTRACE disables tracing altogether for increased performance.
 
 */
 
@@ -906,7 +898,10 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
 
 #if 0
   /* fault bit set on EA means an address trap, which should be
-     handled at a higher level and never make it this far
+     handled at a higher level and never make it this far.
+
+     basic and dbasic execute R-mode instructions from the Prime
+     register file with the basic statement TRACE ON.
 
      NOTE: this is commented out because if a stack frame is trashed
      and stackroot gets its fault bit set, PRTN will cause this error,
