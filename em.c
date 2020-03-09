@@ -1,3 +1,5 @@
+#define inline inline __attribute__((always_inline))
+
 /* Pr1me Computer emulator, Jim Wilcoxson (prirun@gmail.com), April 4, 2005
    Copyright (C) 2005-2019, Jim Wilcoxson.  All Rights Reserved.
 
