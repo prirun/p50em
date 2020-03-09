@@ -246,9 +246,8 @@
   //#define PNCXSRETRYFAIL 0x0008  /* retry not successful */
   //#define PNCXSRETRIES   0x0007  /* retry count (3 bits) */
 
-#define MINACCEPTTIME 1      /* wait 1 second before accepting new connections */
-#define MAXACCEPTTIME 15     /* only wait 15 seconds to receive uid */
-#define MINCONNTIME 30       /* wait 30 seconds between connects to a node */
+#define MINACCEPTTIME 0      /* wait N seconds before accepting new connections */
+#define MAXACCEPTTIME 15     /* max wait 15 seconds to receive uid */
 #define MAXPNCWORDS 1024     /* max packet size in 16-bit words */
 #define MAXPNCBYTES MAXPNCWORDS*2     /* same in bytes */
 #define MAXPKTBYTES (MAXPNCBYTES+4)   /* adds 16-bit length word to each end */
@@ -366,10 +365,10 @@ char * pncdumppkt(unsigned char * pkt, int len) {
 
 /* disconnect from a node */
 
-unsigned short pncdisc(nodeid) {
-  if (ni[nodeid].cstate > PNCCSDISC) {
+unsigned short pncdisc(int nodeid, char *why) {
+  if (nodeid != myid && ni[nodeid].cstate > PNCCSDISC) {
     if (ni[nodeid].cstate > PNCCSCONN)
-      fprintf(stderr, "devpnc: disconnect from authenticated node %d\n", nodeid);
+      fprintf(stderr, "devpnc: disconnect from authenticated node %d: %s\n", nodeid, why);
     TRACE(T_RIO, " pncdisc: disconnect from node %d\n", nodeid);
     close(ni[nodeid].fd);
     ni[nodeid].cstate = PNCCSDISC;
@@ -415,7 +414,7 @@ void pncinitfd(int fd) {
 }
 
 /* process a new incoming connection.  This may require multiple calls
-   to pncaccept, hence the static variables for the accept state */
+   to pncaccept, hence the static variables for the accept state. */
 
 void pncaccept(time_t timenow) {
   static time_t accepttime = 0;
@@ -425,6 +424,10 @@ void pncaccept(time_t timenow) {
   char uid[MAXUIDLEN+1];
   int i,n;
 
+#if 0
+  if (!(pncstat & PNCNSCONNECTED))
+    return;
+#endif
   if (fd == -1) {
     if (timenow-accepttime < MINACCEPTTIME)
       return;
@@ -436,7 +439,7 @@ void pncaccept(time_t timenow) {
       return;
     }
     if (!(pncstat & PNCNSCONNECTED)) {
-      TRACE(T_RIO, " not connected, closed new PNC connection, fd %d\n", fd);
+      fprintf(stderr, " not connected to ring, closed new PNC connection, fd %d\n", fd);
       goto disc;
     }
     TRACE(T_RIO, " new PNC connection, fd %d\n", fd);
@@ -478,7 +481,7 @@ void pncaccept(time_t timenow) {
     if (memcmp(uid, ni[i].uid, MAXUIDLEN) == 0)
       break;
   if (i > MAXNODEID) {
-    fprintf(stderr, "devpnc: couldn't find uid %s\n", uid);
+    fprintf(stderr, "devpnc: uid \"%s\" not in ring.cfg\n", uid);
     goto disc;
   }
   if (ni[i].cstate == PNCCSNONE) {
@@ -488,13 +491,22 @@ void pncaccept(time_t timenow) {
 
   /* you're now authenticated.  If I'm connecting to you, drop my
      connection.  If I'm authenticated to you (crossed connections),
-     use memcmp to keep one connection and drop the other */
+     use memcmp to keep one connection and drop the other.
+
+     NOTE: memcmp on uid is used instead of comparing nodeids because
+     a system's node id can be different in two different rings.  My
+     nodeid might be < yours in my ring and yours < mine in your ring,
+     so we'd both disconnect.  uid is always unique.
+ */
 
   if (ni[i].cstate > PNCCSDISC) {
-    TRACE(T_RIO, " devpnc: already connected to node %d with uid %s\n", i, uid);
-    if (ni[i].cstate == PNCCSCONN || memcmp(uid, ni[myid].uid, MAXUIDLEN) > 0)
-      pncdisc(i);  /* and fall through to use new connection */
+    TRACE(T_RIO, " devpnc: already connected to node %d%s\n", i);
+    if (ni[i].cstate == PNCCSCONN)
+      pncdisc(i, "was connecting");  /* and fall through to use new connection */
+    else if (memcmp(uid, ni[myid].uid, MAXUIDLEN) > 0)
+      pncdisc(i, "cross connect");   /* and fall through to use new connection */
     else
+      fprintf(stderr, " devpnc: already connected to node %d, closing new connection\n", i);
       goto disc;
   }
   TRACE(T_RIO, " devpnc: node %d authorized, fd %d\n", i, fd);
@@ -567,7 +579,7 @@ void pncauth1(int nodeid, time_t timenow) {
       fprintf(stderr, "devpnc: error sending PNC uid to node %d: %s\n", nodeid, strerror(errno));
   } else
     fprintf(stderr, "devpnc: wrote %d of %d uid bytes to node %d\n", n, MAXUIDLEN, nodeid);
-  pncdisc(nodeid);
+  pncdisc(nodeid, "uid write error");
 }
 
 /* finish one connection in progress */
@@ -613,14 +625,42 @@ void pncinitdma(t_dma *iob, char *iotype) {
    connected, initiate a connect.  If connecting, try to authenticate.
    If authenticated, transmit */
 
-unsigned short pncxmit1(short nodeid, t_dma *iob) {
+unsigned short pncxmit1(short nodeid) {
   int nwritten, ntowrite;
   time_t timenow;
 
+  TRACE(T_RIO, " xmit packet to node %d\n", nodeid);
   if (ni[nodeid].cstate == PNCCSNONE) {
     fprintf(stderr, " can't transmit: node %d not configured in ring.cfg\n", nodeid);
     return 0;
   }
+
+  /* the Primenet startup code sends a single ring packet from me
+     to me, to verify that my node id is unique.  This packet must
+     be received with the ACK bit clear, meaning no (other) node
+     ack'd the packet.  All other cases of loopback are handled at
+     higher levels within Primos.
+
+     So, if this xmit is to me and there is a receive pending and
+     room in the receive buffer, put the packet directly in my
+     receive buffer.  If we can't receive it now, set WACK xmit
+     status. */
+
+  if (nodeid == myid) {
+    if (rcv.state == PNCBSRDY && rcv.dmanw >= xmit.dmanw) {
+      TRACE(T_INST|T_RIO, " xmit: loopback, rcv.memp=%o/%o\n", ((int)(rcv.memp))>>16, ((int)(rcv.memp))&0xFFFF);
+      memcpy(rcv.memp, xmit.memp, xmit.dmanw*2);
+      putar16(REGDMX16 + rcv.dmareg, getar16(REGDMX16 + rcv.dmareg) + (xmit.dmanw<<4));  /* bump recv count */
+      putar16(REGDMX16 + rcv.dmareg+1, getar16(REGDMX16 + rcv.dmareg+1) + xmit.dmanw); /* and address */
+      pncstat |= PNCNSRCVINT;             /* set recv interrupt */
+      rcv.state = PNCBSIDLE;              /* no longer ready to recv */
+      return PNCXSACK;
+    }
+    return PNCXSWACK;              /* no receive, wack it */
+  }
+
+  /* not transmitting to myself, make sure connection is ready */
+
   if (ni[nodeid].cstate == PNCCSDISC) {
     time(&timenow);
     pncconn1(nodeid, timenow);
@@ -633,22 +673,20 @@ unsigned short pncxmit1(short nodeid, t_dma *iob) {
       return 0;
   }
 
-  TRACE(T_RIO, " xmit packet to node %d\n", nodeid);
-  ntowrite = (*iob).dmanw*2 + 4;
-  pncdumppkt((*iob).iobuf, ntowrite);
-  if ((nwritten=write(ni[nodeid].fd, (*iob).iobuf, ntowrite)) < 0) {
+  ntowrite = xmit.dmanw*2 + 4;
+  pncdumppkt(xmit.iobuf, ntowrite);
+  if ((nwritten=write(ni[nodeid].fd, xmit.iobuf, ntowrite)) < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       TRACE(T_RIO, " wack packet to node %d\n", nodeid);
       return PNCXSWACK;
-    } else {
-      TRACE(T_RIO, " error writing packet to node %d: %s\n", nodeid, strerror(errno));
-      pncdisc(nodeid);
-      perror("devpnc: write error");
-      return 0;
     }
-  } else if (nwritten != ntowrite) {
+    fprintf(stderr, " error writing packet to node %d: %s\n", nodeid, strerror(errno));
+    pncdisc(nodeid, "packet write error");
+    return 0;
+  }
+  if (nwritten != ntowrite) {
     fprintf(stderr, "devpnc: pncxmit1 wrote %d of %d bytes to node %d %d; disconnecting\n", nwritten, ntowrite, nodeid);
-    pncdisc(nodeid);
+    pncdisc(nodeid, "partial packet written");
     return 0;
   }
   return PNCXSACK;
@@ -657,19 +695,44 @@ unsigned short pncxmit1(short nodeid, t_dma *iob) {
 /* transmit a packet to its destination, either a single nodeid or
    255, the broadcast nodeid */
 
-unsigned short pncxmit(t_dma *iob) {
+unsigned short pncxmit() {
   short  nodeid;
-  unsigned short xstat;
+  short len;
+  unsigned short dmaword;
 
-  xstat = 0;
-  if ((*iob).toid == 255) {
+  xmitstat = PNCXSBUSY;
+
+  /* read the first word, the to and from node id's */
+
+  pncinitdma(&xmit, "xmit");
+  dmaword = swap16(*xmit.memp);
+  xmit.toid = dmaword >> 8;
+  xmit.fromid = dmaword & 0xFF;
+  TRACE(T_INST|T_RIO, " xmit: toid=%d, fromid=%d, myid=%d\n", xmit.toid, xmit.fromid, myid);
+
+  /* bump the DMA registers to show the transfer */
+
+  putar16(REGDMX16+xmit.dmareg, getar16(REGDMX16+xmit.dmareg) + (xmit.dmanw<<4));   /* bump xmit count */
+  putar16(REGDMX16+xmit.dmareg+1, getar16(REGDMX16+xmit.dmareg+1) + xmit.dmanw);  /* and address */
+
+  /* add leading and trailing byte counts to the packet */
+
+  len = xmit.dmanw*2 + 4;
+  *(short *)(xmit.iobuf+0) = swap16(len);
+  memcpy(xmit.iobuf+2, xmit.memp, xmit.dmanw*2);
+  *(short *)(xmit.iobuf+2+xmit.dmanw*2) = swap16(len);
+
+  /* send packet, set transmit interrupt, return */
+
+  if (xmit.toid == 255) {
     for (nodeid=1; nodeid<=MAXNODEID; nodeid++)
-      if (nodeid != myid && ni[nodeid].cstate != PNCCSNONE)
-	xstat |= pncxmit1(nodeid, iob);
+      if (ni[nodeid].cstate != PNCCSNONE)
+	xmitstat |= pncxmit1(nodeid);
   } else {
-    xstat |= pncxmit1((*iob).toid, iob);
+    xmitstat |= pncxmit1(xmit.toid);
   }
-  return xstat;
+  pncstat |= PNCNSXMITINT;       /* set xmit interrupt */
+  pncstat |= PNCNSTOKEN;         /* and token seen */
 }
 
 /* do socket reads on all active connections with data available until
@@ -742,7 +805,7 @@ int pncrecv1(int nodeid) {
   if (nw > rcv.dmanw) {
     fprintf(stderr, "devpnc: packet size %d > max %d words from node %d\n", nw, rcv.dmanw, nodeid);
     fprintf(stderr, "devpnc: disabling node %d until reboot\n", nodeid);
-    pncdisc(nodeid);
+    pncdisc(nodeid, "received packet too big");
     ni[nodeid].cstate = PNCCSNONE;
     return 0;
   }
@@ -750,7 +813,7 @@ int pncrecv1(int nodeid) {
     return 0;
   if (pktlen != swap16(*(short *)(ni[nodeid].rcvpkt+pktlen-2))) {
     fprintf(stderr, "devpnc: node %d, pktlen mismatch: %d != %d\n", nodeid, pktlen, swap16(*(short *)(ni[nodeid].rcvpkt+pktlen-2)));
-    pncdisc(nodeid);
+    pncdisc(nodeid, "packet length mismatch");
     return 0;
   }
 
@@ -780,13 +843,13 @@ int pncread (int nodeid, int nbytes) {
   n = read(ni[nodeid].fd, ni[nodeid].rcvpkt+ni[nodeid].rcvlen, nbytes);
   if (n == 0) {
     TRACE(T_RIO, " read eof on node %d, disconnecting\n", nodeid);
-    pncdisc(nodeid);
+    pncdisc(nodeid, "eof reading packet");
   }
   if (n == -1) {
     if (errno != EWOULDBLOCK && errno != EINTR && errno != EAGAIN) {
       if (errno != EPIPE)
-	perror("error reading PNC connection");
-      pncdisc(nodeid);
+	fprintf(stderr, "error reading %d bytes from node %d: %s\n", nbytes, nodeid, strerror(errno));
+      pncdisc(nodeid, "error reading packet");
     }
     n = 0;
   }
@@ -798,7 +861,6 @@ int devpnc (int class, int func, int device) {
 
   short i;
   short len;
-  unsigned short dmaword;
   time_t timenow;
   struct sockaddr_in addr;
   int optval;
@@ -845,6 +907,7 @@ int devpnc (int class, int func, int device) {
     for (i=0; i<=MAXNODEID; i++) {
       ni[i].cstate = PNCCSNONE;
       ni[i].fd = -1;
+      ni[i].rcvlen = 0;
       ni[i].host[0] = 0;
       ni[i].uid[0] = 0;
       ni[i].port = 0;
@@ -859,7 +922,7 @@ int devpnc (int class, int func, int device) {
           host = the remote emulator's TCP/IP address or name
 	  port = the remote emulator's TCP/IP PNC port
 	  NOTE: host:port may be - for incoming-only nodes
-	  uid = up to 16 byte password, no spaces
+	  uid = 16 byte password, no spaces
 	  NOTE: use od -h /dev/urandom|head to create a uid
     */
 
@@ -1017,7 +1080,7 @@ int devpnc (int class, int func, int device) {
     if (func == 00) {    /* OCP '0007 - disconnect */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - disconnect\n", func, device);
       for (i=0; i<=MAXNODEID; i++)
-	pncdisc(i);
+	pncdisc(i, "ring disconnect");
       rcv.state = PNCBSIDLE;
       rcvstat = PNCRSBUSY;
       xmitstat = PNCXSBUSY;
@@ -1178,58 +1241,7 @@ int devpnc (int class, int func, int device) {
 	break;                  /* yes, return and don't skip */
       }
       IOSKIP;
-      xmitstat = PNCXSBUSY;
-
-      /* read the first word, the to and from node id's */
-
-      pncinitdma(&xmit, "xmit");
-      dmaword = swap16(*xmit.memp);
-      xmit.toid = dmaword >> 8;
-      xmit.fromid = dmaword & 0xFF;
-      TRACE(T_INST|T_RIO, " xmit: toid=%d, fromid=%d, myid=%d\n", xmit.toid, xmit.fromid, myid);
-
-      /* bump the DMA registers to show the transfer */
-
-      putar16(REGDMX16+xmit.dmareg, getar16(REGDMX16+xmit.dmareg) + (xmit.dmanw<<4));   /* bump xmit count */
-      putar16(REGDMX16+xmit.dmareg+1, getar16(REGDMX16+xmit.dmareg+1) + xmit.dmanw);  /* and address */
-
-      /* the Primenet startup code sends a single ring packet from me
-	 to me, to verify that my node id is unique.  This packet must
-	 be received with the ACK bit clear, meaning no (other) node
-	 ack'd the packet.  All other cases of loopback are handled at
-	 higher levels within Primos.
-
-	 So, if this xmit is to me and there is a receive pending and
-	 room in the receive buffer, put the packet directly in my
-	 receive buffer.  If we can't receive it now, set WACK xmit
-	 status. */
-
-      if (xmit.toid == myid) {
-	if (rcv.state == PNCBSRDY && rcv.dmanw >= xmit.dmanw) {
-	  TRACE(T_INST|T_RIO, " xmit: loopback, rcv.memp=%o/%o\n", ((int)(rcv.memp))>>16, ((int)(rcv.memp))&0xFFFF);
-	  memcpy(rcv.memp, xmit.memp, xmit.dmanw*2);
-	  putar16(REGDMX16 + rcv.dmareg, getar16(REGDMX16 + rcv.dmareg) + (xmit.dmanw<<4));  /* bump recv count */
-	  putar16(REGDMX16 + rcv.dmareg+1, getar16(REGDMX16 + rcv.dmareg+1) + xmit.dmanw); /* and address */
-	  pncstat |= PNCNSRCVINT;             /* set recv interrupt */
-	  rcv.state = PNCBSIDLE;              /* no longer ready to recv */
-	} else {
-	  xmitstat |= PNCXSWACK;              /* no receive, wack it */
-	}
-      } else {                                /* regular transmit */
-
-	/* add leading and trailing byte counts to the packet */
-
-	len = xmit.dmanw*2 + 4;
-	*(short *)(xmit.iobuf+0) = swap16(len);
-	memcpy(xmit.iobuf+2, xmit.memp, xmit.dmanw*2);
-	*(short *)(xmit.iobuf+2+xmit.dmanw*2) = swap16(len);
-
-	/* send packet, set transmit interrupt, return */
-
-	xmitstat |= pncxmit(&xmit);
-      }
-      pncstat |= PNCNSXMITINT;       /* set xmit interrupt */
-      pncstat |= PNCNSTOKEN;         /* and token seen */
+      pncxmit();
       goto rcvexit;                  /* rcv & interrupt following xmit */
 
     } else if (func == 016) {   /* set interrupt vector */
@@ -1248,6 +1260,7 @@ int devpnc (int class, int func, int device) {
 	myid = 0;
       }
       pncstat = (pncstat & 0xFF00) | myid;
+      ni[myid].cstate = PNCCSAUTH;
       TRACE(T_INST|T_RIO, " my node id is %d\n", myid);
       IOSKIP;
 
