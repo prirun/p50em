@@ -7,7 +7,13 @@ REV=${shell hg id -n}
 em:     # Intel
 
 	rm -rf em.o
-	cc -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O em.c -o em
+	cc -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -Winline em.c -o em
+
+
+emwarn: # Intel
+
+	rm -rf em.o
+	cc -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -Wall -Wextra -pedantic -Wconversion em.c -o em
 
 
 debug:   # gdb (Intel)
