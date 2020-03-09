@@ -97,10 +97,10 @@ seg fault.
 
 The "off" trace flag can be added to initially disable tracing.
 Ctrl-t at the console will toggle tracing on or off.  To trace only a
-particular instruction, use "off", then do gvp->traceflags =
-gvp->savedtraceflags at the beginning of the instruction emulation.
+particular instruction, use "off", then do gv.traceflags =
+gv.savedtraceflags at the beginning of the instruction emulation.
 To trace from an instruction forward, do the previous and add
-gvp->tracetriggered = 1; this simulates the Ctrl-t.
+gv.tracetriggered = 1; this simulates the Ctrl-t.
 
 -DNOTRACE disables tracing altogether for increased performance.
 
@@ -316,8 +316,8 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
   #define TRACE(flags, formatargs...)
   #define TRACEA(formatargs...)
 #else
-  #define TRACE(flags, formatargs...) if (gvp->traceflags & (flags)) fprintf(gvp->tracefile,formatargs)
-  #define TRACEA(formatargs...) fprintf(gvp->tracefile,formatargs)
+  #define TRACE(flags, formatargs...) if (gv.traceflags & (flags)) fprintf(gv.tracefile,formatargs)
+  #define TRACEA(formatargs...) fprintf(gv.tracefile,formatargs)
 #endif
 
 /* traceprocs is an array of (operating system) procedure names we're
@@ -333,7 +333,7 @@ static struct {
   int   oneshot;                     /* disable trace after call? */
 } traceprocs[MAXTRACEPROCS];
 
-#define TRACEUSER (gvp->traceuser == 0 || getcrs16(OWNERL) == gvp->traceuser)
+#define TRACEUSER (gv.traceuser == 0 || getcrs16(OWNERL) == gv.traceuser)
 
 /* NOTE: Primos II gives "NOT FOUND" on STARTUP 2460 command if sense
    switches are set to 014114.  But DIAGS like this setting. :( */
@@ -559,7 +559,6 @@ typedef struct {
 
 static gv_t gv;
 
-gv_t *gvp;
 brp_t *eap;
 
 static  jmp_buf jmpbuf;               /* for longjumps to the fetch loop */
@@ -679,28 +678,28 @@ void inline invalidate_brp() {
   int i;
 
   for (i=0; i < BRP_SIZE; i++)
-    gvp->brp[i].vpn = 0x000000FF;
+    gv.brp[i].vpn = 0x000000FF;
 }
 
 #ifndef NOTRACE
 char *brp_name() {
-  if (eap == &gvp->brp[PBBR])
+  if (eap == &gv.brp[PBBR])
     return "PBBR";
-  if (eap == &gvp->brp[SBBR])
+  if (eap == &gv.brp[SBBR])
     return "SBBR";
-  if (eap == &gvp->brp[LBBR])
+  if (eap == &gv.brp[LBBR])
     return "LBBR";
-  if (eap == &gvp->brp[XBBR])
+  if (eap == &gv.brp[XBBR])
     return "XBBR";
-  if (eap == &gvp->brp[RPBR])
+  if (eap == &gv.brp[RPBR])
     return "RPBR";
-  if (eap == &gvp->brp[S0BR])
+  if (eap == &gv.brp[S0BR])
     return "S0BR";
-  if (eap == &gvp->brp[F0BR])
+  if (eap == &gv.brp[F0BR])
     return "F0BR";
-  if (eap == &gvp->brp[F1BR])
+  if (eap == &gv.brp[F1BR])
     return "F1BR";
-  if (eap == &gvp->brp[UNBR])
+  if (eap == &gv.brp[UNBR])
     return "UNBR";
   return "??BR";
 }
@@ -917,11 +916,11 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
 
   if (getcrs16(MODALS) & 4) {
 #ifndef NOTRACE
-    gvp->mapvacalls++;
+    gv.mapvacalls++;
 #endif
     seg = SEGNO32(ea);
     stlbix = STLBIX(ea);
-    stlbp = gvp->stlb+stlbix;
+    stlbp = gv.stlb+stlbix;
 #ifdef DBG
     if (stlbix >= STLBENTS) {
       printf("STLB index %d is out of range for va %o/%o!\n", stlbix, ea>>16, ea&0xffff);
@@ -935,7 +934,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
 
     if (stlbp->seg != seg || ((seg & 04000) && stlbp->procid != getcrs16(OWNERL))) {
 #ifndef NOTRACE
-      gvp->mapvamisses++;
+      gv.mapvamisses++;
 #endif
       dtar = getcrs32(DTAR0-2*DTAR32(ea));  /* get dtar register */
       nsegs = 1024-(dtar>>22);
@@ -949,7 +948,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       if (sdw & 0x8000)
 	fault(SEGFAULT, 2, ea);   /* fcode = sdw fault bit set */
       ptaddr = (((sdw & 0x3F)<<10) | (sdw>>22)) << 6;
-      if (gvp->pmap32bits) {
+      if (gv.pmap32bits) {
 	pmaddr = ptaddr + 2*PAGENO(ea);
 	pte = get16mem(pmaddr);
 
@@ -961,7 +960,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
 	   ignored.  So on older machines, we need to ignore them
 	   too, so older software still works. */
 
-	ppa = (get32mem(pmaddr) & gvp->pmap32mask) << 10;
+	ppa = (get32mem(pmaddr) & gv.pmap32mask) << 10;
       } else {
 	pmaddr = ptaddr + PAGENO(ea);
 	pte = get16mem(pmaddr);
@@ -981,7 +980,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       stlbp->pmaddr = pmaddr;
 #ifndef NOTRACE
       TRACE(T_TLB, "stlb[%d] loaded at %o/%o for %o/%o, ppn=%d\n", stlbix, RPH, RPL, seg, ea&0xFFFF, ppa>>10);
-      stlbp->load_ic = gvp->instcount;
+      stlbp->load_ic = gv.instcount;
 #endif
 
       /* if this is an I/O segment reference, load the I/O TLB too.
@@ -992,8 +991,8 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
 
       if (seg < 4) {
 	iotlbix = (ea & 0x3FFFF) >> 10;
-	gvp->iotlb[iotlbix].valid = 1;
-	gvp->iotlb[iotlbix].ppa = ppa;
+	gv.iotlb[iotlbix].valid = 1;
+	gv.iotlb[iotlbix].ppa = ppa;
 	TRACE(T_TLB, "iotlb[%d] loaded at %o/%o for %o/%o, ppn=%d\n", stlbix, RPH, RPL, seg, ea&0xFFFF, ppa>>10);
       }
     }
@@ -1017,11 +1016,11 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
   }
   stopwatch_pop(&sw_mapva);
 #ifndef NOMEM
-  if (pa < gvp->memlimit)
+  if (pa < gv.memlimit)
 #endif
     return pa;
 #ifdef DBG
-  printf(" map: Memory address '%o (%o/%o) is out of range 0-'%o (%o/%o) at #%d!\n", pa, pa>>16, pa & 0xffff, gvp->memlimit-1, (gvp->memlimit-1)>>16, (gvp->memlimit-1) & 0xffff, gvp->instcount);
+  printf(" map: Memory address '%o (%o/%o) is out of range 0-'%o (%o/%o) at #%d!\n", pa, pa>>16, pa & 0xffff, gv.memlimit-1, (gv.memlimit-1)>>16, (gv.memlimit-1) & 0xffff, gv.instcount);
 #endif
 
   /* take a missing memory check
@@ -1043,8 +1042,8 @@ static unsigned int mapio(ea_t ea) {
   ea &= 0x3FFFF;
   if (getcrs16(MODALS) & 020) {           /* mapped I/O mode? */
     iotlbix = (ea >> 10) & 0xFF;     /* TLB range is 0-255 */
-    if (gvp->iotlb[iotlbix].valid)
-      return gvp->iotlb[iotlbix].ppa | (ea & 0x3FF);
+    if (gv.iotlb[iotlbix].valid)
+      return gv.iotlb[iotlbix].ppa | (ea & 0x3FF);
     else {
       printf("Mapped I/O request to %o/%o, but IOTLB is invalid!\n", ea>>16, ea&0xFFFF);
       fatal(NULL);
@@ -1115,14 +1114,14 @@ static inline unsigned short get16(ea_t ea) {
 
 #ifdef FAST
 #ifndef NOTRACE
-  gvp->supercalls++;
+  gv.supercalls++;
 #endif
   if ((ea & 0x0FFFFC00) == (eap->vpn & 0x0FFFFFFF)) {
     TRACE(T_MAP, "    get16: cached %o/%o [%s]\n", ea>>16, ea&0xFFFF, brp_name());
     return swap16(eap->memp[ea & 0x3FF]);
   } else {
 #ifndef NOTRACE
-    gvp->supermisses++;
+    gv.supermisses++;
 #endif
     eap->memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
     eap->vpn = ea & 0x0FFFFC00;
@@ -1192,7 +1191,7 @@ static unsigned int get32m(ea_t ea) {
 #endif
 
 #ifndef NOTRACE
-  gvp->supermisses++;
+  gv.supermisses++;
 #endif
   if ((ea & 01777) <= 01776) {
     eap->memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
@@ -1215,7 +1214,7 @@ static inline unsigned int get32(ea_t ea) {
 
 #ifdef FAST
 #ifndef NOTRACE
-  gvp->supercalls++;
+  gv.supercalls++;
 #endif
   if ((ea & 01777) <= 01776)
     if ((ea & 0x0FFFFC00) == (eap->vpn & 0x0FFFFFFF)) {
@@ -1315,17 +1314,17 @@ unsigned short iget16t(ea_t ea) {
   unsigned short access;
 
   if (*(int *)&ea >= 0) {
-    gvp->brp[RPBR].memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
-    gvp->brp[RPBR].vpn = ea & 0x0FFFFC00;
-    return swap16(gvp->brp[RPBR].memp[ea & 0x3FF]);
+    gv.brp[RPBR].memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
+    gv.brp[RPBR].vpn = ea & 0x0FFFFC00;
+    return swap16(gv.brp[RPBR].memp[ea & 0x3FF]);
   }
   return get16trap(ea);
 }
 
 static inline unsigned short iget16(ea_t ea) {
 
-  if ((ea & 0x8FFFFC00) == (gvp->brp[RPBR].vpn & 0x0FFFFFFF))
-    return swap16(gvp->brp[RPBR].memp[ea & 0x3FF]);
+  if ((ea & 0x8FFFFC00) == (gv.brp[RPBR].vpn & 0x0FFFFFFF))
+    return swap16(gv.brp[RPBR].memp[ea & 0x3FF]);
   else
     return iget16t(ea);
 }
@@ -1348,7 +1347,7 @@ static inline void put16(unsigned short value, ea_t ea) {
 #ifdef FAST
 
 #ifndef NOTRACE
-  gvp->supercalls++;
+  gv.supercalls++;
 #endif
 
   /* access bits are stored in bits 2-4 of the cache vpn.
@@ -1359,7 +1358,7 @@ static inline void put16(unsigned short value, ea_t ea) {
     eap->memp[ea & 0x3FF] = swap16(value);
   } else {
 #ifndef NOTRACE
-    gvp->supermisses++;
+    gv.supermisses++;
 #endif
     eap->memp = MEM + (mapva(ea, RP, WACC, &access) & 0xFFFFFC00);
     eap->vpn = (ea & 0x0FFFFC00) | (access << 28);
@@ -1434,7 +1433,7 @@ static void put32(unsigned int value, ea_t ea) {
 #endif
 
 #ifndef NOTRACE
-  gvp->supercalls++;
+  gv.supercalls++;
 #endif
   if ((ea & 01777) <= 01776) {
     if ((ea & 0x0FFFFC00) == (eap->vpn & 0x0FFFFFFF) && (eap->vpn & 0x10000000)) {
@@ -1442,7 +1441,7 @@ static void put32(unsigned int value, ea_t ea) {
       *(unsigned int *)&eap->memp[ea & 0x3FF] = swap32(value);
     } else {
 #ifndef NOTRACE
-      gvp->supermisses++;
+      gv.supermisses++;
 #endif
       eap->memp = MEM + (mapva(ea, RP, WACC, &access) & 0xFFFFFC00);
       eap->vpn = (ea & 0x0FFFFC00) | (access << 28);
@@ -1756,7 +1755,7 @@ static int (*devmap[64])(int, int, int) = {
 
 
 static void warn(char *msg) {
-  printf("emulator warning:\n  instruction #%u at %o/%o: %o %o keys=%o, modals=%o\n  %s\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, get16t(gvp->prevpc), get16t(gvp->prevpc+1),getcrs16(KEYS), getcrs16(MODALS), msg);
+  printf("emulator warning:\n  instruction #%u at %o/%o: %o %o keys=%o, modals=%o\n  %s\n", gv.instcount, gv.prevpc >> 16, gv.prevpc & 0xFFFF, get16t(gv.prevpc), get16t(gv.prevpc+1),getcrs16(KEYS), getcrs16(MODALS), msg);
 }
     
 
@@ -1888,7 +1887,7 @@ static void fatal(char *msg) {
   printf("Fatal error");
   if (msg)
     printf(": %s", msg);
-  printf("\ninstruction #%u at %o/%o %s ^%06o^\nA='%o/%d  B='%o/%d  L='%o/%d  X='%o/%d K=%o [%s]\nowner=%o %s, modals=%o [%s]\n", gvp->instcount, gvp->prevpc >> 16, gvp->prevpc & 0xFFFF, searchloadmap(gvp->prevpc,' '), lights, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X), getcrs16(KEYS), keystring(getcrs16(KEYS)), getcrs16(OWNERL), searchloadmap(getcrs32(OWNER),' '), getcrs16(MODALS), modstring(getcrs16(MODALS)));
+  printf("\ninstruction #%u at %o/%o %s ^%06o^\nA='%o/%d  B='%o/%d  L='%o/%d  X='%o/%d K=%o [%s]\nowner=%o %s, modals=%o [%s]\n", gv.instcount, gv.prevpc >> 16, gv.prevpc & 0xFFFF, searchloadmap(gv.prevpc,' '), lights, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X), getcrs16(KEYS), keystring(getcrs16(KEYS)), getcrs16(OWNERL), searchloadmap(getcrs32(OWNER),' '), getcrs16(MODALS), modstring(getcrs16(MODALS)));
   
   /* dump concealed stack entries */
 
@@ -1899,7 +1898,7 @@ static void fatal(char *msg) {
     last = get16r0(pcbp+PCBCSLAST);
     while (next != first) {
       this = next-6;
-      csea = MAKEVA(getcrs16(OWNERH)+gvp->csoffset, this);
+      csea = MAKEVA(getcrs16(OWNERH)+gv.csoffset, this);
       for (i=0; i<6; i++)
 	cs[i] = get16r0(csea+i);
       printf("Fault: RP=%o/%o, keys=%06o, fcode=%o, faddr=%o/%o\n", cs[0], cs[1], cs[2], cs[3], cs[4], cs[5]);
@@ -1909,16 +1908,16 @@ static void fatal(char *msg) {
 
 #ifndef NOTRACE
   printf("RP queue:");
-  i = gvp->tracerpqx;
+  i = gv.tracerpqx;
   while(1) {
-    printf(" %o/%o", gvp->tracerpq[i]>>16, gvp->tracerpq[i]&0xFFFF);
+    printf(" %o/%o", gv.tracerpq[i]>>16, gv.tracerpq[i]&0xFFFF);
     i = (i+1) & (MAXRPQ-1);
-    if (i == gvp->tracerpqx)
+    if (i == gv.tracerpqx)
       break;
   }
   printf("\n");
-  printf("STLB calls: %d  misses: %d  hitrate: %5.2f%%\n", gvp->mapvacalls, gvp->mapvamisses, (double)(gvp->mapvacalls-gvp->mapvamisses)/gvp->mapvacalls*100.0);
-  printf("Supercache calls: %d  misses: %d  hitrate: %5.2f%%\n", gvp->supercalls, gvp->supermisses, (double)(gvp->supercalls-gvp->supermisses)/gvp->supercalls*100.0);
+  printf("STLB calls: %d  misses: %d  hitrate: %5.2f%%\n", gv.mapvacalls, gv.mapvamisses, (double)(gv.mapvacalls-gv.mapvamisses)/gv.mapvacalls*100.0);
+  printf("Supercache calls: %d  misses: %d  hitrate: %5.2f%%\n", gv.supercalls, gv.supermisses, (double)(gv.supercalls-gv.supermisses)/gv.supercalls*100.0);
 #endif
 
   /* should do a register dump, RL dump, PCB dump, etc. here... */
@@ -1929,7 +1928,7 @@ static void fatal(char *msg) {
     devmap[i](-2, 0, i);
 
 #ifndef NOTRACE
-  fclose(gvp->tracefile);
+  fclose(gv.tracefile);
 #endif
   if (lseek(2, 0, SEEK_END) > 0)
     printf("Check error.log for more information\n");
@@ -1946,27 +1945,27 @@ static void newkeys (unsigned short new) {
   switch ((new & 016000) >> 10) {
   case 0:                     /* 16S */
     TRACE(T_MODE, "Entering 16S mode, keys=%o\n", new);
-    gvp->amask = 037777;
+    gv.amask = 037777;
     break;
   case 1:                     /* 32S */
     TRACE(T_MODE, "Entering 32S mode, keys=%o\n", new);
-    gvp->amask = 077777;
+    gv.amask = 077777;
     break;
   case 2:                     /* 64R */
     TRACE(T_MODE, "Entering 64R mode, keys=%o\n", new);
-    gvp->amask = 0177777;
+    gv.amask = 0177777;
     break;
   case 3:                     /* 32R */
     TRACE(T_MODE, "Entering 32R mode, keys=%o\n", new);
-    gvp->amask = 077777;
+    gv.amask = 077777;
     break;
   case 4:                     /* 32I */
     TRACE(T_MODE, "Entering 32I mode, keys=%o\n", new);
-    gvp->amask = 0177777;
+    gv.amask = 0177777;
     break;
   case 6:                     /* 64V */
     TRACE(T_MODE, "Entering 64V mode, keys=%o\n", new);
-    gvp->amask = 0177777;
+    gv.amask = 0177777;
     break;
   default:                    /* invalid mode */
     warn("Invalid CPU mode");
@@ -1994,7 +1993,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
   if (fvec == PROCESSFAULT || fvec == SVCFAULT || fvec == ARITHFAULT)
     faultrp = RP;
   else
-    faultrp = gvp->prevpc;
+    faultrp = gv.prevpc;
 
   /* NOTE: RP may have the fault bit set if executing from registers.
      This is an emulator-ism to let us know we're executing registers
@@ -2015,7 +2014,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
     faultnamep = faultname[fvec-FIRSTFAULT];
   else
     faultnamep = faultname[LASTFAULT-FIRSTFAULT+1];
-  TRACE(T_FAULT, "#%u: fault '%o (%s), fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", gvp->instcount, fvec, faultnamep, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
+  TRACE(T_FAULT, "#%u: fault '%o (%s), fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", gv.instcount, fvec, faultnamep, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
 
   if (getcrs16(MODALS) & 010) {   /* process exchange is enabled */
     ring = (RPH>>13) & 3;                     /* save current ring */
@@ -2046,7 +2045,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
       next = first;
 #endif
     }
-    csea = MAKEVA(getcrs16(OWNERH)+gvp->csoffset, next);
+    csea = MAKEVA(getcrs16(OWNERH)+gv.csoffset, next);
     put32r0(faultrp, csea);
     put16r0(getcrs16(KEYS), csea+2);
     put16r0(fcode, csea+3);
@@ -2058,7 +2057,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
 
     RP = pxfvec + (fvec-062)*4;
     newkeys(014000);      /* V-mode */
-    gvp->inhcount = 1;         /* supposed to do this only for Ring 0, but shouldn't hurt */
+    gv.inhcount = 1;         /* supposed to do this only for Ring 0, but shouldn't hurt */
 
 #if 0
     /* this was useful, but also can cause page faults - careful! */
@@ -2087,7 +2086,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
       RP = m;                /* NOTE: changes RP(segno) to segment 0 */
       INCRP;
     } else {
-      printf("#%u: fault '%o, fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", gvp->instcount, fvec, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
+      printf("#%u: fault '%o, fcode=%o, faddr=%o/%o, faultrp=%o/%o\n", gv.instcount, fvec, fcode, faddr>>16, faddr&0xFFFF, faultrp>>16, faultrp&0xFFFF);
       fatal("Fault vector is zero, process exchange is disabled.");
     }
   }
@@ -2122,7 +2121,7 @@ static ea_t ea16s (unsigned short inst) {
   i = inst & 0100000;                            /* indirect */
   x = ((inst & 036000) != 032000) ? (inst & 040000) : 0;
   amask = 037777;
-  rpl = gvp->prevpc;                             /* S-mode uses backed PC! */
+  rpl = gv.prevpc;                             /* S-mode uses backed PC! */
   if (inst & 001000)
     ea = (rpl & 037000) | (inst & 0777);         /* current sector */
   else
@@ -2136,7 +2135,7 @@ static ea_t ea16s (unsigned short inst) {
     if (indlevel++ == INDLEVELS)
       fault(RESTRICTFAULT, 0, 0);
     ea &= amask;
-    if (ea < gvp->livereglim)                    /* flag live register ea */
+    if (ea < gv.livereglim)                    /* flag live register ea */
       ea |= 0x80000000;
     ea = get16t(ea);                             /* get indirect word */
     i = ea & 0100000;
@@ -2144,7 +2143,7 @@ static ea_t ea16s (unsigned short inst) {
   }
   ea &= amask;
   va = MAKEVA(RPH, ea);
-  if (ea < gvp->livereglim)                      /* flag live register ea */
+  if (ea < gv.livereglim)                      /* flag live register ea */
     va |= 0x80000000;
   return va;
 }
@@ -2162,7 +2161,7 @@ static ea_t ea32s (unsigned short inst) {
   x = ((inst & 036000) != 032000) ? (inst & 040000) : 0;
   TRACE(T_EAS, " ea32s: i=%o, x=%o, s=%o\n", i!= 0, x!=0, (inst & 01000)!=0);
   amask = 077777;
-  rpl = gvp->prevpc;
+  rpl = gv.prevpc;
   if (inst & 001000) {
     ea = (rpl & 077000) | (inst & 0777);         /* current sector */
     TRACE(T_EAS, " current sector, P=%o, ea=%o\n", rpl, ea);
@@ -2179,7 +2178,7 @@ static ea_t ea32s (unsigned short inst) {
     if (indlevel == INDLEVELS)
       fault(RESTRICTFAULT, 0, 0);
     ea &= amask;
-    if (ea < gvp->livereglim)                    /* flag live register ea */
+    if (ea < gv.livereglim)                    /* flag live register ea */
       ea |= 0x80000000;
     ea = get16t(ea);                             /* go indirect */
     TRACE(T_EAS, " indirect, ea=%o\n", ea);
@@ -2191,7 +2190,7 @@ static ea_t ea32s (unsigned short inst) {
   }
   ea &= amask;
   va = MAKEVA(RPH, ea);
-  if (ea < gvp->livereglim)                      /* flag live register ea */
+  if (ea < gv.livereglim)                      /* flag live register ea */
     va |= 0x80000000;
   return va;
 }
@@ -2218,12 +2217,12 @@ static inline ea_t ea32r64r (ea_t earp, unsigned short inst) {
     if ((inst & 0760) != 0400) {                 /* PC relative? */
       ea = rpl + (((short) (inst << 7)) >> 7);   /* yes, sign extend D */
       TRACE(T_EAR, " PC relative, P=%o, new ea=%o\n", rpl, ea);
-      eap = &gvp->brp[RPBR];
+      eap = &gv.brp[RPBR];
     }
     else 
       goto special;                              /* special cases */
   else {
-    eap = &gvp->brp[S0BR];
+    eap = &gv.brp[S0BR];
     ea = (inst & 0777);                          /* sector 0 */
     TRACE(T_EAR, " Sector 0, new ea=%o\n", ea);
     if (ea < 0100 && x) {                        /* preindex by X */
@@ -2237,7 +2236,7 @@ static inline ea_t ea32r64r (ea_t earp, unsigned short inst) {
   for (indlevel=0; i; indlevel++) {
     if (indlevel == INDLEVELS)
       fault(RESTRICTFAULT, 0, 0);
-    if (ea >= gvp->livereglim)
+    if (ea >= gv.livereglim)
       m = get16(MAKEVA(rph,ea));
     else
       m = get16trap(ea);
@@ -2248,17 +2247,17 @@ static inline ea_t ea32r64r (ea_t earp, unsigned short inst) {
       i = m & 0100000;                           /* 32R - multiple indirects */
     ea = m & amask;                              /* go indirect */
     TRACE(T_EAR, " Indirect, new i=%d, new ea=%o\n", i!=0, ea);
-    eap = &gvp->brp[UNBR];
+    eap = &gv.brp[UNBR];
   }
   if (x) {
-    eap = &gvp->brp[XBBR];
+    eap = &gv.brp[XBBR];
     TRACE(T_EAR, " Postindex, old ea=%o, X='%o/%d\n", ea, getcrs16(X), getcrs16s(X));
     ea += getcrs16(X);
     TRACE(T_EAR, " Postindex, new ea=%o\n", ea);
   }
   ea &= amask;
   va = MAKEVA(rph, ea);
-  if (ea < gvp->livereglim)                      /* flag live register ea */
+  if (ea < gv.livereglim)                      /* flag live register ea */
     va |= 0x80000000;
   return va;
 
@@ -2287,7 +2286,7 @@ special:
     for (indlevel=0; i; indlevel++) {
       if (indlevel == INDLEVELS)
 	fault(RESTRICTFAULT, 0, 0);
-      if (ea >= gvp->livereglim)
+      if (ea >= gv.livereglim)
 	m = get16(MAKEVA(rph,ea));
       else
 	m = get16trap(ea);
@@ -2298,7 +2297,7 @@ special:
 	i = m & 0100000;
       ea = m & amask;
       TRACE(T_EAR, " Indirect, new i=%d, new ea=%o\n", i!=0, ea);
-      eap = &gvp->brp[UNBR];
+      eap = &gv.brp[UNBR];
     }
 
   } else if (i && x) {                           /* class 2/3, ix=11 */
@@ -2308,12 +2307,12 @@ special:
     TRACE(T_EAR, " ea=%o\n", ea);
     if (class == 3) {
       ea += (short) getcrs16(S);
-      eap = &gvp->brp[SBBR];
+      eap = &gv.brp[SBBR];
     }
     for (indlevel=0; i; indlevel++) {
       if (indlevel == INDLEVELS)
 	fault(RESTRICTFAULT, 0, 0);
-      if (ea >= gvp->livereglim)
+      if (ea >= gv.livereglim)
 	m = get16(MAKEVA(rph,ea));
       else
 	m = get16trap(ea);
@@ -2328,10 +2327,10 @@ special:
     TRACE(T_EAR, " Postindex, old ea=%o, X='%o/%d\n", ea, getcrs16(X), getcrs16s(X));
     ea += (short) getcrs16(X);
     TRACE(T_EAR, " Postindex, new ea=%o\n", ea);
-    eap = &gvp->brp[XBBR];
+    eap = &gv.brp[XBBR];
 
   } else {                                       /* class 2/3, ix != 11 */
-    eap = &gvp->brp[SBBR];
+    eap = &gv.brp[SBBR];
     if (class == 2) {
       ea = getcrs16(S);
       putcrs16(S, getcrs16(S) + 1);
@@ -2341,7 +2340,7 @@ special:
     }
     TRACE(T_EAR, " Class 2/3, new ea=%o, new S=%o\n", ea, getcrs16(S));
     if (x) {
-      if (ea >= gvp->livereglim)
+      if (ea >= gv.livereglim)
 	m = get16(MAKEVA(rph,ea));
       else
 	m = get16trap(ea);
@@ -2352,7 +2351,7 @@ special:
     for (indlevel=0; i; indlevel++) {
       if (indlevel == INDLEVELS)
 	fault(RESTRICTFAULT, 0, 0);
-      if (ea >= gvp->livereglim)
+      if (ea >= gv.livereglim)
 	m = get16(MAKEVA(rph,ea));
       else
 	m = get16trap(ea);
@@ -2361,16 +2360,16 @@ special:
       else
 	i = m & 0100000;
       ea = m & amask;
-      eap = &gvp->brp[UNBR];
+      eap = &gv.brp[UNBR];
     }
     if (x) {
       ea += getcrs16(X);
-      eap = &gvp->brp[XBBR];
+      eap = &gv.brp[XBBR];
     }
   }
   ea &= amask;
   va = MAKEVA(rph, ea);
-  if (ea < gvp->livereglim)      /* flag live register ea */
+  if (ea < gv.livereglim)      /* flag live register ea */
     va |= 0x80000000;
   return va;
 }
@@ -2383,7 +2382,7 @@ static ea_t apea(unsigned short *bitarg) {
   unsigned int utempl;
   ea_t ea, ip;
 
-  eap = &gvp->brp[RPBR];
+  eap = &gv.brp[RPBR];
   utempl = get32(RP);
   INCRP; INCRP;
   ibr = utempl >> 16;
@@ -2401,7 +2400,7 @@ static ea_t apea(unsigned short *bitarg) {
   if (ibr & 004000) {
     if (ea & 0x80000000)
       fault(POINTERFAULT, ea>>16, 0);    /* XXX: faddr=0? */
-    eap = &gvp->brp[UNBR];
+    eap = &gv.brp[UNBR];
     ip = get32(ea);
     if (ip & EXTMASK32)
       bit = get16(INCVA(ea,2)) >> 12;
@@ -2570,7 +2569,7 @@ static ea_t stex(unsigned int framesize) {
     fault(RESTRICTFAULT, 0, 0);
 
   framesize = (framesize + 1) & 0xFFFE;    /* round up to even */
-  eap = &gvp->brp[SBBR];
+  eap = &gv.brp[SBBR];
   stackrootseg = get16((getcrs32(SB))+1);
   stackseg = stackrootseg;
   stackfp = get32(MAKEVA(stackseg,0));
@@ -2608,7 +2607,7 @@ static inline void prtn() {
   ea_t newrp,newsb,newlb;
   unsigned short keys;
 
-  eap = &gvp->brp[SBBR];
+  eap = &gv.brp[SBBR];
   stackroot = get16(getcrs32(SB)+1);
   newrp = get32(getcrs32(SB)+2);
   newsb = get32(getcrs32(SB)+4);
@@ -2642,7 +2641,7 @@ static inline ea_t pclea(unsigned short brsave[6], ea_t rp, unsigned short *bita
 
   iwea = 0;
   *store = 0;
-  eap = &gvp->brp[RPBR];
+  eap = &gv.brp[RPBR];
   utempl = get32(rp);
   ibr = utempl >> 16;
   a = utempl & 0xFFFF;
@@ -2677,7 +2676,7 @@ static inline ea_t pclea(unsigned short brsave[6], ea_t rp, unsigned short *bita
     if (ea & 0x80000000)
       fault(POINTERFAULT, ea>>16, 0);    /* XXX: faddr=0? */
     iwea = ea;
-    eap = &gvp->brp[br];
+    eap = &gv.brp[br];
     ea = get32(iwea);
     TRACE(T_PCL, " Indirect pointer is %o/%o\n", ea>>16, ea & 0xFFFF);
 #if 1
@@ -2737,7 +2736,7 @@ static void argt() {
   /* stackfp is the new stack frame, rp is in the middle of
      argument templates and is advanced after each transfer */
 
-  eap = &gvp->brp[SBBR];
+  eap = &gv.brp[SBBR];
   stackfp = getcrs32(SB);
   rp = get32(stackfp+2);
 
@@ -2767,7 +2766,7 @@ static void argt() {
     }
     if (argsleft > 0 && store) {
       TRACE(T_PCL, " Storing arg, %d left, Y=%o\n", argsleft, getcrs16(Y));
-      eap = &gvp->brp[SBBR];
+      eap = &gv.brp[SBBR];
 
       /* NOTE: some version of ucode only store 16 bits for omitted args.
 	 Set EHDB to prevent this error.
@@ -2846,8 +2845,8 @@ static void pcl (ea_t ecbea) {
 
 #if 0
   if (ecbea == UNWIND_) {
-    printf("pcl: calling unwind_ at %d\n", gvp->instcount);
-    gvp->savetraceflags = ~T_MAP;
+    printf("pcl: calling unwind_ at %d\n", gv.instcount);
+    gv.savetraceflags = ~T_MAP;
   }
 #endif
 
@@ -2899,7 +2898,7 @@ static void pcl (ea_t ecbea) {
 
   framesize = (ecb[2] + 1) & 0xFFFE;   /* round up frame size to even */
   stackrootseg = ecb[3];
-  eap = &gvp->brp[SBBR];
+  eap = &gv.brp[SBBR];
   if (stackrootseg == 0) {
     stackrootseg = get16((getcrs32(SB)) + 1);
     TRACE(T_PCL, " stack root in ecb was zero, stack root from caller is %o\n", stackrootseg);
@@ -3007,7 +3006,7 @@ static void pcl (ea_t ecbea) {
   if ((newrp ^ RP) & RINGMASK32)
     invalidate_brp();
   RP = newrp;
-  gvp->prevpc = RP;
+  gv.prevpc = RP;
   TRACE(T_PCL, " new RP=%o/%o\n", RPH, RPL);
 
   if (ecb[5] > 0) {
@@ -3116,7 +3115,7 @@ static void calf(ea_t ea) {
 
   /* get concealed stack entry address */
 
-  eap = &gvp->brp[UNBR];
+  eap = &gv.brp[UNBR];
   first = get16r0(pcbp+PCBCSFIRST);
   next = get16r0(pcbp+PCBCSNEXT);
   last = get16r0(pcbp+PCBCSLAST);
@@ -3125,7 +3124,7 @@ static void calf(ea_t ea) {
     this = last;
   else
     this = next-6;
-  csea = MAKEVA(getcrs16(OWNERH)+gvp->csoffset, this);
+  csea = MAKEVA(getcrs16(OWNERH)+gv.csoffset, this);
   TRACE(T_FAULT,"CALF: cs frame is at %o/%o\n", csea>>16, csea&0xFFFF);
 
 #ifdef DBG
@@ -3146,7 +3145,7 @@ static void calf(ea_t ea) {
 
   /* get the concealed stack entries and adjust the new stack frame */
 
-  eap = &gvp->brp[UNBR];
+  eap = &gv.brp[UNBR];
   for (i=0; i<6; i++)
     cs[i] = get16r0(csea+i);
 
@@ -3157,7 +3156,7 @@ static void calf(ea_t ea) {
 
   TRACE(T_FAULT, "CALF: cs entry: retpb=%o/%o, retkeys=%o, fcode=%o, faddr=%o/%o\n", cs[0], cs[1], cs[2], cs[3], cs[4], cs[5]);
 
-  eap = &gvp->brp[SBBR];
+  eap = &gv.brp[SBBR];
   stackfp = getcrs32(SB);
   put16(1, stackfp+0);                          /* flag it as CALF frame */
   put16(cs[0], stackfp+2);                      /* return PBH */
@@ -3486,7 +3485,7 @@ static void dispatcher() {
      the fault bit is set again on RP.  We try to hide this hack from
      Primos. */
 
-  if (RPL < gvp->livereglim && ((getcrs16(KEYS) & 0016000) != 010000))
+  if (RPL < gv.livereglim && ((getcrs16(KEYS) & 0016000) != 010000))
     RP |= 0x80000000;
   putcrs16(PBL, 0);
   putcrs16(KEYS, getcrs16(KEYS) & ~3);      /* erase "in dispatcher" and "save done" */
@@ -3752,12 +3751,12 @@ static void nfy(unsigned short inst) {
 
   if (inst & 4) {                /* interrupt notify */
     if (inst & 2)                /* clear active interrupt */
-      gvp->intvec = -1;
+      gv.intvec = -1;
     /* not sure about all this... Case 85/87 */
     newkeys(getar16(PSWKEYS16));
     RP = getar32(PSWPB32);
     putcrs16(PBH, RPH);          /* NOTE: won't have fault bit */
-    if (RPL < gvp->livereglim && ((getcrs16(KEYS) & 0016000) != 010000))
+    if (RPL < gv.livereglim && ((getcrs16(KEYS) & 0016000) != 010000))
       RP |= 0x80000000;
   }
 
@@ -3803,7 +3802,7 @@ static void lpsw() {
   invalidate_brp();
 
   putcrs16(MODALS, m);
-  gvp->inhcount = 1;
+  gv.inhcount = 1;
 
   TRACE(T_PX, "LPSW:    NEW RPH=%o, RPL=%o, keys=%o, modals=%o, owner=%o/%o\n", RPH, RPL, getcrs16(KEYS), getcrs16(MODALS), getcrs16(OWNERH), getcrs16(OWNERL));
   TRACE(T_PX, "LPSW: crs=%d, ownerl[2]=%o, keys[2]=%o, modals[2]=%o, ownerl[3]=%o, keys[3]=%o, modals[3]=%o\n", crs==regs.rs16[2]? 2:3, swap16(regs.rs16[2][OWNERL]), swap16(regs.rs16[2][KEYS]), swap16(regs.rs16[2][MODALS]), swap16(regs.rs16[3][OWNERL]), swap16(regs.rs16[3][KEYS]), swap16(regs.rs16[3][MODALS]));
@@ -3811,9 +3810,9 @@ static void lpsw() {
     TRACE(T_PX, "Mapped I/O enabled\n");
   if (getcrs16(MODALS) & 4) {
     TRACE(T_PX, "Segmentation enabled\n");
-    gvp->livereglim = 010;
+    gv.livereglim = 010;
   } else 
-    gvp->livereglim = 040;
+    gv.livereglim = 040;
   if (getcrs16(MODALS) & 010) {
     TRACE(T_PX, "Process exchange enabled:\n");
     TRACE(T_PX, "LPSW: PLA=%o, PCBA=%o, PLB=%o, PCBB=%o\n", getar16(PLA16), getar16(PCBA16), getar16(PLB16), getar16(PCBB16));
@@ -3889,11 +3888,11 @@ static inline unsigned short ldc(int n, unsigned short result) {
   if (n) {
     far = FAR1;
     flr = FLR1;
-    eap = &gvp->brp[F1BR];
+    eap = &gv.brp[F1BR];
   } else {
     far = FAR0;
     flr = FLR0;
-    eap = &gvp->brp[F0BR];
+    eap = &gv.brp[F0BR];
   }
 
   utempl = GETFLR(n);
@@ -3930,11 +3929,11 @@ static void inline stc(int n, unsigned short ch) {
   if (n) {
     far = FAR1;
     flr = FLR1;
-    eap = &gvp->brp[F1BR];
+    eap = &gv.brp[F1BR];
   } else {
     far = FAR0;
     flr = FLR0;
-    eap = &gvp->brp[F0BR];
+    eap = &gv.brp[F0BR];
   }
 
   utempl = GETFLR(n);
@@ -4435,31 +4434,30 @@ int main (int argc, char **argv) {
 
   /* initialize global variables */
 
-  gvp = &gv;
-  gvp->physmem = physmem;
-  gvp->intvec = -1;
-  gvp->instcount = 0;
-  gvp->inhcount = 0;
-  gvp->instpermsec = 2000;
-  gvp->livereglim = 040;
-  gvp->mapvacalls = 0;
-  gvp->mapvamisses = 0;
-  gvp->supercalls = 0;
-  gvp->supermisses = 0;
+  gv.physmem = physmem;
+  gv.intvec = -1;
+  gv.instcount = 0;
+  gv.inhcount = 0;
+  gv.instpermsec = 2000;
+  gv.livereglim = 040;
+  gv.mapvacalls = 0;
+  gv.mapvamisses = 0;
+  gv.supercalls = 0;
+  gv.supermisses = 0;
 #ifndef NOTRACE
-  gvp->traceflags = 0;
-  gvp->savetraceflags = 0;
-  gvp->traceuser = 0;
-  gvp->traceseg = 0;
-  gvp->numtraceprocs = 0;
-  gvp->traceinstcount = 0;
-  gvp->tracetriggered = 1;
-  gvp->tracerpqx = 0;
+  gv.traceflags = 0;
+  gv.savetraceflags = 0;
+  gv.traceuser = 0;
+  gv.traceseg = 0;
+  gv.numtraceprocs = 0;
+  gv.traceinstcount = 0;
+  gv.tracetriggered = 1;
+  gv.tracerpqx = 0;
   for (i=0; i<MAXRPQ; i++)
-    gvp->tracerpq[i] = 0;
+    gv.tracerpq[i] = 0;
 #endif
   invalidate_brp();
-  eap = &gvp->brp[0];
+  eap = &gv.brp[0];
 
   /* ignore SIGPIPE signals (sockets) or they'll kill the emulator */
 
@@ -4474,7 +4472,7 @@ int main (int argc, char **argv) {
 
   /* open trace log */
 
-  if ((gvp->tracefile=fopen("trace.log", "w")) == NULL) {
+  if ((gv.tracefile=fopen("trace.log", "w")) == NULL) {
     perror("Unable to open trace.log");
     exit(1);
   }
@@ -4520,17 +4518,17 @@ int main (int argc, char **argv) {
   newkeys(0);
   RP = 01000;
   for (i=0; i < STLBENTS; i++)
-    gvp->stlb[i].seg = 0xFFFF;        /* marker for invalid STLB entry */
+    gv.stlb[i].seg = 0xFFFF;        /* marker for invalid STLB entry */
   for (i=0; i < IOTLBENTS; i++)
-    gvp->iotlb[i].valid = 0;
+    gv.iotlb[i].valid = 0;
   bzero(MEM, 64*1024*2);              /* zero first 64K words */
 
   domemdump = 0;
   bootarg = NULL;
   bootfile[0] = 0;
-  gvp->pmap32bits = 0;
-  gvp->csoffset = 0;
-  gvp->memlimit = MEMSIZE;
+  gv.pmap32bits = 0;
+  gv.csoffset = 0;
+  gv.memlimit = MEMSIZE;
   tport = 0;
   nport = 0;
 
@@ -4608,7 +4606,7 @@ int main (int argc, char **argv) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
 	if (1 <= templ && templ <= MAXMB)
-	  gvp->memlimit = templ*1024/2*1024;
+	  gv.memlimit = templ*1024/2*1024;
 	else
 	  fatal("-mem arg range is 1 to 512 (megabytes)\n");
       } else
@@ -4640,74 +4638,74 @@ int main (int argc, char **argv) {
       while (i+1 < argc && argv[i+1][0] != '-') {
 	i++;
 	if (strcmp(argv[i],"ear") == 0)
-	  gvp->traceflags |= T_EAR;
+	  gv.traceflags |= T_EAR;
 	else if (strcmp(argv[i],"eav") == 0)
-	  gvp->traceflags |= T_EAV;
+	  gv.traceflags |= T_EAV;
 	else if (strcmp(argv[i],"eai") == 0)
-	  gvp->traceflags |= T_EAI;
+	  gv.traceflags |= T_EAI;
 	else if (strcmp(argv[i],"eas") == 0)
-	  gvp->traceflags |= T_EAS;
+	  gv.traceflags |= T_EAS;
 	else if (strcmp(argv[i],"inst") == 0)
-	  gvp->traceflags |= T_INST;
+	  gv.traceflags |= T_INST;
 	else if (strcmp(argv[i],"flow") == 0)
-	  gvp->traceflags |= T_FLOW;
+	  gv.traceflags |= T_FLOW;
 	else if (strcmp(argv[i],"mode") == 0)
-	  gvp->traceflags |= T_MODE;
+	  gv.traceflags |= T_MODE;
 	else if (strcmp(argv[i],"eaap") == 0)
-	  gvp->traceflags |= T_EAAP;
+	  gv.traceflags |= T_EAAP;
 	else if (strcmp(argv[i],"dio") == 0)
-	  gvp->traceflags |= T_DIO;
+	  gv.traceflags |= T_DIO;
 	else if (strcmp(argv[i],"map") == 0)
-	  gvp->traceflags |= T_MAP;
+	  gv.traceflags |= T_MAP;
 	else if (strcmp(argv[i],"pcl") == 0)
-	  gvp->traceflags |= T_PCL;
+	  gv.traceflags |= T_PCL;
 	else if (strcmp(argv[i],"fault") == 0)
-	  gvp->traceflags |= T_FAULT;
+	  gv.traceflags |= T_FAULT;
 	else if (strcmp(argv[i],"px") == 0)
-	  gvp->traceflags |= T_PX;
+	  gv.traceflags |= T_PX;
 	else if (strcmp(argv[i],"tio") == 0)
-	  gvp->traceflags |= T_TIO;
+	  gv.traceflags |= T_TIO;
 	else if (strcmp(argv[i],"term") == 0)
-	  gvp->traceflags |= T_TERM;
+	  gv.traceflags |= T_TERM;
 	else if (strcmp(argv[i],"rio") == 0)
-	  gvp->traceflags |= T_RIO;
+	  gv.traceflags |= T_RIO;
 	else if (strcmp(argv[i],"off") == 0)
-	  gvp->tracetriggered = 0;
+	  gv.tracetriggered = 0;
 	else if (strcmp(argv[i],"lm") == 0)
-	  gvp->traceflags |= T_LM;
+	  gv.traceflags |= T_LM;
 	else if (strcmp(argv[i],"put") == 0)
-	  gvp->traceflags |= T_PUT;
+	  gv.traceflags |= T_PUT;
 	else if (strcmp(argv[i],"get") == 0)
-	  gvp->traceflags |= T_GET;
+	  gv.traceflags |= T_GET;
 	else if (strcmp(argv[i],"all") == 0)
-	  gvp->traceflags = ~0;
+	  gv.traceflags = ~0;
 	else if (strcmp(argv[i],"flush") == 0)
-	  setlinebuf(gvp->tracefile);
+	  setlinebuf(gv.tracefile);
 	else if (strcmp(argv[i],"tlb") == 0)
-	  gvp->traceflags |= T_TLB;
+	  gv.traceflags |= T_TLB;
 	else if (isdigit(argv[i][0]) && strlen(argv[i]) <= 3 && sscanf(argv[i],"%d", &templ) == 1)
-	  gvp->traceuser = 0100000 | (templ<<6);   /* form OWNERL for user # */
+	  gv.traceuser = 0100000 | (templ<<6);   /* form OWNERL for user # */
 	else if (isdigit(argv[i][0]) && sscanf(argv[i],"%d", &templ) == 1)
-	  gvp->traceinstcount = templ;
+	  gv.traceinstcount = templ;
 	else if (strlen(argv[i]) == 6 && sscanf(argv[i],"%o", &templ) == 1)
-	  gvp->traceuser = templ;                  /* specify OWNERL directly */
+	  gv.traceuser = templ;                  /* specify OWNERL directly */
 	else if (strlen(argv[i]) == 4 && sscanf(argv[i],"%o", &templ) == 1)
-	  gvp->traceseg = templ;                   /* specify RPH segno */
+	  gv.traceseg = templ;                   /* specify RPH segno */
 	else if (strlen(argv[i]) <= 8 && argv[i][0] != '-') {
-	  if (gvp->numtraceprocs >= MAXTRACEPROCS)
+	  if (gv.numtraceprocs >= MAXTRACEPROCS)
 	    fprintf(stderr,"Only %d trace procs are allowed\n", MAXTRACEPROCS);
 	  else {
 	    printf("Request to trace proc %s\n", argv[i]);
-	    traceprocs[gvp->numtraceprocs].oneshot = 1;
+	    traceprocs[gv.numtraceprocs].oneshot = 1;
 	    for (j=0; argv[i][j]; j++)
 	      if (argv[i][j] == '+')
-		traceprocs[gvp->numtraceprocs].oneshot = 0;
+		traceprocs[gv.numtraceprocs].oneshot = 0;
 	      else
-		traceprocs[gvp->numtraceprocs].name[j] = argv[i][j];
-	    traceprocs[gvp->numtraceprocs].name[j] = 0;
-	    traceprocs[gvp->numtraceprocs].sb = -1;
-	    traceprocs[gvp->numtraceprocs].ecb = 0;
-	    gvp->numtraceprocs++;
+		traceprocs[gv.numtraceprocs].name[j] = argv[i][j];
+	    traceprocs[gv.numtraceprocs].name[j] = 0;
+	    traceprocs[gv.numtraceprocs].sb = -1;
+	    traceprocs[gv.numtraceprocs].ecb = 0;
+	    gv.numtraceprocs++;
 	  }
 	} else {
 	  fprintf(stderr,"Unrecognized trace flag: %s\n", argv[i]);
@@ -4735,16 +4733,16 @@ int main (int argc, char **argv) {
   /* finish setting up tracing after all options are read, ie, maps */
 
 #ifndef NOTRACE
-  TRACEA("Trace flags = 0x%x\n", gvp->traceflags);
-  gvp->savetraceflags = gvp->traceflags;
-  gvp->traceflags = 0;
-  if (gvp->traceuser != 0)
-    TRACEA("Tracing enabled for OWNERL %o\n", gvp->traceuser);
+  TRACEA("Trace flags = 0x%x\n", gv.traceflags);
+  gv.savetraceflags = gv.traceflags;
+  gv.traceflags = 0;
+  if (gv.traceuser != 0)
+    TRACEA("Tracing enabled for OWNERL %o\n", gv.traceuser);
   else
     TRACEA("Tracing enabled for all users\n");
-  if (gvp->traceinstcount != 0)
-    TRACEA("Tracing enabled after instruction %u\n", gvp->traceinstcount);
-  for (i=0; i<gvp->numtraceprocs; i++) {
+  if (gv.traceinstcount != 0)
+    TRACEA("Tracing enabled after instruction %u\n", gv.traceinstcount);
+  for (i=0; i<gv.numtraceprocs; i++) {
     for (j=0; j<numsyms; j++) {
       if (strcasecmp(mapsym[j].symname, traceprocs[i].name) == 0 && mapsym[j].symtype == 'e') {
 	ea = mapsym[j].address;
@@ -4764,14 +4762,14 @@ int main (int argc, char **argv) {
   /* set some vars after the options have been read */
 
   if (cpuid == 15 || cpuid == 18 || cpuid == 19 || cpuid == 24 || cpuid >= 26) {
-    gvp->pmap32bits = 1;
+    gv.pmap32bits = 1;
     if (cpuid == 33 || cpuid == 37 || cpuid == 39 || cpuid >= 43)
-      gvp->pmap32mask = 0x3FFFF;    /* this is for 512MB physical memory */
+      gv.pmap32mask = 0x3FFFF;    /* this is for 512MB physical memory */
     else
-      gvp->pmap32mask = 0xFFFF;     /* this is for 128MB physical memory */
+      gv.pmap32mask = 0xFFFF;     /* this is for 128MB physical memory */
   }
   if ((26 <= cpuid && cpuid <= 29) || cpuid >= 35)
-    gvp->csoffset = 1;
+    gv.csoffset = 1;
 
   /* initialize all devices */
 
@@ -4924,9 +4922,9 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
   
   putcrs16(MODALS, 0);                /* interrupts inhibited */
   for (i=0; i < STLBENTS; i++)
-    gvp->stlb[i].seg = 0xFFFF;        /* marker for invalid STLB entry */
+    gv.stlb[i].seg = 0xFFFF;        /* marker for invalid STLB entry */
   for (i=0; i < IOTLBENTS; i++)
-    gvp->iotlb[i].valid = 0;
+    gv.iotlb[i].valid = 0;
 #endif
 
   if (bootregs) {
@@ -4968,7 +4966,6 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
      Stop the fault timer and restore dedicated registers trashed by longjmp */
 
   if (setjmp(jmpbuf)) {              /* returns 1 on longjmp */
-    gvp = &gv;
     crsl = gcrsl;
     RP = grp;
     stopwatch_stop(&sw_fault);
@@ -4976,7 +4973,7 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
 
 
 fetch:
-  gvp->instcount++;
+  gv.instcount++;
 
 #if 0
   /* check for memory overwrite in prmnt1 T&M: OTA '1507 w/packet length 3712*2 :( */
@@ -4988,23 +4985,23 @@ fetch:
 #endif
 
 #ifndef NOTRACE
-  gvp->traceflags = 0;
-  if (gvp->tracetriggered &&
-      (gvp->instcount >= gvp->traceinstcount) &&
-      (TRACEUSER && ((gvp->traceseg == 0) || (gvp->traceseg == (RPH & 0xFFF))))
+  gv.traceflags = 0;
+  if (gv.tracetriggered &&
+      (gv.instcount >= gv.traceinstcount) &&
+      (TRACEUSER && ((gv.traceseg == 0) || (gv.traceseg == (RPH & 0xFFF))))
       )
-    gvp->traceflags = gvp->savetraceflags;
-  gvp->tracerpq[gvp->tracerpqx] = RP;
-  gvp->tracerpqx = (gvp->tracerpqx+1) & (MAXRPQ-1);
+    gv.traceflags = gv.savetraceflags;
+  gv.tracerpq[gv.tracerpqx] = RP;
+  gv.tracerpqx = (gv.tracerpqx+1) & (MAXRPQ-1);
 #endif
 
   /* hack to activate trace in 32I mode */
 
 #if 0
   if ((getcrs16(KEYS) & 0016000) == 0010000)
-    gvp->traceflags = gvp->savetraceflags;
+    gv.traceflags = gv.savetraceflags;
   else
-    gvp->traceflags = 0;
+    gv.traceflags = 0;
 #endif
 
 #if 0
@@ -5012,20 +5009,20 @@ fetch:
      "System Serial Number does not agree with this version of Primos."
      To track this down, turn on tracing just before this instruction. */
 
-  if (75370000 < gvp->instcount && gvp->instcount < 75380000)
-    gvp->traceflags = ~T_MAP;
+  if (75370000 < gv.instcount && gv.instcount < 75380000)
+    gv.traceflags = ~T_MAP;
   else
-    gvp->traceflags = 0;
+    gv.traceflags = 0;
 #endif
 
 #if 0
   /* turn on tracing  near instruction #47704931 to debug I/O TLB error
      in rev 22.1 */
 
-  if (gvp->instcount > 47700000)
-    gvp->traceflags = ~0;
+  if (gv.instcount > 47700000)
+    gv.traceflags = ~0;
   else
-    gvp->traceflags = 0;
+    gv.traceflags = 0;
 #endif
 
 #if 0
@@ -5043,11 +5040,11 @@ fetch:
      following ARGT (if PCL completes w/o faults) */
 
   if (TRACEUSER && SEGNO16(RPH) == 041 && 06200 <= RPL && RPL <= 06201) { /* ac$set */
-    gvp->savetraceflags = ~T_MAP;
+    gv.savetraceflags = ~T_MAP;
     printf("enable trace, RPH=%o, RPL=%o\n", SEGNO16(RPH), RPL);
   }
   if (TRACEUSER && SEGNO16(RPH) == 013 && 044030 <= RPL && RPL <= 044031) { /* setrc$ */
-    gvp->savetraceflags = 0;
+    gv.savetraceflags = 0;
     printf("disable trace, RPH=%o, RPL=%o\n", SEGNO16(RPH), RPL);
   }
 #endif
@@ -5055,9 +5052,9 @@ fetch:
 #if 0
   /* this is for FTN Generic 3 trace */
   if (SEGNO16(RPH) == 04000 && RPL >= 034750 && RPL <= 034760)
-    gvp->savetraceflags = ~T_MAP;
+    gv.savetraceflags = ~T_MAP;
   else
-    gvp->savetraceflags = 0;
+    gv.savetraceflags = 0;
 #endif
 
 #if 0
@@ -5065,11 +5062,11 @@ fetch:
      being monitored isn't wired */
 
   if (trapaddr != 0 && (getcrs16(OWNERL) & 0100000) && (getcrs16(MODALS) & 010)) {
-    gvp->traceflags = -1;
-    printf("TRAP: at #%d\n", gvp->instcount);
+    gv.traceflags = -1;
+    printf("TRAP: at #%d\n", gv.instcount);
     utempa = get16(trapaddr);
     if (utempa != trapvalue) {
-      printf("TRAP: at #%d, old value of %o/%o was %o; new value is %o\n", gvp->instcount, trapaddr>>16, trapaddr&0xffff, trapvalue, utempa);
+      printf("TRAP: at #%d, old value of %o/%o was %o; new value is %o\n", gv.instcount, trapaddr>>16, trapaddr&0xffff, trapvalue, utempa);
       trapvalue = utempa;
       printf("TRAP: new trap value is %o\n", trapvalue);
     }
@@ -5086,7 +5083,7 @@ fetch:
 
 #define TIMERMASK 0777   /* must be power of 2 - 1 */
 
-  if ((gvp->instcount & TIMERMASK) == 0) {
+  if ((gv.instcount & TIMERMASK) == 0) {
     stopwatch_push(&sw_io);
     for (i=0; i<64; i++)
       if (devpoll[i] && ((devpoll[i] -= (TIMERMASK+1)) <= 0)) {
@@ -5102,14 +5099,14 @@ fetch:
 
     if (getcrs16(MODALS) & 010) {
       putcrs16(TIMERL, getcrs16(TIMERL) + TIMERMASK + 1);
-      if (getcrs16(TIMERL) > gvp->instpermsec) {
-	putcrs16(TIMERL, getcrs16(TIMERL) - gvp->instpermsec);
+      if (getcrs16(TIMERL) > gv.instpermsec) {
+	putcrs16(TIMERL, getcrs16(TIMERL) - gv.instpermsec);
 
 	/* if 1ms resolution process timer overflows, set pcb abort flag */
 
 	putcrs16(TIMERH, getcrs16(TIMERH) + 1);
 	if (getcrs16(TIMERH) == 0) {
-	  TRACE(T_PX,  "#%u: pcb %o timer overflow\n", gvp->instcount, getcrs16(OWNERL));
+	  TRACE(T_PX,  "#%u: pcb %o timer overflow\n", gv.instcount, getcrs16(OWNERL));
 	  ea = getcrs32ea(OWNER);
 	  m = get16r0(ea+4) | 1;       /* set process abort flag */
 	  put16r0(m, ea+4);
@@ -5120,10 +5117,10 @@ fetch:
 
   /* is an interrupt pending, with interrupts enabled? */
 
-  if (gvp->intvec >= 0 && (getcrs16(MODALS) & 0100000)) {
-    if (gvp->inhcount == 0) {
-      //printf("fetch: taking interrupt vector '%o, modals='%o\n", gvp->intvec, getcrs16(MODALS));
-      TRACE(T_FLOW, "\nfetch: taking interrupt vector '%o, modals='%o\n", gvp->intvec, getcrs16(MODALS));
+  if (gv.intvec >= 0 && (getcrs16(MODALS) & 0100000)) {
+    if (gv.inhcount == 0) {
+      //printf("fetch: taking interrupt vector '%o, modals='%o\n", gv.intvec, getcrs16(MODALS));
+      TRACE(T_FLOW, "\nfetch: taking interrupt vector '%o, modals='%o\n", gv.intvec, getcrs16(MODALS));
       putar32(PSWPB32, RP & 0x7FFFFFFF);
       regs.sym.pswkeys = crs[KEYS];              /* Prime->Prime: no byte swap */
 
@@ -5131,25 +5128,25 @@ fetch:
 	 the Sys Arch Guide 2nd Ed. for Standard Interrupt Mode */
 
       if (getcrs16(MODALS) & 010) {              /* PX enabled */
-	//gvp->traceflags = ~T_MAP;
+	//gv.traceflags = ~T_MAP;
 	newkeys(014000);
 	RPH = 4;
-	RPL = gvp->intvec;
+	RPL = gv.intvec;
 
       } else if (getcrs16(MODALS) & 040000) {    /* vectored interrupt mode */
-	m = get16(gvp->intvec);
+	m = get16(gv.intvec);
 	if (m != 0) {
 	  put16(RPL, m);
 	  RP = m+1;
 	} else {
-	  printf("fetch: interrupt vector '%o = 0 in vectored interrupt mode\n", gvp->intvec);
+	  printf("fetch: interrupt vector '%o = 0 in vectored interrupt mode\n", gv.intvec);
 	  fatal(NULL);
 	}
 
       } else {                              /* standard interrupt mode */
 	m = get16(063);
 	//printf("Standard mode interrupt vector loc = %o\n", m);
-	//gvp->traceflags = ~T_MAP;
+	//gv.traceflags = ~T_MAP;
 	if (m != 0) {
 	  put16(RPL, m);
 	  RP = m+1;
@@ -5159,10 +5156,10 @@ fetch:
       }
       putcrs16(MODALS, getcrs16(MODALS) & 077777);   /* inhibit interrupts */
     } else
-      gvp->inhcount--;
+      gv.inhcount--;
   }
 
-  gvp->prevpc = RP;
+  gv.prevpc = RP;
 
 #if 0
   /* NOTE: Rev 21 Sys Arch Guide, 2nd Ed, pg 3-32 says:
@@ -5199,7 +5196,7 @@ fetch:
      instructions.
   */
 
-  inst = iget16(RP | ((RPL >= gvp->livereglim || (getcrs16(KEYS) & 0016000) == 010000) ? 0 : 0x80000000));
+  inst = iget16(RP | ((RPL >= gv.livereglim || (getcrs16(KEYS) & 0016000) == 010000) ? 0 : 0x80000000));
 #else
   inst = iget16(RP);
 #endif
@@ -5225,18 +5222,18 @@ xec:
 
 #if 0
   if (inst == 03777)
-    gvp->traceflags = 0;
+    gv.traceflags = 0;
 #endif
 
 #if 0
-  if (getcrs16(OWNERL) == 0100200 && inst == 001114 && gvp->savetraceflags)
-    gvp->traceflags = ~0;
+  if (getcrs16(OWNERL) == 0100200 && inst == 001114 && gv.savetraceflags)
+    gv.traceflags = ~0;
   else
-    gvp->traceflags = 0;
+    gv.traceflags = 0;
 #endif
 
 #if 1
-  TRACE(T_FLOW, "\n			#%u [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X='%o/%d Y='%o/%d%s%s%s%s K=%o M=%o\n", gvp->instcount, searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16s(TIMERH), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS));
+  TRACE(T_FLOW, "\n			#%u [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X='%o/%d Y='%o/%d%s%s%s%s K=%o M=%o\n", gv.instcount, searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16s(TIMERH), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS));
 #else
   TRACE(T_FLOW, "\n			[%s %o] SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X='%o/%d Y='%o/%d%s%s%s%s K=%o M=%o\n", searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS) & 0177437);
 #endif
@@ -5277,7 +5274,7 @@ xec:
   if ((getcrs16(KEYS) & 016000) == 014000) {   /* 64V mode */
     ea = ea64v(inst, earp);
     TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
-    goto *(gvp->disp_vmr[VMRINSTIX(inst)]);
+    goto *(gv.disp_vmr[VMRINSTIX(inst)]);
 
   } else if ((getcrs16(KEYS) & 0016000) == 010000) {  /* E32I */
       goto imode;
@@ -5289,17 +5286,17 @@ xec:
   } else if (getcrs16(KEYS) & 004000) {        /* 32R/64R */
     ea = ea32r64r(earp, inst);
     TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
-    goto *(gvp->disp_rmr[RMRINSTIX(inst)]);
+    goto *(gv.disp_rmr[RMRINSTIX(inst)]);
 
   } else if (getcrs16(KEYS) & 002000) {
     ea = ea32s(inst);
     TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
-    goto *(gvp->disp_rmr[SMRINSTIX(inst)]);
+    goto *(gv.disp_rmr[SMRINSTIX(inst)]);
 
   } else if ((getcrs16(KEYS) & 016000) == 0) {
     ea = ea16s(inst);
     TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
-    goto *(gvp->disp_rmr[SMRINSTIX(inst)]);
+    goto *(gv.disp_rmr[SMRINSTIX(inst)]);
 
   } else {
     printf("Bad CPU mode in EA calculation, keys = %o\n", getcrs16(KEYS));
@@ -5467,14 +5464,14 @@ d_prtn:  /* 000611 */
   /* if this PRTN is for a procedure being traced, disable
      tracing if one-shot is true */
 
-  if (gvp->numtraceprocs > 0 && TRACEUSER)
-    for (i=0; i<gvp->numtraceprocs; i++)
+  if (gv.numtraceprocs > 0 && TRACEUSER)
+    for (i=0; i<gv.numtraceprocs; i++)
       if (getcrs32s(SB) == traceprocs[i].sb) {
 	traceprocs[i].sb = -1;
-	fflush(gvp->tracefile);
+	fflush(gv.tracefile);
 	if (traceprocs[i].oneshot) {
 	  printf("Disabled trace for %s at sb '%o/%o\n", traceprocs[i].name, getcrs16(SBH), getcrs16(SBL));
-	  gvp->savetraceflags = 0;
+	  gv.savetraceflags = 0;
 	}
 	break;
       }
@@ -5499,7 +5496,7 @@ d_nop:  /* 000001 */
 d_rsav:  /* 000715 */
   TRACE(T_FLOW, " RSAV\n");
   ea = apea(NULL);
-  eap = &gvp->brp[SBBR];   /* registers almost always saved on the stack */
+  eap = &gv.brp[SBBR];   /* registers almost always saved on the stack */
   j = 1;
   savemask = 0;
   for (i = 11; i >= 0; i--) {
@@ -5519,7 +5516,7 @@ d_rsav:  /* 000715 */
 d_rrst:  /* 000717 */
   TRACE(T_FLOW, " RRST\n");
   ea = apea(NULL);
-  eap = &gvp->brp[SBBR];   /* registers almost always saved on the stack */
+  eap = &gv.brp[SBBR];   /* registers almost always saved on the stack */
   savemask = get16(ea);
   TRACE(T_INST, " Save mask=%o\n", savemask);
   j = 1;
@@ -5540,7 +5537,7 @@ d_enb:  /* 000400 (enbm), 000401 (enbl), 000402 (enbp) */
   TRACE(T_FLOW, " ENB\n");
   RESTRICT();
   putcrs16(MODALS, getcrs16(MODALS) | 0100000);
-  gvp->inhcount = 1;
+  gv.inhcount = 1;
   goto fetch;
 
 d_inh:  /* 001000 (inhm), 001001 (inhl), 001002 (inhp) */
@@ -6122,7 +6119,7 @@ d_liot:  /* 000044 */
   RESTRICT();
   ea = apea(NULL);
   utempa = STLBIX(ea);
-  gvp->stlb[utempa].seg = 0xFFFF;
+  gv.stlb[utempa].seg = 0xFFFF;
   TRACE(T_TLB, "stlb[%d] invalidated at %o/%o for liot\n", utempa, RPH, RPL);
   mapva(ea, RP, RACC, &access);
   TRACE(T_INST, " loaded STLB for %o/%o\n", ea>>16, ea&0xffff);
@@ -6135,9 +6132,9 @@ d_ptlb:  /* 000064 */
   RESTRICT();
   utempl = getcrs32(L);
   for (utempa = 0; utempa < STLBENTS; utempa++)
-    if ((utempl & 0x80000000) || gvp->stlb[utempa].ppa == (utempl << 10)) {
+    if ((utempl & 0x80000000) || gv.stlb[utempa].ppa == (utempl << 10)) {
       TRACE(T_TLB, "stlb[%d] invalidated at %o/%o for ptlb\n", utempa, RPH, RPL);
-      gvp->stlb[utempa].seg = 0xFFFF;
+      gv.stlb[utempa].seg = 0xFFFF;
     }
   invalidate_brp();
   goto fetch;
@@ -6156,14 +6153,14 @@ d_itlb:  /* 000615 */
 
   if (utempl == 0x10000) {
     for (utempa = 0; utempa < STLBENTS; utempa++)
-      gvp->stlb[utempa].seg = 0xFFFF;
+      gv.stlb[utempa].seg = 0xFFFF;
     TRACE(T_TLB, "stlb purged at %o/%o by ITLB\n", RPH, RPL);
   } else {
     utempa = STLBIX(utempl);
-    gvp->stlb[utempa].seg = 0xFFFF;
+    gv.stlb[utempa].seg = 0xFFFF;
     TRACE(T_TLB, "stlb[%d] invalidated at %o/%o by ITLB for %o/%o\n", utempa, RPH, RPL, utempl>>16, utempl&0xFFFF);
     if (((utempl >> 16) & 07777) < 4) {
-      gvp->iotlb[(utempl >> 10) & 0xFF].valid = 0;
+      gv.iotlb[(utempl >> 10) & 0xFF].valid = 0;
       TRACE(T_TLB, "iotlb[%d] invalidated at %o/%o by ITLB for %o/%o\n", utempa, RPH, RPL, utempl>>16, utempl&0xFFFF);
     }
   }
@@ -6225,7 +6222,7 @@ irtn:
   newkeys(getar16(PSWKEYS16));
   RP = getar32(PSWPB32);
   putcrs16(PBH, RPH);
-  if (RPL < gvp->livereglim && ((getcrs16(KEYS) & 0016000) != 010000))
+  if (RPL < gv.livereglim && ((getcrs16(KEYS) & 0016000) != 010000))
     RP |= 0x80000000;
   putcrs16(MODALS, getcrs16(MODALS) | 0100000);
 #if 0
@@ -6241,13 +6238,13 @@ irtn:
 d_irtc:  /* 000603 */
   TRACE(T_FLOW, " IRTC\n", inst);
   RESTRICT();
-  gvp->intvec = -1;
+  gv.intvec = -1;
   goto irtn;
 
 d_cai:  /* 000411 */
   TRACE(T_FLOW, " CAI\n", inst);
   RESTRICT();
-  gvp->intvec = -1;
+  gv.intvec = -1;
   goto fetch;
 
   /* R-mode/infrequent gen 0 instructions */
@@ -6315,7 +6312,7 @@ d_cea:  /* 000111 */
 	ea = (ea + getcrs16(X)) & 037777;
       if (!i)                          /* not indirect */
 	break;
-      if (ea < gvp->livereglim)
+      if (ea < gv.livereglim)
 	ea = get16trap(ea);
       else
 	ea = get16(MAKEVA(RPH,ea));
@@ -6326,7 +6323,7 @@ d_cea:  /* 000111 */
   case 3:                       /* 32R */
     while (getcrs16(A) & 0100000) {
       ea = getcrs16(A) & 077777;
-      if (ea < gvp->livereglim)
+      if (ea < gv.livereglim)
 	putcrs16(A, get16trap(ea));
       else
 	putcrs16(A, get16(MAKEVA(RPH,ea)));
@@ -6338,7 +6335,7 @@ d_hlt:  /* 000000 */
   TRACE(T_FLOW, " HLT\n");
   RESTRICT();
   if (bootarg) {
-    printf("\nCPU halt, instruction #%u at %o/%o %s: %o %o ^%06o^\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d", gvp->instcount, RPH, RPL, searchloadmap(gvp->prevpc,' '), get16t(gvp->prevpc), get16t(gvp->prevpc+1), lights, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X));
+    printf("\nCPU halt, instruction #%u at %o/%o %s: %o %o ^%06o^\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d", gv.instcount, RPH, RPL, searchloadmap(gv.prevpc,' '), get16t(gv.prevpc), get16t(gv.prevpc+1), lights, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X));
     while (1) {
       printf("\nPress Enter to continue, h to halt... ");
       utempa = getchar();
@@ -6402,7 +6399,7 @@ d_otkr:  /* 000405 */
   newkeys((getcrs16(A) & 0xFF00) | (getcrs16(KEYS) & 0xFF));
   putcrs16(VSC, (getcrs16(VSC) & 0xFF00) | (getcrs16(A) & 0xFF));
   if ((RP & RINGMASK32) == 0)
-    gvp->inhcount = 1;
+    gv.inhcount = 1;
   goto fetch;
 
 d_esim:  /* 000415 */
@@ -6674,7 +6671,7 @@ d_bdx:  /* 0140734 */
       putcrs16(X, 1);                     /* exit on next loop */
       if (!firstbdx) {
 	//printf("%o ", getcrs16(OWNERL)); fflush(stdout);
-	utempl = gvp->instpermsec*100;    /* limit delay to 100 msecs */
+	utempl = gv.instpermsec*100;    /* limit delay to 100 msecs */
 	for (i=0; i<64; i++)              /* check device timers */
 	  if (devpoll[i])                 /* poll set? */
 	    if (devpoll[i] <= 100) {      /* too fast! */
@@ -6693,7 +6690,7 @@ d_bdx:  /* 0140734 */
 
       utempl--;                         /* utempl = # instructions */
 
-      delayusec = utempl*1000/gvp->instpermsec;
+      delayusec = utempl*1000/gv.instpermsec;
       if (delayusec > 1000) {
 	if (gettimeofday(&tv0, NULL) != 0)
 	  fatal("em: gettimeofday 0 failed");
@@ -6717,7 +6714,7 @@ d_bdx:  /* 0140734 */
 	actualmsec = (tv1.tv_sec-tv0.tv_sec-1)*1000 + (tv1.tv_usec+1000000-tv0.tv_usec)/1000;
 #if 0
 	if (actualmsec > delayusec*1.2/1000) {
-	  TRACEA(" BDX loop at %o/%o, owner=%o, utempl=%d, wanted %d ms, got %d ms\n", gvp->prevpc>>16, gvp->prevpc&0xffff, getcrs16(OWNERL), utempl, delayusec/1000, actualmsec);
+	  TRACEA(" BDX loop at %o/%o, owner=%o, utempl=%d, wanted %d ms, got %d ms\n", gv.prevpc>>16, gv.prevpc&0xffff, getcrs16(OWNERL), utempl, delayusec/1000, actualmsec);
 	}
 #endif
 	/* do timer bookkeeping that would have occurred if we had 
@@ -6737,7 +6734,7 @@ d_bdx:  /* 0140734 */
 	} else {
 	  putcrs16(TIMERL, getcrs16(TIMERL) + utempl);
 	}
-	gvp->instcount += actualmsec*gvp->instpermsec;
+	gv.instcount += actualmsec*gv.instpermsec;
       }
       stopwatch_stop(&sw_idle);
     }
@@ -7625,7 +7622,7 @@ d_smcs:  /* 0101200 */
 
 d_badgen:
   TRACEA(" unrecognized generic instruction!\n");
-  printf("em: #%u %o/%o: Unrecognized generic instruction '%o!\n", gvp->instcount, RPH, RPL, inst);
+  printf("em: #%u %o/%o: Unrecognized generic instruction '%o!\n", gv.instcount, RPH, RPL, inst);
   fault(UIIFAULT, RPL, RP);
   fatal(NULL);
 
@@ -8307,7 +8304,7 @@ dfcmdr:
     case 0071:
       TRACE(T_FLOW, " OTK\n");
       newkeys(getgr16(dr) & 0177770);
-      gvp->inhcount = 1;
+      gv.inhcount = 1;
       break;
 
     case 0052:
@@ -9149,16 +9146,16 @@ dfcmdr:
 imodepcl:
       stopwatch_push(&sw_pcl);
 #if 0
-      TRACE(T_FLOW|T_PCL, "#%u %o/%0o: PCL %o/%o %s\n", gvp->instcount, RPH, RPL-2, ea>>16, ea&0xFFFF, searchloadmap(ea, 'e'));
+      TRACE(T_FLOW|T_PCL, "#%u %o/%0o: PCL %o/%o %s\n", gv.instcount, RPH, RPL-2, ea>>16, ea&0xFFFF, searchloadmap(ea, 'e'));
 #else
       TRACE(T_FLOW|T_PCL, "%o/%0o: PCL %o/%o %s\n", RPH, RPL-2, ea>>16, ea&0xFFFF, searchloadmap(ea, 'e'));
 #endif
 #ifndef NOTRACE
-      if (gvp->numtraceprocs > 0 && TRACEUSER)
-	for (i=0; i<gvp->numtraceprocs; i++)
+      if (gv.numtraceprocs > 0 && TRACEUSER)
+	for (i=0; i<gv.numtraceprocs; i++)
 	  if (traceprocs[i].ecb == (ea & 0xFFFFFFF) && traceprocs[i].sb == -1) {
-	    gvp->traceflags = ~T_MAP;
-	    gvp->savetraceflags = gvp->traceflags;
+	    gv.traceflags = ~T_MAP;
+	    gv.savetraceflags = gv.traceflags;
 	    traceprocs[i].sb = getcrs32s(SB);
 	    printf("Enabled trace for %s at sb '%o/%o\n", traceprocs[i].name, getcrs16(SBH), getcrs16(SBL));
 	    break;
@@ -9637,16 +9634,16 @@ d_jst:  /* 01000 */
      keys are changed w/o calling newkeys(), because amask would
      be wrong (see dispatcher comment) */
 
-  if (gvp->amask == 0177777)
+  if (gv.amask == 0177777)
     m = RPL;
   else
-    m = (get16t(ea) & ~gvp->amask) | RPL;
+    m = (get16t(ea) & ~gv.amask) | RPL;
   put16t(m, ea);
   RP = ea;
   INCRP;
-  gvp->brp[RPBR] = *eap;
+  gv.brp[RPBR] = *eap;
   if ((RP & RINGMASK32) == 0)
-    gvp->inhcount = 1;
+    gv.inhcount = 1;
   goto fetch;
 
 d_cas:  /* 01100 */

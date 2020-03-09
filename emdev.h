@@ -420,7 +420,7 @@ int devasr (int class, int func, int device) {
       else {
 	timeout.tv_sec = 1;        /* single user: okay to delay */
 #ifndef NOTRACE
-	fflush(gvp->tracefile);    /* flush for DIAG testing */
+	fflush(gv.tracefile);    /* flush for DIAG testing */
 #endif
       }
       timeout.tv_usec = 0;
@@ -457,7 +457,7 @@ int devasr (int class, int func, int device) {
       ttyflags = newflags;
       if (doblock) {                    /* doblock = no PX = running diags */
 #ifndef NOTRACE
-	fflush(gvp->tracefile);         /* flush trace buffer when testing */
+	fflush(gv.tracefile);         /* flush trace buffer when testing */
 #endif
 	if (needflush) {
 	  if (fflush(stdout) == 0) {
@@ -481,19 +481,19 @@ readasr:
 	}
       } else if (n == 1) {
 	if (!(getcrs16(MODALS) & 010) && (ch == '')) {
-	  printf("\nRebooting at instruction #%u\n", gvp->instcount);
-	  // gvp->savetraceflags = ~T_MAP;  /****/
+	  printf("\nRebooting at instruction #%u\n", gv.instcount);
+	  // gv.savetraceflags = ~T_MAP;  /****/
 	  longjmp(bootjmp, 1);
 	}
 #ifndef NOTRACE
 	if (ch == '') {
-	  gvp->tracetriggered = !gvp->tracetriggered;
-	  if (gvp->tracetriggered) {
+	  gv.tracetriggered = !gv.tracetriggered;
+	  if (gv.tracetriggered) {
 	    TRACEA("\nTRACE ENABLED:\n\n");
 	  } else {
 	    TRACEA("\nTRACE DISABLED:\n\n");
 	  }
-	  fflush(gvp->tracefile);
+	  fflush(gv.tracefile);
 	  goto readasr;
 	}
 #endif
@@ -521,7 +521,7 @@ readasr:
 	TRACE(T_INST, " character read=%o: %c\n", getcrs16(A), getcrs16(A) & 0x7f);
 	fflush(conslog);         /* immediately flush when typing */
 #ifndef NOTRACE
-	fflush(gvp->tracefile);
+	fflush(gv.tracefile);
 #endif
 	IOSKIP;
       } else {
@@ -582,7 +582,7 @@ readasr:
 	putc(ch, conslog);
       needflush = 1;
       if (devpoll[device] == 0)
-	devpoll[device] = gvp->instpermsec*100;
+	devpoll[device] = gv.instpermsec*100;
       IOSKIP;
     } else if (func == 1) {       /* write control word */
       TRACEA("OTA 4, func %d, A='%o/%d\n", func, getcrs16(A), getcrs16s(A));
@@ -639,7 +639,7 @@ readasr:
       if (fflush(stdout) == 0)
 	needflush = 0;
       else
-	devpoll[device] = gvp->instpermsec*100;
+	devpoll[device] = gv.instpermsec*100;
       fflush(conslog);
     }
   }
@@ -1113,7 +1113,7 @@ int devmt (int class, int func, int device) {
       devpoll[device] = 10;
 
       if ((getcrs16(A) & 0x00E0) == 0x0020) {       /* rewind */
-	//gvp->traceflags = ~T_MAP;
+	//gv.traceflags = ~T_MAP;
 	TRACE(T_TIO, " rewind\n");
 	if (lseek(unit[u].fd, 0, SEEK_SET) == -1) {
 	  perror("Unable to rewind tape drive file");
@@ -1337,9 +1337,9 @@ int devmt (int class, int func, int device) {
     TRACE(T_TIO,  " POLL device '%02o, enabled=%d, interrupting=%d\n", device, enabled, interrupting);
     if (enabled && (interrupting == 1)) {
       devpoll[device] = 100;         /* assume interrupt will be deferred */
-      if (gvp->intvec == -1 && (getcrs16(MODALS) & 0100000)) {
+      if (gv.intvec == -1 && (getcrs16(MODALS) & 0100000)) {
 	TRACE(T_TIO,  " CPU interrupt to vector '%o\n", mtvec);
-	gvp->intvec = mtvec;
+	gv.intvec = mtvec;
 	devpoll[device] = 0;
 	interrupting = 2;
       }
@@ -1432,7 +1432,7 @@ int devcp (int class, int func, int device) {
   unsigned int elapsedms,targetticks;
   int i;
 
-#define SETCLKPOLL devpoll[device] = gvp->instpermsec*(-clkpic*clkrate)/1000;
+#define SETCLKPOLL devpoll[device] = gv.instpermsec*(-clkpic*clkrate)/1000;
 
   switch (class) {
 
@@ -1465,7 +1465,7 @@ int devcp (int class, int func, int device) {
 
     } else if (func == 015) {   /* set interrupt mask */
       /* this enables tracing when the clock process initializes */
-      //gvp->traceflags = ~T_MAP;
+      //gv.traceflags = ~T_MAP;
       //TRACEA("Clock interrupt enabled!\n");
       enabled = 1;
       SETCLKPOLL;
@@ -1492,7 +1492,7 @@ int devcp (int class, int func, int device) {
     if (func == 011) {             /* input ID */
       putcrs16(A, 020);            /* this is the Option-A board */
       putcrs16(A, 0120);           /* this is the SOC board */
-      //gvp->traceflags = ~T_MAP;
+      //gv.traceflags = ~T_MAP;
     } else if (func == 016) {      /* read switches that are up */
       putcrs16(A, sswitch);
     } else if (func == 017) {      /* read switches pushed down */
@@ -1567,8 +1567,8 @@ int devcp (int class, int func, int device) {
     /* interrupt if enabled and no interrupt active */
 
     if (enabled) {
-      if (gvp->intvec == -1) {
-	gvp->intvec = clkvec;
+      if (gv.intvec == -1) {
+	gv.intvec = clkvec;
 	SETCLKPOLL;
 	ticks++;
 	if (gettimeofday(&tv, NULL) != 0)
@@ -1576,7 +1576,7 @@ int devcp (int class, int func, int device) {
 	if (ticks == 0) {
 	  start_tv = tv;
 	  prev_tv = tv;
-	  previnstcount = gvp->instcount;
+	  previnstcount = gv.instcount;
 	  if (datnowea != 0)
 	    initclock(datnowea);
 	} 
@@ -1630,19 +1630,19 @@ int devcp (int class, int func, int device) {
 
 #define IPMTIME 5000
 
-	if ((gvp->instcount < previnstcount) || (gvp->instcount-previnstcount > gvp->instpermsec*IPMTIME)) {
-	  if (gvp->instcount-previnstcount > gvp->instpermsec*IPMTIME) {
-	    i = (gvp->instcount-previnstcount) /
+	if ((gv.instcount < previnstcount) || (gv.instcount-previnstcount > gv.instpermsec*IPMTIME)) {
+	  if (gv.instcount-previnstcount > gv.instpermsec*IPMTIME) {
+	    i = (gv.instcount-previnstcount) /
 	      ((tv.tv_sec-prev_tv.tv_sec)*1000.0 + (tv.tv_usec-prev_tv.tv_usec)/1000.0);
 	    if (i > 0) {
-	      //printf("ic= %u, prev= %u, diff= %u, ipmsec= %d, prev= %d, diff= %d\n", gvp->instcount, previnstcount, gvp->instcount-previnstcount, i, gvp->instpermsec, i-gvp->instpermsec);
-	      gvp->instpermsec = i;
+	      //printf("ic= %u, prev= %u, diff= %u, ipmsec= %d, prev= %d, diff= %d\n", gv.instcount, previnstcount, gv.instcount-previnstcount, i, gv.instpermsec, i-gv.instpermsec);
+	      gv.instpermsec = i;
 	    }
 #ifdef NOIDLE
-	    //printf("\ninstpermsec=%d\n", gvp->instpermsec);
+	    //printf("\ninstpermsec=%d\n", gv.instpermsec);
 #endif
 	  }
-	  previnstcount = gvp->instcount;
+	  previnstcount = gv.instcount;
 	  prev_tv = tv;
 	}
       } else {
@@ -1787,7 +1787,7 @@ int devdisk (int class, int func, int device) {
   }
 
 
-  //gvp->traceflags |= T_DIO;
+  //gv.traceflags |= T_DIO;
 
   switch (class) {
 
@@ -1844,7 +1844,7 @@ int devdisk (int class, int func, int device) {
     TRACE(T_INST|T_DIO, " INA '%2o%2o\n", func, device);
 
     /* this turns tracing on when the Primos disk processes initialize */
-    //gvp->traceflags = ~T_MAP;
+    //gv.traceflags = ~T_MAP;
 
     /* INA's are only accepted when the controller is not busy */
 
@@ -2173,7 +2173,7 @@ int devdisk (int class, int func, int device) {
 
 	if (getcrs16(MODALS) & 010)             /* PX enabled? */
 	  break;                           /* yes, no stall */
-	devpoll[device] = gvp->instpermsec/5;   /* 200 microseconds, sb 210 */
+	devpoll[device] = gv.instpermsec/5;   /* 200 microseconds, sb 210 */
 	return;
 
       case 9: /* DSTAT = Store status to memory */
@@ -2194,13 +2194,13 @@ int devdisk (int class, int func, int device) {
 
       case 14: /* DINT = generate interrupt through vector address */
 	TRACE(T_INST|T_DIO,  " interrupt through '%o\n", m1);
-	if (gvp->intvec >= 0 || !(getcrs16(MODALS) & 0100000))
+	if (gv.intvec >= 0 || !(getcrs16(MODALS) & 0100000))
 	  dc[dx].oar -= 2;     /* can't take interrupt right now */
 	else {
-	  gvp->intvec = m1;
+	  gv.intvec = m1;
 	  dc[dx].state = S_INT;
 	}
-	//gvp->traceflags = ~T_MAP;
+	//gv.traceflags = ~T_MAP;
 	devpoll[device] = 10;
 	return;
 

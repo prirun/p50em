@@ -166,8 +166,8 @@ AMLC status word (from AMLCT5):
 /* macro to setup the next AMLC poll */
 
 #define AMLC_SET_POLL \
-  if (devpoll[device] == 0 || devpoll[device] > AMLCPOLL*gvp->instpermsec/pollspeedup) \
-    devpoll[device] = AMLCPOLL*gvp->instpermsec/pollspeedup;  /* setup another poll */
+  if (devpoll[device] == 0 || devpoll[device] > AMLCPOLL*gv.instpermsec/pollspeedup) \
+    devpoll[device] = AMLCPOLL*gv.instpermsec/pollspeedup;  /* setup another poll */
 
 
 int devamlc (int class, int func, int device) {
@@ -1296,8 +1296,8 @@ dorecv:
     if (class == 4)                    /* this was a poll */
       wascti = 1;
     if (dc[dx].intenable && (wascti || neweor)) {
-      if (gvp->intvec == -1) {
-	gvp->intvec = dc[dx].intvector;
+      if (gv.intvec == -1) {
+	gv.intvec = dc[dx].intvector;
 	dc[dx].interrupting = 1;
       } else
 	devpoll[device] = 100;         /* come back soon! */

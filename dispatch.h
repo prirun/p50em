@@ -40,28 +40,28 @@
 /* set an entry in the R-mode memory reference opcode dispatch table */
 
 #define MRGEN_R(opcode, name, target) \
-  gvp->disp_rmr[MRPRIMEIX(opcode)] = &&target; \
+  gv.disp_rmr[MRPRIMEIX(opcode)] = &&target; \
   /* printf("R-MR opcode %05o (%s), ix=%0d\n", opcode, name, MRPRIMEIX(opcode)); */ \
   if ((opcode & 01700) != 01500) { \
-    gvp->disp_rmr[MRPRIMEIX(opcode | 02000)] = &&target; \
+    gv.disp_rmr[MRPRIMEIX(opcode | 02000)] = &&target; \
     /* printf("R-MR opcode %05o (%s), ix=%0d\n", opcode | 02000, name, MRPRIMEIX(opcode | 02000)); */ \
   }
 
 /* set an entry in the V-mode memory reference opcode dispatch table */
 
 #define MRGEN_V(opcode, name, target) \
-  gvp->disp_vmr[MRPRIMEIX(opcode)] = &&target; \
+  gv.disp_vmr[MRPRIMEIX(opcode)] = &&target; \
   /* printf("V-MR opcode %05o (%s), ix=%0d\n", opcode, name, MRPRIMEIX(opcode)); */ \
   if ((opcode & 01700) != 01500) { \
-    gvp->disp_vmr[MRPRIMEIX(opcode | 02000)] = &&target; \
+    gv.disp_vmr[MRPRIMEIX(opcode | 02000)] = &&target; \
     /* printf("V-MR opcode %05o (%s), ix=%0d\n", opcode | 02000, name, MRPRIMEIX(opcode | 02000)); */ \
   }
 
 /* initialize tables to "bad memory reference instruction" */
 
 for (i=0; i < 128; i++) {
-  gvp->disp_rmr[i] = &&d_badmr;
-  gvp->disp_vmr[i] = &&d_badmr;
+  gv.disp_rmr[i] = &&d_badmr;
+  gv.disp_vmr[i] = &&d_badmr;
 }
 
 MRGEN_R(00100, "JMP", d_jmp);

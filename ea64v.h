@@ -40,7 +40,7 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
     xok = (inst & 036000) != 032000;        /* true if indexing is okay */
 
     br = (inst & 3);
-    eap = &gvp->brp[br];
+    eap = &gv.brp[br];
 
 #ifndef NOTRACE
     int opcode;
@@ -65,8 +65,8 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
 	 NOTE: this has been disabled, because gcov showed it only
 	 occurred 0.5% of the time */
 
-      if (br == 0 && ((((ea_s & 0x8FFF) << 16) | (ea_w & 0xFC00)) == gvp->brp[RPBR].vpn))
-	eap = &gvp->brp[RPBR];
+      if (br == 0 && ((((ea_s & 0x8FFF) << 16) | (ea_w & 0xFC00)) == gv.brp[RPBR].vpn))
+	eap = &gv.brp[RPBR];
 #endif
 
     if (ixy >= 3) {
@@ -84,7 +84,7 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
 	 UNBR if the new ea is still in the current page */
 
       if ((((ea_s & 0x8FFF) << 16) | (ea_w & 0xFC00)) != (eap->vpn & 0x0FFFFFFF))
-	eap = &gvp->brp[UNBR];
+	eap = &gv.brp[UNBR];
 
       if (xok)
 	if (ixy == 7) {
@@ -109,13 +109,13 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
     }
     if (inst & 0400) {
       TRACE(T_EAV, " Short LB relative, LB=%o/%o\n", getcrs16(LBH), getcrs16(LBL));
-      eap = &gvp->brp[LBBR];
+      eap = &gv.brp[LBBR];
       ea_s = getcrs16(LBH) | (ea_s & RINGMASK16);
       ea_w += getcrs16(LBL);
       return MAKEVA(ea_s, ea_w);
     }
-    if (ea_w >= gvp->livereglim) {
-      eap = &gvp->brp[SBBR];
+    if (ea_w >= gv.livereglim) {
+      eap = &gv.brp[SBBR];
       ea_s = getcrs16(SBH) | (ea_s & RINGMASK16);
       ea_w += getcrs16(SBL);
       TRACE(T_EAV, " Short SB relative, SB=%o/%o\n", getcrs16(SBH), getcrs16(SBL));
@@ -135,14 +135,14 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
   if (inst & 001000) {               /* sector bit 7 set? */
     ea_w = rpl + (((short) (inst << 7)) >> 7);   /* yes, sign extend D */
     TRACE(T_EAV, " PC relative, P=%o, new ea_w=%o\n", rpl, ea_w);
-    eap = &gvp->brp[RPBR];
+    eap = &gv.brp[RPBR];
 
   } else {
 #if DBG
     if (!i)
       fatal ("ea64v: i not set?");
 #endif
-    eap = &gvp->brp[S0BR];
+    eap = &gv.brp[S0BR];
     ea_w = (inst & 0777);                        /* sector 0 */
     TRACE(T_EAV, " Sector 0, new ea_w=%o\n", ea_w);
     if (ea_w < 0100 && x) {                      /* preindex by X */
@@ -154,7 +154,7 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
   }
 
   if (i) {
-    if (ea_w >= gvp->livereglim) {
+    if (ea_w >= gv.livereglim) {
       TRACE(T_EAV, " Indirect, ea_s=%o, ea_w=%o\n", ea_s, ea_w);
       ea_w = get16(MAKEVA(ea_s, ea_w));
     } else {
@@ -173,11 +173,11 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
   /* if ea_w is within RP's brp cache page, set eap to match;
      otherwise, use PB's cache page */
 
-  if (ea_w >= gvp->livereglim) {
+  if (ea_w >= gv.livereglim) {
     if (((ea_w ^ RPL) & 0xFC00) == 0)
-      eap = &gvp->brp[RPBR];          /* occurs 80% */
+      eap = &gv.brp[RPBR];          /* occurs 80% */
     else
-      eap = &gvp->brp[PBBR];          /* occurs 20% */
+      eap = &gv.brp[PBBR];          /* occurs 20% */
     return MAKEVA(ea_s, ea_w);
   }
 

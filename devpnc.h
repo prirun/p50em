@@ -333,7 +333,7 @@ char * pncdumppkt(unsigned char * pkt, int len) {
   struct timeval tv1;
 
 #ifndef NOTRACE
-  if (!gvp->traceflags & T_RIO) return;
+  if (!gv.traceflags & T_RIO) return;
 
   if (gettimeofday(&tv1, NULL) != 0)
     fatal("pnc gettimeofday 3 failed");
@@ -868,7 +868,7 @@ int devpnc (int class, int func, int device) {
   struct timeval tv0,tv1;
   double pollts;
 
-  //gvp->traceflags = ~T_MAP;
+  //gv.traceflags = ~T_MAP;
 
   if (class >= 0 && !configured) {
     TRACE(T_INST|T_RIO, "PIO to PNC ignored, class=%d, func='%02o, device=%02o\n", class, func, device);
@@ -1066,7 +1066,7 @@ int devpnc (int class, int func, int device) {
     }
 
     TRACE(T_RIO, "PNC configured\n");
-    devpoll[device] = PNCPOLL*gvp->instpermsec;
+    devpoll[device] = PNCPOLL*gv.instpermsec;
 
     if (gettimeofday(&tv0, NULL) != 0)
       fatal("pnc gettimeofday 1 failed");
@@ -1283,7 +1283,7 @@ int devpnc (int class, int func, int device) {
       devpoll[device] = olddevpoll;
       sawsigio = 0;
     } else {
-      devpoll[device] = PNCPOLL*gvp->instpermsec;
+      devpoll[device] = PNCPOLL*gv.instpermsec;
       time(&timenow);
       pncaccept(timenow);   /* accept 1 new connection each poll */
       pncconnect(timenow);  /* finish a pending connection */
@@ -1295,8 +1295,8 @@ rcvexit:
 
 intrexit:
     if (enabled && ((pncstat & 0xC000) | intstat) != intstat) {
-      if (gvp->intvec == -1) {
-	gvp->intvec = pncvec;
+      if (gv.intvec == -1) {
+	gv.intvec = pncvec;
 	intstat |= (pncstat & 0xC000);
       } else
 	devpoll[device] = 100;
