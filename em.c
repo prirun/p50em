@@ -1,5 +1,3 @@
-#define inline inline __attribute__((always_inline))
-
 /* Pr1me Computer emulator, Jim Wilcoxson (prirun@gmail.com), April 4, 2005
    Copyright (C) 2005-2019, Jim Wilcoxson.  All Rights Reserved.
 
@@ -50,7 +48,7 @@ Enter 'SET DCM' to display CASE messages.
 Enter 'LOAD;RUN' for Default Execution
 
 SAM> 
-   
+
    --------------
    Usage:  to load initial boot from tape, then prompt for disk pdev
 
@@ -107,6 +105,10 @@ gv.tracetriggered = 1; this simulates the Ctrl-t.
 -DNOTRACE disables tracing altogether for increased performance.
 
 */
+
+/* force GCC to honor inline for about a 25% speed-up */
+
+#define inline inline __attribute__((always_inline))
 
 #ifdef __APPLE__
   #define OSX 1
