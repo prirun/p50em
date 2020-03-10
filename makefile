@@ -2,74 +2,30 @@
 
 REV=${shell hg id -n}
 
-.PHONY:	broken brokenp em emp debug debugp trace tracep vfy vfyp fixed fixedp demo demop demol dongleprog lmserver lmserverp magrst magsav parts smad smag mtread mtwrite
+.PHONY:	em emwarn debug trace fixed
 
-em:     # Intel
-
+em:	# normal
 	rm -rf em.o
 	cc -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -Winline em.c -o em
 
-
-emwarn: # Intel
-
+emwarn: # lots of compiler warnings
 	rm -rf em.o
 	cc -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -Wall -Wextra -pedantic -Wconversion em.c -o em
 
-
-debug:   # gdb (Intel)
-
+debug:   # gdb
 	rm -rf em.o
 	cc -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -g -O0 em.c -o em
 
-
-trace:   # tracing + gdb (Intel)
-
+trace:   # tracing
 	rm -rf em.o
 	cc -DREV=\"${REV}\" -DFAST -DNOMEM -O em.c -o em
 
+# the fixed clock rate build is useful for making problems reproduceable.
+#
+# If the emulator crashes on a specific program, run it at the end of 
+# PRIMOS.COMI to get a more consistent instruction count for the
+# failure, then enable tracing a little before that with -trace <IC - 100>
 
-fixed:  # fixed clock rate, gdb (Intel)
-
+fixed:  # fixed clock rate
 	rm -rf em.o
-	cc -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DNOTRACE -DFAST -DNOMEM -g -O0 em.c -o em
-
-
-mtread: # Dump a tape to a .tap disk file (Linux only)
-
-	rm -rf mtread.o
-	cc -o mtread mtread.c
-
-
-mtwrite: # write a physical tape from a .tap file (Linux only)
-
-	rm -rf mtwrite.o
-	cc -o mtwrite mtwrite.c
-
-
-magrst: # Unix version of Prime's magrst
-
-	rm -rf magrst.o
-	cc -arch ppc -DREV=\"${REV}\" -o magrst magrst.c istext.c
-
-
-magsav: # Unix version of Prime's magsav
-
-	rm -rf magsav.o
-	cc -arch ppc -DREV=\"${REV}\" -o magsav magsav.c istext.c
-
-
-parts: # Unix utility to determine parttions in a drive file
-
-	rm -rf parts.o
-	cc -arch ppc -DREV=\"${REV}\" -o parts parts.c
-
-
-smad: # Unix utility to decode Prime pdev
-
-	rm -rf smad.o
-	cc -arch ppc -DREV=\"${REV}\" -o smad smad.c
-
-smag: # Unix create Prime pdev
-
-	rm -rf smag.o
-	cc -arch ppc -DREV=\"${REV}\" -o smag smag.c
+	cc -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DFAST -DNOMEM -O em.c -o em
