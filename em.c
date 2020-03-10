@@ -707,10 +707,6 @@ char *brp_name() {
 }
 #endif
 
-/* nanosecond timer stuff (thanks Jeff!) */
-
-#include "stopwatch.h"
-
 
 /* returns an index to a symbol, based on an address and type
    match; if the address isn't found exactly, the index returned
@@ -896,8 +892,6 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
   unsigned int dtar,sdw,staddr,ptaddr,pmaddr,ppa;
   pa_t pa;
 
-  stopwatch_push(&sw_mapva);
-
 #if 0
   /* fault bit set on EA means an address trap, which should be
      handled at a higher level and never make it this far.
@@ -1016,7 +1010,6 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
   } else {
     pa = ea & MEMMASK;
   }
-  stopwatch_pop(&sw_mapva);
 #ifndef NOMEM
   if (pa < gv.memlimit)
 #endif
@@ -1869,20 +1862,7 @@ static void fatal(char *msg) {
   }
 
   fatal_called = 1;
-
-  stopwatch_stop(&sw_all);
   printf("\n");
-  stopwatch_report(&sw_all);
-  stopwatch_report(&sw_fault);
-  stopwatch_report(&sw_mapva);
-  stopwatch_report(&sw_io);
-  stopwatch_report(&sw_add16);
-  stopwatch_report(&sw_cas);
-  stopwatch_report(&sw_zmv);
-  stopwatch_report(&sw_zfil);
-  stopwatch_report(&sw_zmvd);
-  stopwatch_report(&sw_pcl);
-  stopwatch_report(&sw_idle);
 
   /* XXX: need to log this stuff... */
 
@@ -1991,7 +1971,6 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
   /* NOTE: Prime Hackers Guide says RP is backed for SVC fault, other
      docs say it is current */
 
-  stopwatch_push(&sw_fault);
   if (fvec == PROCESSFAULT || fvec == SVCFAULT || fvec == ARITHFAULT)
     faultrp = RP;
   else
@@ -4218,7 +4197,6 @@ static int add16(unsigned short a1, unsigned short a2, unsigned short a3, ea_t e
   unsigned int uresult;
   int keybits, oflow;
 
-  stopwatch_push(&sw_add16);
   uresult = a1;                            /* expand to higher precision */
   uresult += a2;                           /* double-precision add */
   uresult += a3;                           /* again, for subtract */
@@ -4234,7 +4212,6 @@ static int add16(unsigned short a1, unsigned short a2, unsigned short a3, ea_t e
   putcrs16(KEYS, getcrs16(KEYS) & ~0120300 | keybits);
   if (oflow)
     mathexception('i', FC_INT_OFLOW, ea);
-  stopwatch_pop(&sw_add16);
   return retval;
 }
 
@@ -4338,14 +4315,12 @@ static void pio(unsigned int inst) {
   int func;
   int device;
 
-  stopwatch_push(&sw_io);
   RESTRICT();
   class = inst >> 14;
   func = (inst >> 6) & 017;
   device = inst & 077;
   TRACE(T_FLOW, " pio, class=%d, func='%o, device='%o\n", class, func, device);
   devmap[device](class, func, device);
-  stopwatch_pop(&sw_io);
 }
 
 int main (int argc, char **argv) {
@@ -4944,21 +4919,6 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
     fatal(NULL);
   }
 
-  stopwatch_init(&sw_all, "All");
-  stopwatch_init(&sw_mapva, "mapva");
-  stopwatch_init(&sw_add16, "add16");
-  stopwatch_init(&sw_cas, "cas");
-  stopwatch_init(&sw_irs, "irs");
-  stopwatch_init(&sw_zmv, "zmv");
-  stopwatch_init(&sw_zfil, "zfil");
-  stopwatch_init(&sw_zmvd, "zmvd");
-  stopwatch_init(&sw_io, "io");
-  stopwatch_init(&sw_pcl, "pcl");
-  stopwatch_init(&sw_fault, "fault");   sw_fault.m_bClear = 1;
-  stopwatch_init(&sw_idle, "idle");
-
-  stopwatch_start(&sw_all);
-
   /* main instruction decode loop */
 
   grp = RP;             /* see similar assignments in fault, before longjmp */
@@ -4970,7 +4930,6 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
   if (setjmp(jmpbuf)) {              /* returns 1 on longjmp */
     crsl = gcrsl;
     RP = grp;
-    stopwatch_stop(&sw_fault);
   }
 
 
@@ -5086,13 +5045,11 @@ fetch:
 #define TIMERMASK 0777   /* must be power of 2 - 1 */
 
   if ((gv.instcount & TIMERMASK) == 0) {
-    stopwatch_push(&sw_io);
     for (i=0; i<64; i++)
       if (devpoll[i] && ((devpoll[i] -= (TIMERMASK+1)) <= 0)) {
 	devpoll[i] = 0;
 	devmap[i](4, 0, i);
       }
-    stopwatch_pop(&sw_io);
 
     /* bump the 1ms process timer; docs say to only bump this if px is
        enabled, but since it is nearly all the time in practice, it
@@ -5458,7 +5415,6 @@ d_tfll1:  /* 001333 */
 
 d_prtn:  /* 000611 */
   TRACE(T_FLOW, " PRTN\n");
-  stopwatch_push(&sw_pcl);
   prtn();
 
 #ifndef NOTRACE
@@ -5478,7 +5434,6 @@ d_prtn:  /* 000611 */
 	break;
       }
 #endif
-  stopwatch_pop(&sw_pcl);
   goto fetch;
 
 d_tka:  /* 001005 */
@@ -5573,9 +5528,7 @@ d_stlc:  /* 001204 */
 
 d_argt:  /* 000605 */
   TRACE(T_FLOW|T_PCL, " ARGT\n");
-  stopwatch_push(&sw_pcl);
   argt();
-  stopwatch_pop(&sw_pcl);
   goto fetch;
 
 d_calf:  /* 000705 */
@@ -5632,7 +5585,6 @@ d_calf:  /* 000705 */
   zlen--
 
 d_zmv:  /* 001114 */
-  stopwatch_push(&sw_zmv);
   TRACE(T_FLOW, " ZMV\n");
   zspace = 0240;
   if (getcrs16(KEYS) & 020)
@@ -5658,11 +5610,9 @@ d_zmv:  /* 001114 */
     TRACE(T_FLOW, " zch1=%o (%c)\n", zch1, zch1&0x7f);
     ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
   }
-  stopwatch_pop(&sw_zmv);
   goto fetch;
 
 d_zmvd:  /* 001115 */
-  stopwatch_push(&sw_zmvd);
   TRACE(T_FLOW, " ZMVD\n");
   zlen1 = GETFLR(1);
   zlen2 = zlen1;
@@ -5710,7 +5660,6 @@ d_zmvd:  /* 001115 */
     ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
 #endif
   }
-  stopwatch_pop(&sw_zmvd);
   goto fetch;
 
   /* NOTE: ZFIL is used early after PX enabled, and can be used to cause
@@ -5723,7 +5672,6 @@ d_zmvd:  /* 001115 */
      this isn't a significant overall emulator performance issue. */
 
 d_zfil:  /* 001116 */
-  stopwatch_push(&sw_zfil);
   TRACE(T_FLOW, " ZFIL\n");
   zlen2 = GETFLR(1);
   zea2 = getgr32(FAR1);
@@ -5743,7 +5691,6 @@ d_zfil:  /* 001116 */
     ZPUTC(zea2, zlen2, zcp2, zclen2, zch2);
 #endif
   }
-  stopwatch_pop(&sw_zfil);
   goto fetch;
 
 d_zcm:  /* 001117 */
@@ -6669,7 +6616,6 @@ d_bdx:  /* 0140734 */
 	 much longer sleeps here, ie, CPU overhead is 0.7% while idle.
       */
 
-      stopwatch_start(&sw_idle);
       putcrs16(X, 1);                     /* exit on next loop */
       if (!firstbdx) {
 	//printf("%o ", getcrs16(OWNERL)); fflush(stdout);
@@ -6738,7 +6684,6 @@ d_bdx:  /* 0140734 */
 	}
 	gv.instcount += actualmsec*gv.instpermsec;
       }
-      stopwatch_stop(&sw_idle);
     }
 #endif
     RPL = m;
@@ -9146,7 +9091,6 @@ dfcmdr:
 
     case 1:
 imodepcl:
-      stopwatch_push(&sw_pcl);
 #if 0
       TRACE(T_FLOW|T_PCL, "#%u %o/%0o: PCL %o/%o %s\n", gv.instcount, RPH, RPL-2, ea>>16, ea&0xFFFF, searchloadmap(ea, 'e'));
 #else
@@ -9164,7 +9108,6 @@ imodepcl:
 	  }
 #endif
       pcl(ea);
-      stopwatch_pop(&sw_pcl);
       break;
 
     case 2:
@@ -9649,7 +9592,6 @@ d_jst:  /* 01000 */
   goto fetch;
 
 d_cas:  /* 01100 */
-  stopwatch_push(&sw_cas);
   m = get16t(ea);
   TRACE(T_FLOW, " CAS ='%o/%d\n", m, *(short *)&m);
 
@@ -9682,7 +9624,6 @@ d_cas:  /* 01100 */
   } else if (getcrs16s(A) < *(short *)&m) {
     RPL += 2;
   }
-  stopwatch_pop(&sw_cas);
   goto fetch;
 
 d_irs:  /* 01200 */
