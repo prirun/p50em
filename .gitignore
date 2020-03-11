@@ -5,6 +5,8 @@
 tags
 cscope.*
 em
+emlink
+intsize
 magrst
 magsav
 mtread
@@ -14,6 +16,7 @@ ptextu
 showdrive
 smad
 smag
+strip8
 time
 untap
 untap16

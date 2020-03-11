@@ -1,6 +1,6 @@
 # makefile to create various emulator builds
 
-REV=${shell hg id -n}
+REV=${shell [ -d .hg ] && hg id -n || git rev-parse --short HEAD}
 
 .PHONY:	em emwarn debug trace fixed
 
