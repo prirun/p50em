@@ -14,7 +14,7 @@ Beginning in 2005, Jim Wilcoxson developed an emulator for Prime
 Computer's 50-Series architecture.  The emulator originally ran on
 the PowerPC architecture.  In late 2011, Jim ported it so it would
 run on x86.  This entailed solving endianness issues (The 50-Series
-is big-endian), as well as re-optimizing the code for performanceu
+is big-endian), as well as re-optimizing the code for performance
 without the host processor having a large set of general-purpose
 registers.
 
@@ -50,13 +50,16 @@ business unit ceased to exist.  A reformatted copy is available
 ## Prime Documentation
 
 A growing collection of Prime and related documentation is available
-at [sysovl.info](https://sysovl.info/reference_prime.html).
+at [sysovl.info](https://sysovl.info/reference_prime.html).  A howto
+on installing PRIMOS in the emulator is [here](https://sysovl.info/reference_prime_drb_installing_primos.html).
+Discussion of adapting these instructions to 22.1.4 has been occurring on the [cctalk mailing list](http://classiccmp.org/pipermail/cctalk/2020-March/052126.html).
 
 ## Getting PRIMOS
 
 Two versions of PRIMOS are available from Bitsavers:
 
-* [Rev 22.1.4](http://bitsavers.org/bits/Prime/primos_22.1.4.zip)
+* [Rev 22.1.4](http://bitsavers.org/bits/Prime/primos_22.1.4.zip) [has issues]
+* [Rev 22.1.4 repacked](https://yagi.h-net.org/m2214repack.tar.gz) [use this]
 * [Rev 19.?](http://bitsavers.org/bits/Prime/pps/03_log.tape_I=boot_II=iptpal.tap.gz)
 
 The Rev. 19 tape is a save from an installed system.
