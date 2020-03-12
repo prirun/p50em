@@ -67,6 +67,5 @@ The Rev. 19 tape is a save from an installed system.
 ## Sample System Images
 
 A set of sample system images derived from the public emulators can be
-downloaded to get you started.  The [tarball](https://yagi.h-net.org/p50em_samplemachines.tar.gz)
-is 309078820 bytes, and its sha256sum is 8fe261f7a9f19e9fab2814371387f9cef5c64161fe7cf4bdc542144202678ca9.
-We may rebuild these later and distribute them individually in a more formal fashion.
+downloaded to get you started.  The [tarball](https://yagi.h-net.org/p50em_samplemachines_v2.tar.gz)
+is 291913284 bytes, and its sha256sum is 76bfde3560bfdde6f2ea47ed2abd9d4f09de04dc1c805c751bf51510adb5909a.  V2 removes an extraneous disk image from the Rev 18 directory.  We may rebuild these later and distribute them individually in a more formal fashion.
