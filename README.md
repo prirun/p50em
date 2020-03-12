@@ -63,3 +63,10 @@ Two versions of PRIMOS are available from Bitsavers:
 * [Rev 19.?](http://bitsavers.org/bits/Prime/pps/03_log.tape_I=boot_II=iptpal.tap.gz)
 
 The Rev. 19 tape is a save from an installed system.
+
+## Sample System Images
+
+A set of sample system images derived from the public emulators can be
+downloaded to get you started.  The [tarball](https://yagi.h-net.org/p50em_samplemachines.tar.gz)
+is 309078820 bytes, and its sha256sum is 8fe261f7a9f19e9fab2814371387f9cef5c64161fe7cf4bdc542144202678ca9.
+We may rebuild these later and distribute them individually in a more formal fashion.
