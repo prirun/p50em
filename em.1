@@ -81,15 +81,17 @@ id numbers and model names appears in the CPU MODELS section below.
 .IP
 Specify the settings of the emulated front panel data switches.
 .PP
-\fB-map|-maps \fI[filename]\fR
+\fB-map|-maps \fIfilename...\fR
 .IP
-Specify the name of a PRIMOS load map to read.  Symbols are extracted
-from the map and used to enhance halt and trace output.  May be specified
-more than once.
+Specify the name of one or more PRIMOS load maps to read.  Symbols are
+extracted from the map and used to enhance halt and trace output.
 .PP
 \fB-mem \fImemsize\fR
 .IP
-Set the size of emulated main RAM, in megabytes.
+If support for setting memory size is compiled in, set the size of
+emulated main RAM, in megabytes.  The default is 512 MB.  Not all
+CPU models support this much RAM, but will instead detect a smaller
+size.
 .PP
 \fB-naddr \fIpnclistenaddr\fR
 .IP
@@ -106,23 +108,36 @@ on the host).
 Set the TCP port on which
 .IR em 's
 PNC emulation will listen for connections from other emulated PNCs.
-If not specified, PNC emulation will be disabled.
+If not specified, PNC emulation will be disabled, and error.log will
+report:
+
+.EX
+-nport is zero, PNC not started
+.EE
 .PP
 \fB-ss \fIsenseswitches\fR
 .IP
-Specify the settings of the emulated front panel sense switches.
+Specify the settings of the emulated front panel sense switches.  The
+default sense switch setting is 14114.
 .PP
 \fB-tport \fIamlclistenport\fR
 .IP
 Sets the TCP port on which
 .IR em 's
 AMLC emulation will listen for incoming telnet connections.
-If not specified, AMLC emulation will be disabled.
+If not specified, AMLC emulation will be disabled and error.log
+will report:
+
+.EX
+-tport is zero, AMLC devices not started
+emulator: device '53 failed initialization - device removed
+emulator: device '54 failed initialization - device removed
+.EE
 .PP
 \fB-trace \fItracetype(s)\fR
 .IP
-Select trace types which will be enabled.  Trace elements
-are written to
+If support for tracing is compiled in, select trace types which
+will be enabled.  Trace elements are written to
 .I trace.log
 on the host.  Multiple trace types may be listed, separated by
 spaces.  Tracing may be initially turned off by including the
@@ -137,20 +152,34 @@ accessing disk and tape files in this directory.  Created by
 .IR em .
 .TP
 amlc.cfg
-Used to associate amlc lines with specific hardware devices, or to
-configure outbound socket connections.  Optional.
+Used to associate amlc lines with specific hardware devices, to map
+incoming telnet sessions from specific IP addresses to specific line
+numbers, or to configure outbound socket connections.  Optional.
+Example:
+
+.EX
+6 /dev/ttyUSB0       # Real device
+7 192.168.10.3       # Map incoming telnet to a specific line
+8 192.168.10.4:9000  # Outbound socket connection e.g. for spooler
+.EE
 .TP
 console.log
 All console output is also written to this file.  It is overwritten
 at each invocation.  Created by
 .IR em .
+The
+.B runem
+script included with the samples arranges to preserve console.log
+files in the
+.B logs
+subdirectory with datestamped names.
 .TP
-diskNNuN.TYPE
-A disk image file.
-.I NN
+diskCCuU.TYPE
+A disk image file, or a symlink to such a file.
+.I CC
 indicates the octal address of the controller to which this emulated
 drive is attached.
-.I N
+.I U
 indicates the unit number of the drive on that controller.
 .I TYPE
 indicates the drive model, and thus its size and geometry.  A list of
@@ -166,27 +195,38 @@ A tape image in
 .IR simh .tap
 format, or a symlink to such a file.
 .I N
-is a digit 0-7 indicating which tape drive unit.  An empty mtN file
+is a digit 0-3 indicating which tape drive unit.  An empty mtN file
 will be created if it does not exist when the drive is first written.
 .TP
 ring.cfg
-A list of nodes in the ring network.  Fields are node number,
-ip address and port, unique id (essentially a password).  Only required
-if a ringnet is to be established.
+A list of nodes in the ring network.  Fields are node number (integer
+1-249), ip address and port, unique ID (essentially a password, 16
+hexadecimal digits).  Only required if a ringnet is to be established.  
+Example:
+
+.EX
+1 127.0.0.1:8001 1234567890123456
+.EE
 .TP
 ring0.map
 PRIMOS kernel load map for ring 0 routines.  Will be automatically
 loaded by
 .I em
 if other filenames are not specified.  Symbols extracted from this file
-are used to enhance halt and trace output.  Optional.
+are used to enhance halt and trace output.  Optional.  This may be
+extracted from the
+.B PRIRUN
+directory.
 .TP
 ring3.map
 PRIMOS kernel load map for ring 3 routines.  Will be automatically
 loaded by
 .I em
 if other filenames are not specified.  Symbols extracted from this file
-are used to enhance halt and trace output.  Optional.
+are used to enhance halt and trace output.  Optional.  This may be
+extracted from the
+.B PRIRUN
+directory.
 .TP
 trace.log
 Any selected trace output is written to this file.  It is overwritten
@@ -319,9 +359,8 @@ CMD,1/3/5+1,Cartridge Module 32/64/96 MB
 .TE
 .\" ---------------------------------------------------------------------------
 .SH AUTHOR
-.MT prirun_at_gmail_dot_com
-Jim Wilcoxson
-.ME
+.PP
+This emulator was written by Jim Wilcoxson.  Man page by Dennis Boone.
 .\" ---------------------------------------------------------------------------
 .SH SEE ALSO
 This project is hosted at
