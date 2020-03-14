@@ -41,15 +41,18 @@ Unix utilities to read/write physical tapes & Magsav tapes
 .\" ---------------------------------------------------------------------------
 .SH OPTIONS
 .PP
+If no options are specified, the resulting behavior is equivalent to
+\fBem -boot 14114\fR.
+.PP
 \fB-boot \fIprogram [ss [ds]]\fR
 .IP
 Instructs
 .B em
-to boot the .SAVE-format program in host file
-.I program
-directly.  This is most useful for running standalone utilities such
+to directly boot the .SAVE-format program in host file
+.IR program .
+This is most useful for running standalone utilities such
 as diagnostics or MAKE.  The sense and data switch registers may
-optionally be set.  The register values are specified in octal.
+optionally be set.  These register values are specified in octal.
 .PP
 \fB-boot \fIprogram ["regs"]\fR
 .IP
@@ -81,20 +84,22 @@ Specify the settings of the emulated front panel data switches.
 \fB-map|-maps \fI[filename]\fR
 .IP
 Specify the name of a PRIMOS load map to read.  Symbols are extracted
-from the map and used to enhance halt and trace output.
+from the map and used to enhance halt and trace output.  May be specified
+more than once.
 .PP
-\fB-mem \fImemsizeMB\fR
+\fB-mem \fImemsize\fR
 .IP
-Set the size of emulated main RAM.
+Set the size of emulated main RAM, in megabytes.
 .PP
 \fB-naddr \fIpnclistenaddr\fR
 .IP
-Set the IP address on which
+Set the IP address of the network interface on which
 .IR em 's
 Prime Network Controller will listen for connections from other
 emulated PNCs.  If no external emulated systems will be included
 in the ring network, it may be more secure to use 127.0.0.1 for
-this.  The default is 0.0.0.0 (all interfaces on the host).
+this.  The default is 0.0.0.0 (accept connections via any interface
+on the host).
 .PP
 \fB-nport \fIpnclistenport\fR
 .IP
@@ -120,7 +125,7 @@ Select trace types which will be enabled.  Trace elements
 are written to
 .I trace.log
 on the host.  Multiple trace types may be listed, separated by
-spaces.  Tracing may be initially turned off including the
+spaces.  Tracing may be initially turned off by including the
 .I off
 trace type.
 .\" ---------------------------------------------------------------------------
@@ -128,40 +133,17 @@ trace type.
 .TP
 \fR.lock
 Prevents multiple instances of the emulator from simultaneously
-accessing disk and tape files in this directory.
-.TP
-ring0.map
-PRIMOS kernel load map for ring 0 routines.  Will be automatically
-loaded by
-.I em
-if other names are not specified.  Symbols extracted from this file
-are used to enhance halt and trace output.
-.TP
-ring3.map
-PRIMOS kernel load map for ring 3 routines.  Will be automatically
-loaded by
-.I em
-if other names are not specified.  Symbols extracted from this file
-are used to enhance halt and trace output.
-.TP
-ring.cfg
-A list of nodes in the ring network.  Fields are node number,
-ip address and port, unique id (essentially a password).
+accessing disk and tape files in this directory.  Created by
+.IR em .
 .TP
 amlc.cfg
 Used to associate amlc lines with specific hardware devices, or to
-configure outbound socket connections.
+configure outbound socket connections.  Optional.
 .TP
-ttymsg
-The text in this file is sent on each newly accepted inbound telnet
-connection.
-.TP
-mtN
-A tape image in
-.IR simh .tap
-format, or a symlink to such a file.
-.I N
-is a digit 0-7 indicating which tape drive unit.
+console.log
+All console output is also written to this file.  It is overwritten
+at each invocation.  Created by
+.IR em .
 .TP
 diskNNuN.TYPE
 A disk image file.
@@ -176,15 +158,44 @@ supported drive types appears in the DRIVE TYPE section below.
 .TP
 error.log
 Errors are written to this file during operation.  It is overwritten
-at each invocation.
+at each invocation.  Created by
+.IR em .
 .TP
-console.log
-All console output is also written to this file.  It is overwritten
-at each invocation.
+mtN
+A tape image in
+.IR simh .tap
+format, or a symlink to such a file.
+.I N
+is a digit 0-7 indicating which tape drive unit.  An empty mtN file
+will be created if it does not exist when the drive is first written.
+.TP
+ring.cfg
+A list of nodes in the ring network.  Fields are node number,
+ip address and port, unique id (essentially a password).  Only required
+if a ringnet is to be established.
+.TP
+ring0.map
+PRIMOS kernel load map for ring 0 routines.  Will be automatically
+loaded by
+.I em
+if other filenames are not specified.  Symbols extracted from this file
+are used to enhance halt and trace output.  Optional.
+.TP
+ring3.map
+PRIMOS kernel load map for ring 3 routines.  Will be automatically
+loaded by
+.I em
+if other filenames are not specified.  Symbols extracted from this file
+are used to enhance halt and trace output.  Optional.
 .TP
 trace.log
 Any selected trace output is written to this file.  It is overwritten
-at each invocation.
+at each invocation.  Created by
+.IR em .
+.TP
+ttymsg
+The text in this file is sent on each newly accepted inbound telnet
+connection.  Optional.
 .\" ---------------------------------------------------------------------------
 .SH TRACING
 .PP
@@ -200,8 +211,8 @@ rapidly become very large, and incur a significant performance penalty
 on the emulator.  The following trace types are supported:
 .TS
 tab(|);
-lfB lfB
-l l .
+rfB lfB
+r l .
 Trace type|What is traced
 ear|R-mode effective address calculation
 eav|V-mode effective address calculation
@@ -223,10 +234,10 @@ off|Start with tracing disabled
 all|Everything
 flush|Flush trace file after each write
 tlb|STLB and IOTLB changes
-OWNERL of user#|Trace in the context of this user
-instruction count|Trace after specified number of instructions
-octal segno|Trace execution in the given segment number
-process number|Trace execution of his user number
+OWNERL|Execution of this PCB
+instruction count|Begin after specified number of instructions
+octal segno|Execution in the given segment number
+process number|Execution of this user number
 .TE
 .\" ---------------------------------------------------------------------------
 .SH CPU MODELS
