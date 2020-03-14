@@ -1,0 +1,330 @@
+'\" t
+.\" em.1, Boone, 03/13/20
+.\" Man page for Jim Wilcoxson's Prime 50-Series emulator
+.\" ---------------------------------------------------------------------------
+.TH em 1 "2020-03-14" "Jim Wilcoxson" "50-Series Emulator"
+.\" ---------------------------------------------------------------------------
+.SH NAME
+em \- Emulator for Prime 50-Series systems
+.\" ---------------------------------------------------------------------------
+.SH SYNOPSIS
+.B em [options]
+.\" ---------------------------------------------------------------------------
+.SH DESCRIPTION
+.PP
+.I em
+is an emulator for the Prime 50-Series minicomputer family.  Prime's
+original systems were compatible with Honeywell x16 systems.  Prime
+heavily extended the architecture.  The emulator supports:
+.IP \(bu
+all Prime CPU modes: 16S, 32S, 32R, 64R, 64V, 32I
+.IP \(bu
+all Prime models, from the P400 to P6550
+.IP \(bu
+up to 512MB of memory, depending on the Primos rev and CPU
+.IP \(bu
+a system console
+.IP \(bu
+128 incoming telnet terminal connections
+.IP \(bu
+8 disk controllers, 8 drives each
+.IP \(bu
+support for all 25 disk drives sold by Prime
+.IP \(bu
+a tape controller, 4 drives, using the .TAP format
+.IP \(bu
+a PNC controller emulating RingNet over TCP/IP
+.IP \(bu
+a bypass for Primos system serial number checks
+.IP \(bu
+Unix utilities to read/write physical tapes & Magsav tapes
+.\" ---------------------------------------------------------------------------
+.SH OPTIONS
+.PP
+\fB-boot \fIprogram [ss [ds]]\fR
+.IP
+Instructs
+.B em
+to boot the .SAVE-format program in host file
+.I program
+directly.  This is most useful for running standalone utilities such
+as diagnostics or MAKE.  The sense and data switch registers may
+optionally be set.  The register values are specified in octal.
+.PP
+\fB-boot \fIprogram ["regs"]\fR
+.IP
+As above, but set the initial values of the A, B, X and K registers
+from the RVEC area of the program file.  The word "regs" is literally
+specified on the command line, without the quotes.
+.PP
+\fB-boot \fIss [ds]\fR
+.IP
+Boot the machine based on the front panel interpretation of the
+specified sense and data switch settings.
+.PP
+\fB-boot help\fR
+.IP
+Provide a summary of booting options and exit.
+.PP
+\fB-cpuid \fIidno|modelname\fR
+.IP
+Sets the CPU model which will be emulated.  This may be specified
+using either the id number as returned by the
+.B STPM
+processor instruction, or using the name of the model.  A list of
+id numbers and model names appears in the CPU MODELS section below.
+.PP
+\fB-ds \fIdataswitches\fR
+.IP
+Specify the settings of the emulated front panel data switches.
+.PP
+\fB-map|-maps \fI[filename]\fR
+.IP
+Specify the name of a PRIMOS load map to read.  Symbols are extracted
+from the map and used to enhance halt and trace output.
+.PP
+\fB-mem \fImemsizeMB\fR
+.IP
+Set the size of emulated main RAM.
+.PP
+\fB-naddr \fIpnclistenaddr\fR
+.IP
+Set the IP address on which
+.IR em 's
+Prime Network Controller will listen for connections from other
+emulated PNCs.  If no external emulated systems will be included
+in the ring network, it may be more secure to use 127.0.0.1 for
+this.  The default is 0.0.0.0 (all interfaces on the host).
+.PP
+\fB-nport \fIpnclistenport\fR
+.IP
+Set the TCP port on which
+.IR em 's
+PNC emulation will listen for connections from other emulated PNCs.
+If not specified, PNC emulation will be disabled.
+.PP
+\fB-ss \fIsenseswitches\fR
+.IP
+Specify the settings of the emulated front panel sense switches.
+.PP
+\fB-tport \fIamlclistenport\fR
+.IP
+Sets the TCP port on which
+.IR em 's
+AMLC emulation will listen for incoming telnet connections.
+If not specified, AMLC emulation will be disabled.
+.PP
+\fB-trace \fItracetype(s)\fR
+.IP
+Select trace types which will be enabled.  Trace elements
+are written to
+.I trace.log
+on the host.  Multiple trace types may be listed, separated by
+spaces.  Tracing may be initially turned off including the
+.I off
+trace type.
+.\" ---------------------------------------------------------------------------
+.SH FILES
+.TP
+\fR.lock
+Prevents multiple instances of the emulator from simultaneously
+accessing disk and tape files in this directory.
+.TP
+ring0.map
+PRIMOS kernel load map for ring 0 routines.  Will be automatically
+loaded by
+.I em
+if other names are not specified.  Symbols extracted from this file
+are used to enhance halt and trace output.
+.TP
+ring3.map
+PRIMOS kernel load map for ring 3 routines.  Will be automatically
+loaded by
+.I em
+if other names are not specified.  Symbols extracted from this file
+are used to enhance halt and trace output.
+.TP
+ring.cfg
+A list of nodes in the ring network.  Fields are node number,
+ip address and port, unique id (essentially a password).
+.TP
+amlc.cfg
+Used to associate amlc lines with specific hardware devices, or to
+configure outbound socket connections.
+.TP
+ttymsg
+The text in this file is sent on each newly accepted inbound telnet
+connection.
+.TP
+mtN
+A tape image in
+.IR simh .tap
+format, or a symlink to such a file.
+.I N
+is a digit 0-7 indicating which tape drive unit.
+.TP
+diskNNuN.TYPE
+A disk image file.
+.I NN
+indicates the octal address of the controller to which this emulated
+drive is attached.
+.I N
+indicates the unit number of the drive on that controller.
+.I TYPE
+indicates the drive model, and thus its size and geometry.  A list of
+supported drive types appears in the DRIVE TYPE section below.
+.TP
+error.log
+Errors are written to this file during operation.  It is overwritten
+at each invocation.
+.TP
+console.log
+All console output is also written to this file.  It is overwritten
+at each invocation.
+.TP
+trace.log
+Any selected trace output is written to this file.  It is overwritten
+at each invocation.
+.\" ---------------------------------------------------------------------------
+.SH TRACING
+.PP
+If tracing is compiled into the emulator, it may be enabled from
+the command line.  Event types to log are selected via the
+.B -trace
+option.  Tracing may start enabled or disabled, depending on whether
+the
+.I off
+trace type is supplied.  Tracing may be dynamically turned on and
+off by typing the character ctrl-T on the console.  Trace files can
+rapidly become very large, and incur a significant performance penalty
+on the emulator.  The following trace types are supported:
+.TS
+tab(|);
+lfB lfB
+l l .
+Trace type|What is traced
+ear|R-mode effective address calculation
+eav|V-mode effective address calculation
+eai|I-mode effective address calculation
+eas|S-mode effective address calculation
+inst|Detailed instruction trace
+flow|Summary instruction trace
+mode|CPU mode changes
+eaap|AP effective address calculation
+dio|Disk I/O
+map|Segmentation
+pcl|Procedure calls
+fault|Faults
+px|Process exchange
+tio|Tape I/O
+term|Terminal output
+rio|Ring network I/O
+off|Start with tracing disabled
+all|Everything
+flush|Flush trace file after each write
+tlb|STLB and IOTLB changes
+OWNERL of user#|Trace in the context of this user
+instruction count|Trace after specified number of instructions
+octal segno|Trace execution in the given segment number
+process number|Trace execution of his user number
+.TE
+.\" ---------------------------------------------------------------------------
+.SH CPU MODELS
+.TS
+tab(,) allbox;
+lfB lfB
+l l .
+CPUID,MODEL
+1,400
+3,350
+4,450
+5,750
+7,150
+7,250
+8,850
+9,550
+10,650
+11,2250
+15,9950
+16,9650
+17,2550
+19,9750
+21,2350
+22,2655
+23,9655
+24,9955
+25,2450
+26,4050
+27,4150
+28,6350
+29,6550
+31,2755
+32,2455
+33,5310
+34,9755
+35,2850
+36,2950
+37,5330
+38,4450
+39,5370
+40,6650
+41,6450
+42,6150
+43,5320
+44,5340
+.TE
+.\" ---------------------------------------------------------------------------
+.SH DRIVE TYPES
+.TS
+tab(,) allbox;
+lfB lFB lfB
+l l l .
+Suffix,Heads,Comments
+80M,5,Storage Module
+300M,19,Storage Module
+CMD,1/3/5+1,Cartridge Module 32/64/96 MB
+68M,3,Fixed Media Device
+158M,7,Fixed Media Device
+160M,10,Fixed Media Device
+675M,40,Fixed Media Device
+600M,40,Fixed Media Device
+315M,19,MODEL_4475
+84M,5,MODEL_4714
+60M,4,MODEL_4711
+120M,8,MODEL_4715
+496M,24,MODEL_4735
+258M,17,MODEL_4719
+770M,23,MODEL_4845
+1.1G,27,MODEL_4935
+328A,12,MODEL_4721
+328B,31,MODEL_4721 on 7210 SCSI controller
+817M,15,MODEL_4860
+673M,31,MODEL_4729
+213M,31,MODEL_4730
+421M,31,MODEL_4731
+1.3G,31,MODEL_4732
+1G,31,MODEL_4734
+2G,31,MODEL_4736
+.TE
+.\" ---------------------------------------------------------------------------
+.SH AUTHOR
+.MT prirun_at_gmail_dot_com
+Jim Wilcoxson
+.ME
+.\" ---------------------------------------------------------------------------
+.SH SEE ALSO
+This project is hosted at
+.UR https://github.com/prirun/p50em/
+github
+.UE .
+.PP
+A growing collection of Prime documentation and ephemera is hosted at
+.UR https://sysovl.info/
+.UE .
+.PP
+The simh tape format is described in
+.UR http://simh.trailing-edge.com/docs/simh_magtape.pdf
+.UE .
+.\" ---------------------------------------------------------------------------
+trace types
+
