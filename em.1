@@ -200,12 +200,12 @@ will be created if it does not exist when the drive is first written.
 .TP
 ring.cfg
 A list of nodes in the ring network.  Fields are node number (integer
-1-249), ip address and port, unique ID (essentially a password, 16
-hexadecimal digits).  Only required if a ringnet is to be established.  
+1-249), ip address and port, unique ID (essentially a password, up to 16
+non-space characters).  Only required if a ringnet is to be established.  
 Example:
 
 .EX
-1 127.0.0.1:8001 1234567890123456
+1 127.0.0.1:8001 1234567890123456   # comment
 .EE
 .TP
 ring0.map
