@@ -1508,7 +1508,7 @@ int devcp (int class, int func, int device) {
 
     /* standard Primos always sets a PIC interval of 947 and uses the
        hardware clock rate of 3.2 usec.  This causes a software interrupt
-       every 947*3.2 usec, or 3030.4 milliseconds, and this works out
+       every 947*3.2 usec, or 3.0304 milliseconds, and this works out
        to 330 software interrupts per second.  BUT newer machines tick
        at whatever rate they want and ignore the PIC interval set here.
 
