@@ -66,6 +66,16 @@ The Rev. 19 tape is a save from an installed system.
 
 ## Sample System Images
 
-A set of sample system images derived from the public emulators can be
-downloaded to get you started.  The [tarball](https://yagi.h-net.org/p50em_samplemachines_v2.tar.gz)
-is 291913284 bytes, and its sha256sum is 76bfde3560bfdde6f2ea47ed2abd9d4f09de04dc1c805c751bf51510adb5909a.  V2 removes an extraneous disk image from the Rev 18 directory.  We may rebuild these later and distribute them individually in a more formal fashion.
+A set of sample system images derived from the public emulators can
+be downloaded to get you started.  The 
+[tarball](https://yagi.h-net.org/p50em_samplemachines_v3.tar)
+is 142882727 bytes, and its sha256sum is 
+32647dbcc3a0d541209eafc2f78d054e456d58046c9b3c5bc4ca64a8d9fc0037.
+(gzip compression woud only reduce this by ~400 kilobytes.)
+V3 removes additional junk, and rebuilds the disk images as 600 MB 
+drives, split 30/10 heads filesystem/paging.  This tarball preserves 
+sparse allocation ("holes"), so that uninitialized space in the disk 
+images does not occupy actual space.  You may need to tell `tar` to 
+preserve this sparse allocation when you extract, e.g. with the `-S` 
+option.  Also includes enhancements to the wrapper scripts: directory 
+independence and the ability to run the `runem` script from a terminal.
