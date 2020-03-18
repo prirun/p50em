@@ -71,7 +71,7 @@ be downloaded to get you started.  The
 [tarball](https://yagi.h-net.org/p50em_samplemachines_v3.tar)
 is 142882727 bytes, and its sha256sum is 
 32647dbcc3a0d541209eafc2f78d054e456d58046c9b3c5bc4ca64a8d9fc0037.
-(gzip compression woud only reduce this by ~400 kilobytes.)
+(gzip compression would only reduce this by ~400 kilobytes.)
 V3 removes additional junk, and rebuilds the disk images as 600 MB 
 drives, split 30/10 heads filesystem/paging.  This tarball preserves 
 sparse allocation ("holes"), so that uninitialized space in the disk 
