@@ -1,0 +1,4 @@
+Sample startup for the emulator on MacOS
+
+Customize the em19.launchd file, place it in /Library/LaunchDaemons as
+com.prirun.em19, reboot, and the emulator should start automagically.
