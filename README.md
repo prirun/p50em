@@ -67,17 +67,21 @@ The Rev. 19 tape is a save from an installed system.
 ## Sample System Images
 
 A set of sample system images derived from the public emulators can
-be downloaded to get you started.  The 
+be downloaded to get you started.  These tarballs preserve 
+sparse allocation ("holes"), so that uninitialized space in the disk 
+images does not occupy actual space.  You may need to tell `tar` to 
+preserve this sparse allocation when you extract, e.g. with the `-S` 
+option.
+
+The current
 [tarball](https://sysovl.info/pages/blobs/emulator/p50em_samplemachines_v4.tar)
 is 143510751 bytes, and its sha256sum is 
 f7bf880cb1c7f32903ad85c4f52386cf2179067b8bfcf2c10b51c2e4dcf074dd.
 (gzip compression would only reduce this by ~400 kilobytes.)
+
 V4 corrects ACL problems in the Rev19 and Rev24 images.
 
-V3 removes additional junk, and rebuilds the disk images as 600 MB 
-drives, split 30/10 heads filesystem/paging.  This tarball preserves 
-sparse allocation ("holes"), so that uninitialized space in the disk 
-images does not occupy actual space.  You may need to tell `tar` to 
-preserve this sparse allocation when you extract, e.g. with the `-S` 
-option.  Also includes enhancements to the wrapper scripts: directory 
-independence and the ability to run the `runem` script from a terminal.
+V3 removed additional junk, and rebuildt the disk images as 600 MB 
+drives, split 30/10 heads filesystem/paging.  It also included enhancements 
+to the wrapper scripts: directory independence and the ability to run the 
+`runem` script from a terminal.
