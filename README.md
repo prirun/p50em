@@ -68,10 +68,12 @@ The Rev. 19 tape is a save from an installed system.
 
 A set of sample system images derived from the public emulators can
 be downloaded to get you started.  The 
-[tarball](https://yagi.h-net.org/p50em_samplemachines_v3.tar)
-is 142882727 bytes, and its sha256sum is 
-32647dbcc3a0d541209eafc2f78d054e456d58046c9b3c5bc4ca64a8d9fc0037.
+[tarball](https://sysovl.info/pages/blobs/emulator/p50em_samplemachines_v4.tar)
+is 143510751 bytes, and its sha256sum is 
+f7bf880cb1c7f32903ad85c4f52386cf2179067b8bfcf2c10b51c2e4dcf074dd.
 (gzip compression would only reduce this by ~400 kilobytes.)
+V4 corrects ACL problems in the Rev19 and Rev24 images.
+
 V3 removes additional junk, and rebuilds the disk images as 600 MB 
 drives, split 30/10 heads filesystem/paging.  This tarball preserves 
 sparse allocation ("holes"), so that uninitialized space in the disk 
