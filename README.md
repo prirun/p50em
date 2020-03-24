@@ -74,12 +74,15 @@ preserve this sparse allocation when you extract, e.g. with the `-S`
 option.
 
 The current
-[tarball](https://sysovl.info/pages/blobs/emulator/p50em_samplemachines_v4.tar)
-is 143510751 bytes, and its sha256sum is 
-f7bf880cb1c7f32903ad85c4f52386cf2179067b8bfcf2c10b51c2e4dcf074dd.
+[tarball](https://sysovl.info/pages/blobs/emulator/p50em_samplemachines_v5.tar)
+is 150029183 bytes, and its sha256sum is 
+f5b8008d7c53171f50ad95dd5cc537ba48ca419049518f8ea28deee009c6541a.
 (gzip compression would only reduce this by ~400 kilobytes.)
 
-V4 corrects ACL problems in the Rev19 and Rev24 images.
+V5 adds the source code for PRIMOS 19.2, and the diagnostics programs,
+to that image.
+
+V4 corrected ACL problems in the Rev19 and Rev24 images.
 
 V3 removed additional junk, and rebuilt the disk images as 600 MB 
 drives, split 30/10 heads filesystem/paging.  It also included enhancements 
