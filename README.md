@@ -81,7 +81,7 @@ f7bf880cb1c7f32903ad85c4f52386cf2179067b8bfcf2c10b51c2e4dcf074dd.
 
 V4 corrects ACL problems in the Rev19 and Rev24 images.
 
-V3 removed additional junk, and rebuildt the disk images as 600 MB 
+V3 removed additional junk, and rebuilt the disk images as 600 MB 
 drives, split 30/10 heads filesystem/paging.  It also included enhancements 
 to the wrapper scripts: directory independence and the ability to run the 
 `runem` script from a terminal.
