@@ -20,7 +20,8 @@ registers.
 
 ## Emulator Documentation
 
-Coming soon, we swear!
+Coming soon, we swear!  There is a unix man page included in this
+repository.
 
 ## Public Systems
 
@@ -41,20 +42,34 @@ For example, `telnet em.prirun.com 8001`.
 
 ## Prime History
 
-Some information about the Prime company is available in the FAQ
-which was assembled by denizens of the comp.sys.prime usenet group
-and Info-Prime mailing list around the time Prime's 50-Series
-business unit ceased to exist.  A reformatted copy is available
+Some information about the Prime company is available in the
+FAQ which was assembled by denizens of the comp.sys.prime
+usenet group and Info-Prime mailing list around the time
+Prime's 50-Series business unit ceased to exist.  A
+reformatted copy is available
 [here](https://sysovl.info/reference_prime_faq.html).
 
 ## Prime Documentation
 
-A growing collection of Prime and related documentation is available
-at [sysovl.info](https://sysovl.info/reference_prime.html).  A howto
-on installing PRIMOS in the emulator is [here](https://sysovl.info/reference_prime_drb_installing_primos.html).
-Discussion of adapting these instructions to 22.1.4 has been occurring on the [cctalk mailing list](http://classiccmp.org/pipermail/cctalk/2020-March/052126.html).
+A growing collection of Prime and related documentation is
+available at
+[sysovl.info](https://sysovl.info/reference_prime.html).
+A howto on installing PRIMOS in the emulator is
+[here](https://sysovl.info/reference_prime_drb_installing_primos.html).
+Discussion of adapting these instructions to 22.1.4 has been
+occurring on the
+[cctalk mailing list](http://classiccmp.org/pipermail/cctalk/2020-March/052126.html).
 
 ## Getting PRIMOS
+
+Distribution tape sets for four versions of PRIMOS, with
+small sets of layered products, are available from
+[sysovl.info](https://sysovl.info/downloads_prime_primedist.html):
+
+* Rev 21.0.6, including BASIC, FTN, BRMS, INFORMATION
+* Rev 23.2.0, including BASIC, FTN, MIDASPLUS, DRB, DTB, FS_RECOVER, PL1_LIBRARY
+* Rev 23.4.Y2K,R1, including BASIC, FTN, MIDASPLUS, DRB, DTB, FS_RECOVER, PL1_LIBRARY
+* Rev 24.0.0.r15, including BASIC, FTN, MIDASPLUS, DRB, DTB, FS_RECOVER, PL1_LIBRARY
 
 Two versions of PRIMOS are available from Bitsavers:
 
