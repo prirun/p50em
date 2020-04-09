@@ -2,21 +2,20 @@
 
 ## What Is This?
 
-This is a software emulator for a minicomputer architecture sold
-by Prime Computer from the early 70s through about 1993.  Prime's
-initial business plan was to make systems compatible with the
-Honeywell x16 family, which had then-recently been discontinued.
-Prime extended the architecture heavily.
+This is a software emulator for a minicomputer architecture sold by
+Prime Computer from the early 70s through about 1993.  Prime's initial
+business plan was to make systems compatible with the Honeywell x16
+family, which had then-recently been discontinued.  Prime extended
+the architecture heavily.
 
 ## Emulator History
 
 Beginning in 2005, Jim Wilcoxson developed an emulator for Prime
 Computer's 50-Series architecture.  The emulator originally ran on
 the PowerPC architecture.  In late 2011, Jim ported it so it would
-run on x86.  This entailed solving endianness issues (The 50-Series
-is big-endian), as well as re-optimizing the code for performance
-without the host processor having a large set of general-purpose
-registers.
+run on x86.  This entailed solving endianness issues (The 50-Series is
+big-endian), as well as re-optimizing the code for performance without
+the host processor having a large set of general-purpose registers.
 
 ## Emulator Documentation
 
@@ -25,8 +24,8 @@ repository.
 
 ## Public Systems
 
-There are a set of emulators available for public use.  These may
-be accessed via `telnet` to the appropriate port on `em.prirun.com`.
+There are a set of emulators available for public use.  These may be
+accessed via `telnet` to the appropriate port on `em.prirun.com`.
 
 | PRIMOS Revision | Port |
 |-----------------|------|
@@ -42,28 +41,26 @@ For example, `telnet em.prirun.com 8001`.
 
 ## Prime History
 
-Some information about the Prime company is available in the
-FAQ which was assembled by denizens of the comp.sys.prime
-usenet group and Info-Prime mailing list around the time
-Prime's 50-Series business unit ceased to exist.  A
-reformatted copy is available
+Some information about the Prime company is available in the FAQ
+which was assembled by denizens of the comp.sys.prime usenet group
+and Info-Prime mailing list around the time Prime's 50-Series
+business unit ceased to exist.  A reformatted copy is available
 [here](https://sysovl.info/reference_prime_faq.html).
 
 ## Prime Documentation
 
-A growing collection of Prime and related documentation is
-available at
-[sysovl.info](https://sysovl.info/reference_prime.html).
+A growing collection of Prime and related documentation is available
+at [sysovl.info](https://sysovl.info/reference_prime.html).
 A howto on installing PRIMOS in the emulator is
 [here](https://sysovl.info/reference_prime_drb_installing_primos.html).
-Discussion of adapting these instructions to 22.1.4 has been
-occurring on the
-[cctalk mailing list](http://classiccmp.org/pipermail/cctalk/2020-March/052126.html).
+Discussion of adapting these instructions to
+22.1.4 has been occurring on the [cctalk mailing
+list](http://classiccmp.org/pipermail/cctalk/2020-March/052126.html).
 
 ## Getting PRIMOS
 
-Distribution tape sets for four versions of PRIMOS, with
-small sets of layered products, are available from
+Distribution tape sets for four versions of PRIMOS,
+with small sets of layered products, are available from
 [sysovl.info](https://sysovl.info/downloads_prime_primedist.html):
 
 * Rev 21.0.6, including BASIC, FTN, BRMS, INFORMATION
@@ -71,7 +68,8 @@ small sets of layered products, are available from
 * Rev 23.4.Y2K,R1, including BASIC, FTN, MIDASPLUS, DRB, DTB, FS_RECOVER, PL1_LIBRARY
 * Rev 24.0.0.r15, including BASIC, FTN, MIDASPLUS, DRB, DTB, FS_RECOVER, PL1_LIBRARY
 
-Two versions of PRIMOS are available from Bitsavers:
+Two versions of PRIMOS which are not clean distribution tape sets
+are available from Bitsavers:
 
 * [Rev 22.1.4](http://bitsavers.org/bits/Prime/primos_22.1.4.zip) [has issues]
 * [Rev 22.1.4 repacked](https://yagi.h-net.org/m2214repack.tar.gz) [use this]
@@ -82,15 +80,14 @@ The Rev. 19 tape is a save from an installed system.
 ## Sample System Images
 
 A set of sample system images derived from the public emulators can
-be downloaded to get you started.  These tarballs preserve 
-sparse allocation ("holes"), so that uninitialized space in the disk 
-images does not occupy actual space.  You may need to tell `tar` to 
-preserve this sparse allocation when you extract, e.g. with the `-S` 
-option.
+be downloaded to get you started.  These tarballs preserve sparse
+allocation ("holes"), so that uninitialized space in the disk images
+does not occupy actual space.  You may need to tell `tar` to preserve
+this sparse allocation when you extract, e.g. with the `-S` option.
 
 The current
 [tarball](https://sysovl.info/pages/blobs/emulator/p50em_samplemachines_v5.tar)
-is 150029183 bytes, and its sha256sum is 
+is 150029183 bytes, and its sha256sum is
 f5b8008d7c53171f50ad95dd5cc537ba48ca419049518f8ea28deee009c6541a.
 (gzip compression would only reduce this by ~400 kilobytes.)
 
@@ -99,7 +96,7 @@ to that image.
 
 V4 corrected ACL problems in the Rev19 and Rev24 images.
 
-V3 removed additional junk, and rebuilt the disk images as 600 MB 
-drives, split 30/10 heads filesystem/paging.  It also included enhancements 
-to the wrapper scripts: directory independence and the ability to run the 
-`runem` script from a terminal.
+V3 removed additional junk, and rebuilt the disk images as 600
+MB drives, split 30/10 heads filesystem/paging.  It also included
+enhancements to the wrapper scripts: directory independence and the
+ability to run the `runem` script from a terminal.
