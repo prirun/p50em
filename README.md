@@ -68,14 +68,12 @@ with small sets of layered products, are available from
 * Rev 23.4.Y2K,R1, including BASIC, FTN, MIDASPLUS, DRB, DTB, FS_RECOVER, PL1_LIBRARY
 * Rev 24.0.0.r15, including BASIC, FTN, MIDASPLUS, DRB, DTB, FS_RECOVER, PL1_LIBRARY
 
-Two versions of PRIMOS which are not clean distribution tape sets
+Tapes for two versions of PRIMOS (these are not clean distribution sets)
 are available from Bitsavers:
 
-* [Rev 22.1.4](http://bitsavers.org/bits/Prime/primos_22.1.4.zip) [has issues]
-* [Rev 22.1.4 repacked](https://yagi.h-net.org/m2214repack.tar.gz) [use this]
-* [Rev 19.?](http://bitsavers.org/bits/Prime/pps/03_log.tape_I=boot_II=iptpal.tap.gz)
-
-The Rev. 19 tape is a save from an installed system.
+* [Rev 22.1.4](http://bitsavers.org/bits/Prime/primos_22.1.4.zip) [has issues, written with newer magsav, can't restore itself]
+* [Rev 22.1.4 repacked](https://yagi.h-net.org/m2214repack.tar.gz) [use this instead, resaved with Rev. 22 magsav]
+* [Rev 19.?](http://bitsavers.org/bits/Prime/pps/03_log.tape_I=boot_II=iptpal.tap.gz) [a backup from an installed system]
 
 ## Sample System Images
 
@@ -87,7 +85,7 @@ this sparse allocation when you extract, e.g. with the `-S` option.
 
 The current
 [tarball](https://sysovl.info/pages/blobs/emulator/p50em_samplemachines_v5.tar)
-is 150029183 bytes, and its sha256sum is
+is 150,029,183 bytes, and its sha256sum is
 f5b8008d7c53171f50ad95dd5cc537ba48ca419049518f8ea28deee009c6541a.
 (gzip compression would only reduce this by ~400 kilobytes.)
 
