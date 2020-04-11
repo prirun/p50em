@@ -667,10 +667,10 @@ static in_addr_t bindaddr = INADDR_ANY;     /* -naddr option (PnC/Ringnet) */
 /* load map related data, specified with -map */
 
 #define MAXSYMBOLS 15000
-#define MAXSYMLEN 9
+#define MAXSYMLEN 11
 static int numsyms = 0;
 static struct {
-  char symname[MAXSYMLEN];
+  char symname[MAXSYMLEN+1];
   ea_t address;
   char symtype;                /* o=other, c=common, e=ecb, p=proc, l=linkbase */
 } mapsym[MAXSYMBOLS];
@@ -762,7 +762,7 @@ void addsym(char *sym, unsigned short seg, unsigned short word, char type) {
       for (ix2 = numsyms; ix2 > ix; ix2--)
 	mapsym[ix2] = mapsym[ix2-1];
     //TRACEA("%s = %o/%o\n", sym, seg, words);
-    strcpy(mapsym[ix+1].symname, sym);
+    strncpy(mapsym[ix+1].symname, sym, MAXSYMLEN);
     mapsym[ix+1].address = addr;
     mapsym[ix+1].symtype = type;
     numsyms++;

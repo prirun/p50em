@@ -961,7 +961,7 @@ int devpnc (int class, int func, int device) {
 	  fprintf(stderr,"Line %d of ring.cfg ignored: IP address too long\n", linenum);
 	  continue;
 	}
-	strcpy(temphost, p);
+	strncpy(temphost, p, MAXHOSTLEN);
 
 	if ((p=strtok(NULL, DELIM)) == NULL) {
 	  fprintf(stderr,"Line %d of ring.cfg ignored: unique id/password missing\n", linenum);
@@ -979,14 +979,14 @@ int devpnc (int class, int func, int device) {
 	  }
         if (i <= MAXNODEID)
 	  continue;
-	strcpy(ni[tempid].uid, p);
+	strncpy(ni[tempid].uid, p, MAXUIDLEN);
 
 	/* parse the port number from the IP address */
 
 	tempport = 0;
 	if (strcmp(temphost, "-") != 0) {
 	  if ((p=strtok(temphost, PDELIM)) != NULL) {
-	    strcpy(ni[tempid].host, p);
+	    strncpy(ni[tempid].host, p, MAXHOSTLEN);
 	    if ((p=strtok(NULL, PDELIM)) != NULL) {
 	      tempport = atoi(p);
 	      if (tempport < 1 || tempport > 65000)

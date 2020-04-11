@@ -881,7 +881,7 @@ int devamlc (int class, int func, int device) {
   endconnect:
 	if (allbusy) {
 	  //warn("No free AMLC connection");
-	  strcpy(buf,"\r\nAll available connections are in use.\r\n\n");
+	  strncpy(buf,"\r\nAll available connections are in use.\r\n\n", 2047);
 	  write(fd, buf, strlen(buf));
 	  close(fd);
 	} else {

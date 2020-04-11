@@ -1913,11 +1913,11 @@ int devdisk (int class, int func, int device) {
 	head = m2 & 077;
 	u = dc[dx].usel;
 	if (order == 2)
-	  strcpy(ordertext,"Format");
+	  strncpy(ordertext,"Format", 7);
 	else if (order == 5)
-	  strcpy(ordertext,"Read");
+	  strncpy(ordertext,"Read", 7);
 	else if (order == 6)
-	  strcpy(ordertext,"Write");
+	  strncpy(ordertext,"Write", 7);
 	TRACE(T_INST|T_DIO, "%s, head=%d, track=%d, rec=%d, recsize=%d\n", ordertext, head, track, rec, recsize);
 	if (u == -1) {
 	  fprintf(stderr," Device '%o, order %d with no unit selected\n", device, order);
