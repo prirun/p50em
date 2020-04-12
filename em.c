@@ -4410,6 +4410,7 @@ int main (int argc, char **argv) {
       printf("Open returned %d redirecting stderr\n", templ);
     exit(1);
   }
+  setvbuf(stderr, NULL, _IONBF, 0);
 
   /* initialize global variables */
 
