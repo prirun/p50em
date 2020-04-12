@@ -685,7 +685,7 @@ unsigned short pncxmit1(short nodeid) {
     return 0;
   }
   if (nwritten != ntowrite) {
-    fprintf(stderr, "devpnc: pncxmit1 wrote %d of %d bytes to node %d %d; disconnecting\n", nwritten, ntowrite, nodeid);
+    fprintf(stderr, "devpnc: pncxmit1 wrote %d of %d bytes to node %d; disconnecting\n", nwritten, ntowrite, nodeid);
     pncdisc(nodeid, "partial packet written");
     return 0;
   }
