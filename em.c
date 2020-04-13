@@ -4695,6 +4695,10 @@ int main (int argc, char **argv) {
   for (i=0; i < IOTLBENTS; i++)
     gv.iotlb[i].valid = 0;
   physmem = malloc(gv.memlimit * sizeof(*physmem));
+  if (physmem == NULL) {
+    perror("Error allocating Prime memory block");
+    fatal("Can't allocate Prime memory block");
+  }
   bzero(MEM, 64*1024*2);              /* zero first 64K words */
   
   /* if no maps were specified on the command line, look for ring0.map and 
