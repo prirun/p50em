@@ -2,18 +2,27 @@
 
 REV=${shell [ -d .hg ] && hg id -n || git rev-parse --short HEAD}
 
+em_objs = em.o em
+em_deps = \
+  em.c regs.h emdev.h ea64v.h ea32i.h fp.h dispatch.h geom.h \
+  devpnc.h devamlc.h swap.h
+
 .PHONY:	emwarn debug trace fixed
 
-em:	# normal
+# normal
+em: $(em_deps)
 	$(CC) -DREV=\"${REV}\" -DNOTRACE -DFAST -O -Winline em.c -o em
 
-emwarn: # lots of compiler warnings
+# lots of compiler warnings
+emwarn: $(em_deps)
 	$(CC) -DREV=\"${REV}\" -DNOTRACE -DFAST -O -Wall -Wextra -pedantic -Wconversion em.c -o em
 
-debug:   # gdb
+# gdb
+debug: $(em_deps)
 	$(CC) -DREV=\"${REV}\" -DNOTRACE -DFAST -g -O0 em.c -o em
 
-trace:   # tracing
+# tracing
+trace: $(em_deps)
 	$(CC) -DREV=\"${REV}\" -DFAST -O em.c -o em
 
 # the fixed clock rate build is useful for making problems reproduceable.
@@ -22,8 +31,9 @@ trace:   # tracing
 # PRIMOS.COMI to get a more consistent instruction count for the
 # failure, then enable tracing a little before that with -trace <IC - 100>
 
-fixed:  # fixed clock rate
+# fixed clock rate
+fixed: $(em_deps)
 	$(CC) -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DFAST -O em.c -o em
 
 clean:
-	rm -f em.o em
+	rm -f $(em_objs)
