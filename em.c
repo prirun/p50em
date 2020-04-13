@@ -6,9 +6,6 @@
    - booting from a Prime MAGSAV tape
    - restoring a Prime R-mode .save image from the host file system
 
-   This is a project in development, so please don't publish it or
-   make it available for others to use.
-
    Comments, suggestions, corrections, and general notes that you're
    interested in a Prime emulation project are welcome and
    appreciated.
