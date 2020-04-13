@@ -757,7 +757,8 @@ void pncrecv() {
   for (nodeid=0; nodeid<=MAXNODEID; nodeid++)
     if (ni[nodeid].cstate == PNCCSAUTH) {
       fd = ni[nodeid].fd;
-      FD_SET(fd, &fds);
+      if (fd != -1)
+        FD_SET(fd, &fds);
       if (fd > n)
 	n = fd;
     }
