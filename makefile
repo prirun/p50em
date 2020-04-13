@@ -2,7 +2,7 @@
 
 REV=${shell [ -d .hg ] && hg id -n || git rev-parse --short HEAD}
 
-.PHONY:	em emwarn debug trace fixed
+.PHONY:	emwarn debug trace fixed
 
 em:	# normal
 	$(CC) -DREV=\"${REV}\" -DNOTRACE -DFAST -O -Winline em.c -o em
