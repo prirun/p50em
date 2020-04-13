@@ -4539,7 +4539,7 @@ int main (int argc, char **argv) {
     } else if (strcmp(argv[i],"-mem") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
-	if (1 <= templ && templ <= MAXMB)
+	if (1 <= templ && templ <= 512)
 	  gv.memlimit = templ*1024/2*1024;
 	else
 	  fatal("-mem arg range is 1 to 512 (megabytes)\n");
