@@ -6,19 +6,19 @@ REV=${shell [ -d .hg ] && hg id -n || git rev-parse --short HEAD}
 
 em:	# normal
 	rm -rf em.o
-	cc -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -Winline em.c -o em
+	cc -DREV=\"${REV}\" -DNOTRACE -DFAST -O -Winline em.c -o em
 
 emwarn: # lots of compiler warnings
 	rm -rf em.o
-	cc -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -Wall -Wextra -pedantic -Wconversion em.c -o em
+	cc -DREV=\"${REV}\" -DNOTRACE -DFAST -O -Wall -Wextra -pedantic -Wconversion em.c -o em
 
 debug:   # gdb
 	rm -rf em.o
-	cc -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -g -O0 em.c -o em
+	cc -DREV=\"${REV}\" -DNOTRACE -DFAST -g -O0 em.c -o em
 
 trace:   # tracing
 	rm -rf em.o
-	cc -DREV=\"${REV}\" -DFAST -DNOMEM -O em.c -o em
+	cc -DREV=\"${REV}\" -DFAST -O em.c -o em
 
 # the fixed clock rate build is useful for making problems reproduceable.
 #
@@ -28,4 +28,4 @@ trace:   # tracing
 
 fixed:  # fixed clock rate
 	rm -rf em.o
-	cc -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DFAST -DNOMEM -O em.c -o em
+	cc -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DFAST -O em.c -o em

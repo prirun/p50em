@@ -496,8 +496,6 @@ void *disp_gen[4096];         /* generic dispatch table */
 
 typedef struct {
 
-  unsigned short *physmem;      /* pointer to Prime physical memory */
-
   int memlimit;                 /* user's desired memory limit (-mem) */
 
   int intvec;                   /* currently raised interrupt (if >= zero) */
@@ -581,12 +579,12 @@ static  jmp_buf bootjmp;               /* for longjumps to the fetch loop */
    speed up system boots and diagnostics during emulator testing.
 */
 
-#define MAXMB   512     /* must be a power of 2 */
+#define MAXMB   32     /* must be a power of 2 */
 #define MEMSIZE MAXMB/2*1024*1024
 #define MEMMASK MEMSIZE-1
 #define MEM physmem
 
-static unsigned short physmem[MEMSIZE]; /* system's physical memory */
+static unsigned short *physmem = NULL; /* system's physical memory */
 
 #define get16mem(phyaddr) swap16(MEM[(phyaddr)])
 #define put16mem(phyaddr, val) MEM[(phyaddr)] = swap16((val))
@@ -1012,9 +1010,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
   } else {
     pa = ea & MEMMASK;
   }
-#ifndef NOMEM
   if (pa < gv.memlimit)
-#endif
     return pa;
 #ifdef DBG
   printf(" map: Memory address '%o (%o/%o) is out of range 0-'%o (%o/%o) at #%d!\n", pa, pa>>16, pa & 0xffff, gv.memlimit-1, (gv.memlimit-1)>>16, (gv.memlimit-1) & 0xffff, gv.instcount);
@@ -1871,46 +1867,50 @@ static void fatal(char *msg) {
   printf("Fatal error");
   if (msg)
     printf(": %s", msg);
-  printf("\ninstruction #%u at %o/%o %s ^%06o^\nA='%o/%d  B='%o/%d  L='%o/%d  X='%o/%d K=%o [%s]\nowner=%o %s, modals=%o [%s]\n", gv.instcount, gv.prevpc >> 16, gv.prevpc & 0xFFFF, searchloadmap(gv.prevpc,' '), lights, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X), getcrs16(KEYS), keystring(getcrs16(KEYS)), getcrs16(OWNERL), searchloadmap(getcrs32(OWNER),' '), getcrs16(MODALS), modstring(getcrs16(MODALS)));
+  printf("\n");
   
-  /* dump concealed stack entries */
+  if (physmem != NULL) {
+    printf("instruction #%u at %o/%o %s ^%06o^\nA='%o/%d  B='%o/%d  L='%o/%d  X='%o/%d K=%o [%s]\nowner=%o %s, modals=%o [%s]\n", gv.instcount, gv.prevpc >> 16, gv.prevpc & 0xFFFF, searchloadmap(gv.prevpc,' '), lights, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X), getcrs16(KEYS), keystring(getcrs16(KEYS)), getcrs16(OWNERL), searchloadmap(getcrs32(OWNER),' '), getcrs16(MODALS), modstring(getcrs16(MODALS)));
 
-  if (getcrs16(MODALS) & 010) {   /* process exchange is enabled */
-    pcbp = getcrs32ea(OWNER);     /* my pcb pointer */
-    first = get16r0(pcbp+PCBCSFIRST);
-    next = get16r0(pcbp+PCBCSNEXT);
-    last = get16r0(pcbp+PCBCSLAST);
-    while (next != first) {
-      this = next-6;
-      csea = MAKEVA(getcrs16(OWNERH)+gv.csoffset, this);
-      for (i=0; i<6; i++)
-	cs[i] = get16r0(csea+i);
-      printf("Fault: RP=%o/%o, keys=%06o, fcode=%o, faddr=%o/%o\n", cs[0], cs[1], cs[2], cs[3], cs[4], cs[5]);
-      next = this;
+    /* dump concealed stack entries */
+
+    if (getcrs16(MODALS) & 010) {   /* process exchange is enabled */
+      pcbp = getcrs32ea(OWNER);     /* my pcb pointer */
+      first = get16r0(pcbp+PCBCSFIRST);
+      next = get16r0(pcbp+PCBCSNEXT);
+      last = get16r0(pcbp+PCBCSLAST);
+      while (next != first) {
+	this = next-6;
+	csea = MAKEVA(getcrs16(OWNERH)+gv.csoffset, this);
+	for (i=0; i<6; i++)
+	  cs[i] = get16r0(csea+i);
+	printf("Fault: RP=%o/%o, keys=%06o, fcode=%o, faddr=%o/%o\n", cs[0], cs[1], cs[2], cs[3], cs[4], cs[5]);
+	next = this;
+      }
     }
-  }
 
 #ifndef NOTRACE
-  printf("RP queue:");
-  i = gv.tracerpqx;
-  while(1) {
-    printf(" %o/%o", gv.tracerpq[i]>>16, gv.tracerpq[i]&0xFFFF);
-    i = (i+1) & (MAXRPQ-1);
-    if (i == gv.tracerpqx)
-      break;
-  }
-  printf("\n");
-  printf("STLB calls: %d  misses: %d  hitrate: %5.2f%%\n", gv.mapvacalls, gv.mapvamisses, (double)(gv.mapvacalls-gv.mapvamisses)/gv.mapvacalls*100.0);
-  printf("Supercache calls: %d  misses: %d  hitrate: %5.2f%%\n", gv.supercalls, gv.supermisses, (double)(gv.supercalls-gv.supermisses)/gv.supercalls*100.0);
+    printf("RP queue:");
+    i = gv.tracerpqx;
+    while(1) {
+      printf(" %o/%o", gv.tracerpq[i]>>16, gv.tracerpq[i]&0xFFFF);
+      i = (i+1) & (MAXRPQ-1);
+      if (i == gv.tracerpqx)
+	break;
+    }
+    printf("\n");
+    printf("STLB calls: %d  misses: %d  hitrate: %5.2f%%\n", gv.mapvacalls, gv.mapvamisses, (double)(gv.mapvacalls-gv.mapvamisses)/gv.mapvacalls*100.0);
+    printf("Supercache calls: %d  misses: %d  hitrate: %5.2f%%\n", gv.supercalls, gv.supermisses, (double)(gv.supercalls-gv.supermisses)/gv.supercalls*100.0);
 #endif
 
-  /* should do a register dump, RL dump, PCB dump, etc. here... */
+    /* should do a register dump, RL dump, PCB dump, etc. here... */
 
-  /* call all devices with a request to terminate */
+    /* call all devices with a request to terminate */
 
-  for (i=0; i<64; i++)
-    devmap[i](-2, 0, i);
-
+    for (i=0; i<64; i++)
+      devmap[i](-2, 0, i);
+  }
+  
 #ifndef NOTRACE
   fclose(gv.tracefile);
 #endif
@@ -4414,7 +4414,6 @@ int main (int argc, char **argv) {
 
   /* initialize global variables */
 
-  gv.physmem = physmem;
   gv.intvec = -1;
   gv.instcount = 0;
   gv.inhcount = 0;
@@ -4461,47 +4460,6 @@ int main (int argc, char **argv) {
   /* initialize dispatch tables */
 
 #include "dispatch.h"
-
-  /* master clear:
-     - clear all registers
-     - user register set is 0
-     - modals:
-     -- interrupts inhibited
-     -- standard interrupt mode
-     -- user register set is 0
-     -- non-mapped I/O
-     -- process exchange disabled
-     -- segmentation disabled
-     -- machine checks disabled
-     - keys:
-     -- C, L, LT, EQ clear
-     -- single precision
-     -- 16S mode
-     -- take fault on FP exception
-     -- no fault on integer or decimal exception
-     -- characters have high bit on
-     -- FP rounding disabled
-     -- not in dispatcher
-     -- register set is not saved
-     - set P to '1000
-     - all stlb entries are invalid
-     - all iotlb entries are invalid
-     - clear 64K words of memory
-  */
-
-  for (i=0; i < 32*REGSETS; i++)
-    regs.u32[i] = 0;
-
-  crsl = (void *)regs.sym.userregs[0]; /* first user register set */
-  
-  putcrs16(MODALS, 0);                /* interrupts inhibited */
-  newkeys(0);
-  RP = 01000;
-  for (i=0; i < STLBENTS; i++)
-    gv.stlb[i].seg = 0xFFFF;        /* marker for invalid STLB entry */
-  for (i=0; i < IOTLBENTS; i++)
-    gv.iotlb[i].valid = 0;
-  bzero(MEM, 64*1024*2);              /* zero first 64K words */
 
   domemdump = 0;
   bootarg = NULL;
@@ -4581,7 +4539,6 @@ int main (int argc, char **argv) {
       } else
 	fatal("-cpuid needs an argument\n");
 
-#ifndef NOMEM
     } else if (strcmp(argv[i],"-mem") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
@@ -4591,7 +4548,6 @@ int main (int argc, char **argv) {
 	  fatal("-mem arg range is 1 to 512 (megabytes)\n");
       } else
 	fatal("-mem needs an argument\n");
-#endif
 
     } else if (strcmp(argv[i],"-nport") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
@@ -4702,6 +4658,48 @@ int main (int argc, char **argv) {
 
   TRACEA("Boot sense switches=%06o, data switches=%06o\n", sswitch, dswitch);
 
+  /* master clear:
+     - clear all registers
+     - user register set is 0
+     - modals:
+     -- interrupts inhibited
+     -- standard interrupt mode
+     -- user register set is 0
+     -- non-mapped I/O
+     -- process exchange disabled
+     -- segmentation disabled
+     -- machine checks disabled
+     - keys:
+     -- C, L, LT, EQ clear
+     -- single precision
+     -- 16S mode
+     -- take fault on FP exception
+     -- no fault on integer or decimal exception
+     -- characters have high bit on
+     -- FP rounding disabled
+     -- not in dispatcher
+     -- register set is not saved
+     - set P to '1000
+     - all stlb entries are invalid
+     - all iotlb entries are invalid
+     - clear 64K words of memory
+  */
+
+  for (i=0; i < 32*REGSETS; i++)
+    regs.u32[i] = 0;
+
+  crsl = (void *)regs.sym.userregs[0]; /* first user register set */
+  
+  putcrs16(MODALS, 0);                /* interrupts inhibited */
+  newkeys(0);
+  RP = 01000;
+  for (i=0; i < STLBENTS; i++)
+    gv.stlb[i].seg = 0xFFFF;        /* marker for invalid STLB entry */
+  for (i=0; i < IOTLBENTS; i++)
+    gv.iotlb[i].valid = 0;
+  physmem = malloc(gv.memlimit * sizeof(*physmem));
+  bzero(MEM, 64*1024*2);              /* zero first 64K words */
+  
   /* if no maps were specified on the command line, look for ring0.map and 
      ring3.map in the current directory and read them */
 
