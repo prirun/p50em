@@ -2,6 +2,8 @@
 
 REV=${shell [ -d .hg ] && hg id -n || git rev-parse --short HEAD}
 
+all_deps = makefile
+
 em_objs = em.o em
 em_deps = \
   em.c regs.h emdev.h ea64v.h ea32i.h fp.h dispatch.h geom.h \
@@ -10,19 +12,19 @@ em_deps = \
 .PHONY:	emwarn debug trace fixed
 
 # normal
-em: $(em_deps)
+em: $(em_deps) $(all_deps)
 	$(CC) -DREV=\"${REV}\" -DNOTRACE -DFAST -O -Winline em.c -o em
 
 # lots of compiler warnings
-emwarn: $(em_deps)
+emwarn: $(em_deps) $(all_deps)
 	$(CC) -DREV=\"${REV}\" -DNOTRACE -DFAST -O -Wall -Wextra -pedantic -Wconversion em.c -o em
 
 # gdb
-debug: $(em_deps)
+debug: $(em_deps) $(all_deps)
 	$(CC) -DREV=\"${REV}\" -DNOTRACE -DFAST -g -O0 em.c -o em
 
 # tracing
-trace: $(em_deps)
+trace: $(em_deps) $(all_deps)
 	$(CC) -DREV=\"${REV}\" -DFAST -O em.c -o em
 
 # the fixed clock rate build is useful for making problems reproduceable.
@@ -32,7 +34,7 @@ trace: $(em_deps)
 # failure, then enable tracing a little before that with -trace <IC - 100>
 
 # fixed clock rate
-fixed: $(em_deps)
+fixed: $(em_deps) $(all_deps)
 	$(CC) -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DFAST -O em.c -o em
 
 clean:
