@@ -1583,8 +1583,7 @@ int devcp (int class, int func, int device) {
 	elapsedms = (tv.tv_sec-start_tv.tv_sec)*1000.0 + (tv.tv_usec-start_tv.tv_usec)/1000.0;
 	targetticks = elapsedms/(-clkpic*clkrate/1000);
 #if 0
-	absticks++;
-	if (absticks%1000 == 0 || abs(ticks-targetticks) > 5)
+	if (abs(ticks-targetticks) > 5)
 	  printf("\nClock: target=%d, ticks=%d, offset=%d\n", targetticks, ticks, ticks-targetticks);
 #endif
 
