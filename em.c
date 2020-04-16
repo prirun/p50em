@@ -576,9 +576,7 @@ static  jmp_buf bootjmp;               /* for longjumps to the fetch loop */
    speed up system boots and diagnostics during emulator testing.
 */
 
-#define MAXMB   32     /* must be a power of 2 */
-#define MEMSIZE MAXMB/2*1024*1024
-#define MEMMASK MEMSIZE-1
+#define DEFMB   32     /* must be a power of 2 */
 #define MEM physmem
 
 static unsigned short *physmem = NULL; /* system's physical memory */
@@ -1005,11 +1003,11 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
     pa = stlbp->ppa | (ea & 0x3FF);
     TRACE(T_MAP,"        for ea %o/%o, iacc=%d, stlbix=%d, pa=%o	loaded at #%u\n", ea>>16, ea&0xffff, intacc, stlbix, pa, stlbp->load_ic);
   } else {
-    pa = ea & MEMMASK;
+    pa = ea;
   }
   if (pa < gv.memlimit)
     return pa;
-#ifdef DBG
+#if 0
   printf(" map: Memory address '%o (%o/%o) is out of range 0-'%o (%o/%o) at #%d!\n", pa, pa>>16, pa & 0xffff, gv.memlimit-1, (gv.memlimit-1)>>16, (gv.memlimit-1) & 0xffff, gv.instcount);
 #endif
 
@@ -4463,7 +4461,7 @@ int main (int argc, char **argv) {
   bootfile[0] = 0;
   gv.pmap32bits = 0;
   gv.csoffset = 0;
-  gv.memlimit = MEMSIZE;
+  gv.memlimit = DEFMB;
   tport = 0;
   nport = 0;
 
@@ -4540,7 +4538,7 @@ int main (int argc, char **argv) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
 	if (1 <= templ && templ <= 512)
-	  gv.memlimit = templ*1024/2*1024;
+	  gv.memlimit = templ;
 	else
 	  fatal("-mem arg range is 1 to 512 (megabytes)\n");
       } else
@@ -4694,7 +4692,9 @@ int main (int argc, char **argv) {
     gv.stlb[i].seg = 0xFFFF;        /* marker for invalid STLB entry */
   for (i=0; i < IOTLBENTS; i++)
     gv.iotlb[i].valid = 0;
-  physmem = malloc(gv.memlimit * sizeof(*physmem));
+  gv.memlimit *= 1024 * 1024;         /* memory size in bytes */
+  physmem = malloc(gv.memlimit);
+  gv.memlimit /= sizeof(*physmem);    /* max Prime word address */
   if (physmem == NULL) {
     perror("Error allocating Prime memory block");
     fatal("Can't allocate Prime memory block");
