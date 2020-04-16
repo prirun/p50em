@@ -564,19 +564,23 @@ static  jmp_buf jmpbuf;               /* for longjumps to the fetch loop */
 static  jmp_buf bootjmp;               /* for longjumps to the fetch loop */
 
 /* The standard Prime physical memory limit on early machines is 8MB.
-   Later machines have higher memory capacities, up to 1024MB, using 
-   32-bit page tables. 
+   Later machines have higher memory capacities, up to 1024MB
+   (unsupported in Primos though), using 32-bit page tables.
 
-   NOTE: 
+   NOTE:
+   - rev 19 custom Primos expands memory limit from 16MB to 32MB
+   - rev 19 custom Primos expands 9950 limit from 16MB to 32MB
+   - rev 19 custom Primos *requires* 32MB: Primos memory scan removed
    - rev 20 is limited to a max of 32MB
-   - rev 23.4 is limited to a max of 512MB
+   - rev 23.4 is limited to a max of 512MB (use -cpuid 5340)
+   - rev 23.4 RMS_PROCESS scans & adds memory after Primos is booted
 
-   "memlimit" is set with the -mem argument, taking an argument which is
-   the desired memory limit in MB.  Setting a memory limit is useful to
-   speed up system boots and diagnostics during emulator testing.
+   Prime physical memory size (MB) is set with the -mem argument.
+   Setting a small memory limit speeds up system boots and diagnostics
+   during emulator testing.
 */
 
-#define DEFMB   32     /* must be a power of 2 */
+#define DEFMB 32
 #define MEM physmem
 
 static unsigned short *physmem = NULL; /* system's physical memory */
