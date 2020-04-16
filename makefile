@@ -13,7 +13,7 @@ em_deps = \
 
 # normal
 em: $(em_deps) $(all_deps)
-	$(CC) -DREV=\"${REV}\" -DNOTRACE -DFAST -O -Winline em.c -o em
+	$(CC) -DREV=\"${REV}\" -DNOTRACE -DFAST -O -Winline -Wno-return-type em.c -o em
 
 # lots of compiler warnings
 emwarn: $(em_deps) $(all_deps)
