@@ -1531,6 +1531,7 @@ int devcp (int class, int func, int device) {
 	  clkpic = -1250;
       TRACE(T_INST, "Clock PIC %d requested, set to %d\n", getcrs16s(A), clkpic);
       SETCLKPOLL;
+      ticks = -1;
 
     } else if (func == 07) {
       TRACE(T_INST, "Clock control register set to '%o\n", getcrs16(A));
@@ -1538,6 +1539,7 @@ int devcp (int class, int func, int device) {
 	clkrate = 102.4;
       else
 	clkrate = 3.2;
+      ticks = -1;
       SETCLKPOLL;
 
     } else if (func == 013) {     /* set interrupt vector */
