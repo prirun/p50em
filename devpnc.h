@@ -1060,11 +1060,13 @@ int devpnc (int class, int func, int device) {
        can be disabled, though that may cause problems for rings where
        the max node id > MAXACCEPTTIME because of connect delays */
 
+#ifdef __linux__
     optval = MAXNODEID;
     if (setsockopt(pncfd, IPPROTO_TCP, TCP_DEFER_ACCEPT, &optval, sizeof(optval))) {
       perror("setsockopt TCP_DEFER_ACCEPT failed for PNC");
       fatal(NULL);
     }
+#endif
 
     TRACE(T_RIO, "PNC configured\n");
     devpoll[device] = PNCPOLL*gv.instpermsec;
