@@ -5228,7 +5228,7 @@ xec:
 
   if ((getcrs16(KEYS) & 016000) == 014000) {   /* 64V mode */
     ea = ea64v(inst, earp);
-    TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
+    TRACE(T_FLOW, " EA: %o/%o  %s\n", ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
     goto *(gv.disp_vmr[VMRINSTIX(inst)]);
 
   } else if ((getcrs16(KEYS) & 0016000) == 010000) {  /* E32I */
@@ -5240,17 +5240,17 @@ xec:
 
   } else if (getcrs16(KEYS) & 004000) {        /* 32R/64R */
     ea = ea32r64r(earp, inst);
-    TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
+    TRACE(T_FLOW, " EA: %o/%o\n", ea>>16, ea & 0xFFFF);
     goto *(gv.disp_rmr[RMRINSTIX(inst)]);
 
   } else if (getcrs16(KEYS) & 002000) {
     ea = ea32s(inst);
-    TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
+    TRACE(T_FLOW, " EA: %o/%o\n", ea>>16, ea & 0xFFFF);
     goto *(gv.disp_rmr[SMRINSTIX(inst)]);
 
   } else if ((getcrs16(KEYS) & 016000) == 0) {
     ea = ea16s(inst);
-    TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
+    TRACE(T_FLOW, " EA: %o/%o\n", ea>>16, ea & 0xFFFF);
     goto *(gv.disp_rmr[SMRINSTIX(inst)]);
 
   } else {
