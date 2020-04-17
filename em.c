@@ -4378,9 +4378,6 @@ int main (int argc, char **argv) {
 #define XJ 0312
 #define XRBRACE 0375
 
-  struct timeval boot_tv;
-  struct timezone tz;
-
   printf("[Prime Emulator ver %s %s]\n", REV, __DATE__);
   printf("[Copyright (C) 2005-2019 Jim Wilcoxson prirun@gmail.com]\n");
   if (argc > 1 && (strcmp(argv[1],"--version") == 0)) {
@@ -4917,13 +4914,6 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
     newkeys(rvec[6]);
   }
   RPL = rvec[2];
-
-  /* initialize the timer stuff */
-
-  if (gettimeofday(&boot_tv, &tz) != 0) {
-    perror("gettimeofday failed");
-    fatal(NULL);
-  }
 
   /* main instruction decode loop */
 
