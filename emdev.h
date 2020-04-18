@@ -1530,15 +1530,15 @@ int devcp (int class, int func, int device) {
 	else if (cpuid >= 15)    /* newer machines: 250 ticks/second */
 	  clkpic = -1250;
       TRACE(T_INST, "Clock PIC %d requested, set to %d\n", getcrs16s(A), clkpic);
-      SETCLKPOLL;
       ticks = -1;
+      SETCLKPOLL;
 
     } else if (func == 07) {
-      TRACE(T_INST, "Clock control register set to '%o\n", getcrs16(A));
       if (getcrs16(A) & 020)
 	clkrate = 102.4;
       else
 	clkrate = 3.2;
+      TRACE(T_INST, "Clock control register set to '%o\n", getcrs16(A));
       ticks = -1;
       SETCLKPOLL;
 
@@ -1586,7 +1586,7 @@ int devcp (int class, int func, int device) {
 	targetticks = elapsedms/(-clkpic*clkrate/1000);
 #if 0
 	if (abs(ticks-targetticks) > 5)
-	  printf("\nClock: target=%d, ticks=%d, offset=%d\n", targetticks, ticks, ticks-targetticks);
+	  printf("\nClock: target=%d, ticks=%d, offset=%d, ipms=%d, poll=%d\n", targetticks, ticks, ticks-targetticks, gv.instpermsec, devpoll[device]);
 #endif
 
 	/* if the clock gets way out of whack (eg, because of a host
@@ -1629,7 +1629,7 @@ int devcp (int class, int func, int device) {
 	   XXX: this code should probably be done whether or not the
 	   clock is running */
 
-#define IPMTIME 5000
+#define IPMTIME 1000
 
 	if ((gv.instcount < previnstcount) || (gv.instcount-previnstcount > gv.instpermsec*IPMTIME)) {
 	  if (gv.instcount-previnstcount > gv.instpermsec*IPMTIME) {

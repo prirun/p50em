@@ -4408,12 +4408,16 @@ int main (int argc, char **argv) {
   }
   setvbuf(stderr, NULL, _IONBF, 0);
 
-  /* initialize global variables */
+  /* initialize global variables
+
+     NOTE: if instpermsec is off by more than a factor of 2, it causes
+     some minor clock skew problems during the first few seconds of
+     system boot.  There is debug code in emdev.h/devcp to see this. */
 
   gv.intvec = -1;
   gv.instcount = 0;
   gv.inhcount = 0;
-  gv.instpermsec = 2000;
+  gv.instpermsec = 40000;
   gv.livereglim = 040;
   gv.mapvacalls = 0;
   gv.mapvamisses = 0;
