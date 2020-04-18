@@ -132,6 +132,253 @@ gv.tracetriggered = 1; this simulates the Ctrl-t.
 #include <sys/file.h>
 #include <glob.h>
 
+#define IOTLBENTS 64*4
+#define STLBENTS 512
+
+typedef unsigned int ea_t;            /* effective address */
+typedef unsigned int pa_t;            /* physical address */
+
+/* STLB cache structure is defined here; the actual stlb is in gv.
+   There are several different styles on Prime models.  This is
+   modeled after the 6350 STLB, but is only 1-way associative.
+   The hit rate has been measured to be over 99.8% with a single
+   user.
+
+   Instead of using a valid/invalid bit, a segment number of 0xFFFF
+   (note that the fault, ring, and E bits are set) means "invalid",
+   since it won't match any 12-bit segment number.  This eliminates
+   testing the valid bit in mapva.
+
+   As a speed-up, the unmodified bit is stored in access[2], where
+   Ring 2 access should be kept.  This makes the structure exactly 16
+   bytes, so indexing into the table can use a left shift 4
+   instruction rather than a multiply by 20.  It saves a multiply in
+   the fast path of a _very_ speed-critical routine (mapva).
+*/
+
+#define STLB_UNMODIFIED_BIT 2 /* stored in access[2] */
+
+typedef struct {
+  unsigned int pmaddr;        /* Prime phys addr of page table flag word */
+  unsigned int ppa;           /* physical page address (PPN << 10) */
+  unsigned short procid;      /* process id for segments >= '4000 */
+  short seg;                  /* segment number (0-0xFFF), 0xFFFF = invalid */
+  char access[4];             /* ring n access rights */
+  //char unmodified;            /* 1 = page not modified, 0 = modified */
+  //char shared;                /* 1 if page is shared and can't be cached */
+  //char valid;                 /* 1 if STLB entry is valid, zero otherwise */
+#ifndef NOTRACE
+  unsigned int load_ic;      /* instruction where STLB was loaded, (debug) */
+#endif
+} stlbe_t;
+
+/* The IOTLB stores translations for each page of the I/O segments 0-3 */
+
+typedef struct {
+  unsigned int ppa;           /* physical page address (PPN << 10) */
+  char valid;                 /* 1 if IOTLB entry is valid, zero otherwise */
+} iotlbe_t;
+
+/* the emulator uses a special, very small address translation cache
+   to hold the virtual page address and corresponding MEM[] pointer
+   for a few special pages:
+
+   - the 4 base registers (PBBR, SBBR, LBBR, XBBR)
+   - the current instruction page (RPBR)
+   - sector zero (S0BR) of the current procedure
+   - field address registers 0 and 1 (F0BR, F1BR)
+   - "unknown", used for indirect references (UNBR)
+
+   When an effective address is calculated, eap is set to point to one
+   of these cache entries.  If the EA, which is a virtual address,
+   references the same page as the cache entry pointed to by eap, then
+   the mapva call can be bypassed and the physical memory address
+   calculated using the cache.  If the cache can't be used, either
+   because the entry is invalid, points to a different virtual page,
+   or the access isn't allowed (only for writes), mapva is called to
+   do the mapping and (assuming it doesn't fault) the eap cache entry
+   is updated.
+
+   This special cache is invalidated when the STLB is changed, a ring
+   change occurs, on process exchange, and on LPSW.  For reads, no
+   access checking is needed when the cache is used: the cache entry
+   is either valid, meaning that the program has at least read access
+   to the page, or the cache entry is invalid (special value of
+   0x000000FF, which is not a virtual page address - the right 10 bits
+   must be zero for the start of a page), in which case mapva is
+   called.
+
+   The special cache can also be used for write references.  Bits 2-4
+   of the cache entry vpn are the access bits from mapva, so bit 4
+   being 1 means that writes are allowed.  
+
+   IMPORTANT NOTE: bit 4 MUST BE CHECKED before all write references!
+*/
+
+#define PBBR 0
+#define SBBR 1
+#define LBBR 2
+#define XBBR 3
+#define RPBR 4
+#define S0BR 5
+#define F0BR 6
+#define F1BR 7
+#define UNBR 8
+#define BRP_SIZE 9
+
+/* NOTE: vpn is a segment number/word offset Prime virtual address
+   corresponding to the physical page of memory in memp.  The high-
+   order fault bit of vpn is never set.  The ring and extension bits
+   are used to store the 3-bit access field from the STLB for the
+   current ring.
+
+   All brp entries are invalidated by PCL and PRTN when the ring
+   changes, ITLB, PTLB, and LIOT (STLB changes), when OWNERL changes
+   (process exchange), and on LPSW.
+
+   Storing the access bits in the vpn allows use of of the brp cache
+   for write accesses as well as read accesses.  Only bit 4 (write
+   allowed) is used, but since a 3-bit value comes back from mapva,
+   it's easier just to put it all in vpn.
+
+   IMPORTANT NOTE: the "get" calls do not store the access field in
+   the brp cache entry; the first write to a page must clear the "page
+   unmodified" bit in the Primos page maps, and mapva is the only way
+   to do this.  So the first "put" has to go through mapva.  An
+   alternative would be to store the page map pointer in brp and use
+   bit 3 of vpn as a flag for whether the page map has to be modified,
+   but this is more work for probably little gain.
+ */
+
+typedef struct {
+  unsigned short *memp;       /* MEM[] physical page address */
+  ea_t vpn;                   /* corresponding virtual page address */
+} brp_t;
+
+/* "gv" is a static structure used to hold "hot" global variables.  These
+   are pointed to by a dedicated register, so that the usual PowerPC global
+   variable instructions aren't needed: these variables can be directly
+   referenced by instructions as long as the structure is < 16K bytes. */
+
+typedef struct {
+
+  int memlimit;                 /* user's desired memory limit (-mem) */
+
+  int intvec;                   /* currently raised interrupt (if >= zero) */
+
+  unsigned int instcount;       /* global instruction count */
+
+  brp_t brp[BRP_SIZE];          /* PB, SB, LB, XB, RP, S0, F0, F1, UN */
+
+  unsigned short inhcount;      /* number of instructions to stay inhibited */
+
+  unsigned int instpermsec;     /* instructions executed per millisecond */
+
+  stlbe_t stlb[STLBENTS];       /* the STLB: Segmentation Translation Lookaside Buffer */
+
+  iotlbe_t iotlb[IOTLBENTS];    /* the IOTLB: I/O Translation Lookaside Buffer */
+
+  unsigned int prevpc;          /* backed program counter */
+
+  unsigned short amask;         /* address mask */
+
+  int pmap32bits;               /* true if 32-bit page maps */
+
+  int pmap32mask;               /* mask for 32-bit page maps */
+
+  int csoffset;                 /* concealed stack segment offset */
+
+  unsigned int livereglim;      /* 010 if seg enabled, 040 if disabled */
+
+  int mapvacalls;               /* # of mapva calls */
+  int mapvamisses;              /* STLB misses */
+  int supercalls;               /* brp supercache hits */
+  int supermisses;              /* brp supercache misses */
+
+  void *disp_rmr[128];           /* R-mode memory ref dispatch table */
+  void *disp_vmr[128];           /* V-mode memory ref dispatch table */
+
+#ifndef NOTRACE
+
+/* traceflags is the variable used to test tracing of each instruction
+   traceuser is the user number to trace, 0 meaning any user
+   traceseg is the procedure segment number to trace, 0 meaning any
+   savetraceflags hold the real traceflags, while "traceflags" switches
+   on and off for each instruction
+
+   TRACEUSER is a macro that is true if the current user is being traced
+*/
+
+#define MAXRPQ 8
+
+  FILE *tracefile;              /* trace.log file */
+  int traceflags;               /* each bit is a trace flag */
+  int savetraceflags;
+  unsigned short traceuser;     /* OWNERL to trace */
+  short traceseg;               /* RPH segment # to trace */
+  short numtraceprocs;          /* # of procedures we're tracing */
+  unsigned int traceinstcount;  /* only trace if instcount > this */
+  short tracetriggered;         /* Ctrl-T on console toggles tracing */
+  short tracerpqx;              /* rpq index to store next RP */
+  unsigned int tracerpq[MAXRPQ];/* last 16 locations executed */
+#endif
+
+} gv_t;
+
+static gv_t gv;
+
+/* trace flags to control aspects of emulator tracing:
+
+   T_EAR	trace R-mode effective address calculation
+   T_EAV	trace V-mode effective address calculation
+   T_EAI	trace I-mode effective address calculation
+   T_FLOW       instruction summary
+   T_INST	detailed instruction trace
+   T_MODE       trace CPU mode changes
+   T_EAAP       AP effective address calculation
+   T_DIO        disk I/O
+   T_TIO        tape I/O
+   T_RIO        ring network I/O
+   T_TERM       terminal output (tnou[a])
+   T_MAP        segmentation
+   T_PCL        PCL instructions
+   T_FAULT      Faults
+   T_PX         Process exchange
+   T_LM         License manager
+   T_TLB        STLB and IOTLB changes
+   T_REGS       Puts into registers
+*/
+
+#define T_EAR   0x00000001
+#define T_EAV   0x00000002
+#define T_EAI   0x00000004
+#define T_INST  0x00000008
+#define T_FLOW  0x00000010
+#define T_MODE  0x00000020
+#define T_EAAP  0x00000040
+#define T_DIO   0x00000080
+#define T_MAP   0x00000100
+#define T_PCL   0x00000200
+#define T_FAULT 0x00000400
+#define T_PX    0x00000800
+#define T_TIO   0x00001000
+#define T_TERM  0x00002000
+#define T_RIO   0x00004000
+#define T_LM    0x00008000
+#define T_PUT   0x00010000
+#define T_GET   0x00020000
+#define T_EAS   0x00040000
+#define T_TLB   0x00080000
+#define T_REGS  0x00100000
+
+#ifdef NOTRACE
+  #define TRACE(flags, formatargs...)
+  #define TRACEA(formatargs...)
+#else
+  #define TRACE(flags, formatargs...) if (gv.traceflags & (flags)) fprintf(gv.tracefile,formatargs)
+  #define TRACEA(formatargs...) fprintf(gv.tracefile,formatargs)
+#endif
+
 /* In SR modes, Prime CPU registers are mapped to memory locations
    0-'37, but only 0-7 are user accessible.  In the post-P300
    architecture, these addresses map to the live register file.
@@ -147,8 +394,6 @@ gv.tracetriggered = 1; this simulates the Ctrl-t.
 */
 
 #include "regs.h"
-typedef unsigned int ea_t;            /* effective address */
-typedef unsigned int pa_t;            /* physical address */
 
 /* procs needing forward declarations */
 
@@ -268,58 +513,8 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 
 #define RESTRICTR(rpring) if ((rpring) & RINGMASK32) fault(RESTRICTFAULT, 0, 0);
 
-/* trace flags to control aspects of emulator tracing:
-
-   T_EAR	trace R-mode effective address calculation
-   T_EAV	trace V-mode effective address calculation
-   T_EAI	trace I-mode effective address calculation
-   T_FLOW       instruction summary
-   T_INST	detailed instruction trace
-   T_MODE       trace CPU mode changes
-   T_EAAP       AP effective address calculation
-   T_DIO        disk I/O
-   T_TIO        tape I/O
-   T_RIO        ring network I/O
-   T_TERM       terminal output (tnou[a])
-   T_MAP        segmentation
-   T_PCL        PCL instructions
-   T_FAULT      Faults
-   T_PX         Process exchange
-   T_LM         License manager
-   T_TLB        STLB and IOTLB changes
-*/
-
-#define T_EAR   0x00000001
-#define T_EAV   0x00000002
-#define T_EAI   0x00000004
-#define T_INST  0x00000008
-#define T_FLOW  0x00000010
-#define T_MODE  0x00000020
-#define T_EAAP  0x00000040
-#define T_DIO   0x00000080
-#define T_MAP   0x00000100
-#define T_PCL   0x00000200
-#define T_FAULT 0x00000400
-#define T_PX    0x00000800
-#define T_TIO   0x00001000
-#define T_TERM  0x00002000
-#define T_RIO   0x00004000
-#define T_LM    0x00008000
-#define T_PUT   0x00010000
-#define T_GET   0x00020000
-#define T_EAS   0x00040000
-#define T_TLB   0x00080000
-
 #define BITMASK16(b) (0x8000 >> ((b)-1))
 #define BITMASK32(b) ((unsigned int)(0x80000000) >> ((b)-1))
-
-#ifdef NOTRACE
-  #define TRACE(flags, formatargs...)
-  #define TRACEA(formatargs...)
-#else
-  #define TRACE(flags, formatargs...) if (gv.traceflags & (flags)) fprintf(gv.tracefile,formatargs)
-  #define TRACEA(formatargs...) fprintf(gv.tracefile,formatargs)
-#endif
 
 /* traceprocs is an array of (operating system) procedure names we're
    tracing, with flags and associated data
@@ -354,129 +549,9 @@ static unsigned short firstbdx = 0;         /* backstop sleep flag */
 
 static unsigned short cpuid = 15;      /* STPM CPU model, set with -cpuid */
 
-/* STLB cache structure is defined here; the actual stlb is in gv.
-   There are several different styles on Prime models.  This is
-   modeled after the 6350 STLB, but is only 1-way associative.
-   The hit rate has been measured to be over 99.8% with a single
-   user.
-
-   Instead of using a valid/invalid bit, a segment number of 0xFFFF
-   (note that the fault, ring, and E bits are set) means "invalid",
-   since it won't match any 12-bit segment number.  This eliminates
-   testing the valid bit in mapva.
-
-   As a speed-up, the unmodified bit is stored in access[2], where
-   Ring 2 access should be kept.  This makes the structure exactly 16
-   bytes, so indexing into the table can use a left shift 4
-   instruction rather than a multiply by 20.  It saves a multiply in
-   the fast path of a _very_ speed-critical routine (mapva).
-*/
-
-#define STLBENTS 512
-#define STLB_UNMODIFIED_BIT 2 /* stored in access[2] */
-
-typedef struct {
-  unsigned int pmaddr;        /* Prime phys addr of page table flag word */
-  unsigned int ppa;           /* physical page address (PPN << 10) */
-  unsigned short procid;      /* process id for segments >= '4000 */
-  short seg;                  /* segment number (0-0xFFF), 0xFFFF = invalid */
-  char access[4];             /* ring n access rights */
-  //char unmodified;            /* 1 = page not modified, 0 = modified */
-  //char shared;                /* 1 if page is shared and can't be cached */
-  //char valid;                 /* 1 if STLB entry is valid, zero otherwise */
-#ifndef NOTRACE
-  unsigned int load_ic;      /* instruction where STLB was loaded, (debug) */
-#endif
-} stlbe_t;
-
-/* The IOTLB stores translations for each page of the I/O segments 0-3 */
-
-#define IOTLBENTS 64*4
-
-typedef struct {
-  unsigned int ppa;           /* physical page address (PPN << 10) */
-  char valid;                 /* 1 if IOTLB entry is valid, zero otherwise */
-} iotlbe_t;
-
 /* maximum indirect levels is 8 according to T&M CPUT4 */
 
 #define INDLEVELS 8
-
-/* the emulator uses a special, very small address translation cache
-   to hold the virtual page address and corresponding MEM[] pointer
-   for a few special pages:
-
-   - the 4 base registers (PBBR, SBBR, LBBR, XBBR)
-   - the current instruction page (RPBR)
-   - sector zero (S0BR) of the current procedure
-   - field address registers 0 and 1 (F0BR, F1BR)
-   - "unknown", used for indirect references (UNBR)
-
-   When an effective address is calculated, eap is set to point to one
-   of these cache entries.  If the EA, which is a virtual address,
-   references the same page as the cache entry pointed to by eap, then
-   the mapva call can be bypassed and the physical memory address
-   calculated using the cache.  If the cache can't be used, either
-   because the entry is invalid, points to a different virtual page,
-   or the access isn't allowed (only for writes), mapva is called to
-   do the mapping and (assuming it doesn't fault) the eap cache entry
-   is updated.
-
-   This special cache is invalidated when the STLB is changed, a ring
-   change occurs, on process exchange, and on LPSW.  For reads, no
-   access checking is needed when the cache is used: the cache entry
-   is either valid, meaning that the program has at least read access
-   to the page, or the cache entry is invalid (special value of
-   0x000000FF, which is not a virtual page address - the right 10 bits
-   must be zero for the start of a page), in which case mapva is
-   called.
-
-   The special cache can also be used for write references.  Bits 2-4
-   of the cache entry vpn are the access bits from mapva, so bit 4
-   being 1 means that writes are allowed.  
-
-   IMPORTANT NOTE: bit 4 MUST BE CHECKED before all write references!
-*/
-
-#define PBBR 0
-#define SBBR 1
-#define LBBR 2
-#define XBBR 3
-#define RPBR 4
-#define S0BR 5
-#define F0BR 6
-#define F1BR 7
-#define UNBR 8
-#define BRP_SIZE 9
-
-/* NOTE: vpn is a segment number/word offset Prime virtual address
-   corresponding to the physical page of memory in memp.  The high-
-   order fault bit of vpn is never set.  The ring and extension bits
-   are used to store the 3-bit access field from the STLB for the
-   current ring.
-
-   All brp entries are invalidated by PCL and PRTN when the ring
-   changes, ITLB, PTLB, and LIOT (STLB changes), when OWNERL changes
-   (process exchange), and on LPSW.
-
-   Storing the access bits in the vpn allows use of of the brp cache
-   for write accesses as well as read accesses.  Only bit 4 (write
-   allowed) is used, but since a 3-bit value comes back from mapva,
-   it's easier just to put it all in vpn.
-
-   IMPORTANT NOTE: the "get" calls do not store the access field in
-   the brp cache entry; the first write to a page must clear the "page
-   unmodified" bit in the Primos page maps, and mapva is the only way
-   to do this.  So the first "put" has to go through mapva.  An
-   alternative would be to store the page map pointer in brp and use
-   bit 3 of vpn as a flag for whether the page map has to be modified,
-   but this is more work for probably little gain.
- */
-
-typedef struct {
-  unsigned short *memp;       /* MEM[] physical page address */
-  ea_t vpn;                   /* corresponding virtual page address */
-} brp_t;
 
 /* the dispatch table for generic instructions:
    - bits 1-2 are the class (0-3)
@@ -485,78 +560,6 @@ typedef struct {
    the index into the table is bits 1-2_7-16, for a 12-bit index */
 
 void *disp_gen[4096];         /* generic dispatch table */
-
-/* "gv" is a static structure used to hold "hot" global variables.  These
-   are pointed to by a dedicated register, so that the usual PowerPC global
-   variable instructions aren't needed: these variables can be directly
-   referenced by instructions as long as the structure is < 16K bytes. */
-
-typedef struct {
-
-  int memlimit;                 /* user's desired memory limit (-mem) */
-
-  int intvec;                   /* currently raised interrupt (if >= zero) */
-
-  unsigned int instcount;       /* global instruction count */
-
-  brp_t brp[BRP_SIZE];          /* PB, SB, LB, XB, RP, S0, F0, F1, UN */
-
-  unsigned short inhcount;      /* number of instructions to stay inhibited */
-
-  unsigned int instpermsec;     /* instructions executed per millisecond */
-
-  stlbe_t stlb[STLBENTS];       /* the STLB: Segmentation Translation Lookaside Buffer */
-
-  iotlbe_t iotlb[IOTLBENTS];    /* the IOTLB: I/O Translation Lookaside Buffer */
-
-  unsigned int prevpc;          /* backed program counter */
-
-  unsigned short amask;         /* address mask */
-
-  int pmap32bits;               /* true if 32-bit page maps */
-
-  int pmap32mask;               /* mask for 32-bit page maps */
-
-  int csoffset;                 /* concealed stack segment offset */
-
-  unsigned int livereglim;      /* 010 if seg enabled, 040 if disabled */
-
-  int mapvacalls;               /* # of mapva calls */
-  int mapvamisses;              /* STLB misses */
-  int supercalls;               /* brp supercache hits */
-  int supermisses;              /* brp supercache misses */
-
-  void *disp_rmr[128];           /* R-mode memory ref dispatch table */
-  void *disp_vmr[128];           /* V-mode memory ref dispatch table */
-
-#ifndef NOTRACE
-
-/* traceflags is the variable used to test tracing of each instruction
-   traceuser is the user number to trace, 0 meaning any user
-   traceseg is the procedure segment number to trace, 0 meaning any
-   savetraceflags hold the real traceflags, while "traceflags" switches
-   on and off for each instruction
-
-   TRACEUSER is a macro that is true if the current user is being traced
-*/
-
-#define MAXRPQ 8
-
-  FILE *tracefile;              /* trace.log file */
-  int traceflags;               /* each bit is a trace flag */
-  int savetraceflags;
-  unsigned short traceuser;     /* OWNERL to trace */
-  short traceseg;               /* RPH segment # to trace */
-  short numtraceprocs;          /* # of procedures we're tracing */
-  unsigned int traceinstcount;  /* only trace if instcount > this */
-  short tracetriggered;         /* Ctrl-T on console toggles tracing */
-  short tracerpqx;              /* rpq index to store next RP */
-  unsigned int tracerpq[MAXRPQ];/* last 16 locations executed */
-#endif
-
-} gv_t;
-
-static gv_t gv;
 
 brp_t *eap;
 
@@ -1126,9 +1129,15 @@ static inline unsigned short get16(ea_t ea) {
 
 static unsigned short get16trap(ea_t ea) {
 
+  unsigned short zzz;
+
   ea = ea & 0xFFFF;
   if (ea < 7)
-    return getcrs16(memtocrs[ea]);
+  {
+    zzz = getcrs16(memtocrs[ea]);
+	TRACE(T_REGS, "  get16trap: ea %012o contents %06o\n", ea, zzz);
+    return zzz;
+  }
   if (ea == 7)                   /* PC */
     return RPL;
   RESTRICTR(RP);
@@ -4615,6 +4624,8 @@ int main (int argc, char **argv) {
 	  setlinebuf(gv.tracefile);
 	else if (strcmp(argv[i],"tlb") == 0)
 	  gv.traceflags |= T_TLB;
+	else if (strcmp(argv[i],"regs") == 0)
+	  gv.traceflags |= T_REGS;
 	else if (isdigit(argv[i][0]) && strlen(argv[i]) <= 3 && sscanf(argv[i],"%d", &templ) == 1)
 	  gv.traceuser = 0100000 | (templ<<6);   /* form OWNERL for user # */
 	else if (isdigit(argv[i][0]) && sscanf(argv[i],"%d", &templ) == 1)

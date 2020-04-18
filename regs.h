@@ -6,6 +6,8 @@
 
 #define REGSETS 10
 
+#define T_REGS  0x00100000
+
 /* these are 16-bit absolute offsets into the register file */
 
 #define PSWKEYS16 031*2
@@ -292,6 +294,7 @@ static inline uint16_t getcrs16(int offset) {  \
 /* store 16-bit unsigned at 16-bit offset */
 //#define putcrs16(offset, val) crs[(offset)] = (val)
 static inline void putcrs16(int offset, uint16_t val) {  \
+  TRACE(T_REGS, "  putcrs16: offset %d val %06o\n", offset, val);
   crs[(offset)] = swap16(val); \
 }
 
@@ -312,6 +315,7 @@ static inline uint32_t getcrs32(int offset) {  \
 /* put 32-bit unsigned at 16-bit offset */
 //#define putcrs32(offset, val) *(unsigned int *)(crs+(offset)) = (val)
 static inline void putcrs32(int offset, uint32_t val) {  \
+  TRACE(T_REGS, "  putcrs32: offset %d val %012lo\n", offset, val);
   *(unsigned int *)(crs+offset) = swap32(val);  \
 }
 
@@ -352,6 +356,7 @@ static inline uint16_t getar16(int offset) {  \
 
 /* put 16-bit unsigned at 16-bit absolute register file address */
 static inline void putar16(int offset, uint16_t val) {  \
+  TRACE(T_REGS, "  putar16: offset %d val %06o\n", offset, val);
   regs.u16[(offset)] = swap16(val); \
 }
 
