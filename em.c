@@ -1322,7 +1322,7 @@ static inline unsigned short iget16(ea_t ea) {
 }
 
 #else
-#define iget16(ea) get16((ea))
+#define iget16(ea) get16t((ea))
 #define iget16t(ea) get16t((ea))
 #endif
 
