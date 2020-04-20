@@ -1300,31 +1300,15 @@ static long long get64r(ea_t ea, ea_t rpring) {
    page instead of on every 16-bit fetch from the instruction stream.
 */
 
-#ifdef FAST
-
-unsigned short iget16t(ea_t ea) {
-  unsigned short access;
-
-  if (*(int *)&ea >= 0) {
-    gv.brp[RPBR].memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
-    gv.brp[RPBR].vpn = ea & 0x0FFFFC00;
-    return swap16(gv.brp[RPBR].memp[ea & 0x3FF]);
-  }
-  return get16trap(ea);
+static inline unsigned short iget16t(ea_t ea) {
+  eap = &gv.brp[RPBR];
+  return get16t(ea);
 }
 
 static inline unsigned short iget16(ea_t ea) {
-
-  if ((ea & 0x8FFFFC00) == (gv.brp[RPBR].vpn & 0x0FFFFFFF))
-    return swap16(gv.brp[RPBR].memp[ea & 0x3FF]);
-  else
-    return iget16t(ea);
+  eap = &gv.brp[RPBR];
+  return get16(ea);
 }
-
-#else
-#define iget16(ea) get16t((ea))
-#define iget16t(ea) get16t((ea))
-#endif
 
 static inline void put16(unsigned short value, ea_t ea) {
   unsigned short access;
@@ -2255,7 +2239,7 @@ special:
 #endif
 
   if (class < 2) {                               /* class 0/1 */
-    ea = iget16(RP);                             /* get A from next word */
+    ea = iget16t(RP);                            /* get A from next word */
     INCRP;
     TRACE(T_EAR, " Class %d, new ea=%o\n", class, ea);
     if (class == 1)
@@ -2284,7 +2268,7 @@ special:
 
   } else if (i && x) {                           /* class 2/3, ix=11 */
     TRACE(T_EAR, " class 2/3, ix=11\n");
-    ea = iget16(RP);                             /* get A from next word */
+    ea = iget16t(RP);                            /* get A from next word */
     INCRP;
     TRACE(T_EAR, " ea=%o\n", ea);
     if (class == 3) {
@@ -5187,7 +5171,7 @@ fetch:
 
   inst = iget16(RP | ((RPL >= gv.livereglim || (getcrs16(KEYS) & 0016000) == 010000) ? 0 : 0x80000000));
 #else
-  inst = iget16(RP);
+  inst = iget16t(RP);
 #endif
 
   INCRP;
