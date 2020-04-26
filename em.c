@@ -1763,7 +1763,7 @@ char *keystring(unsigned short keys) {
     *sp++ = 'L';
   memcpy(sp, modes[(keys>>10) & 7], 3);
   sp += 3;
-  if (keys & 01000 == 0)  /* float exception enabled */
+  if (!(keys & 01000))    /* float exception enabled */
     *sp++ = 'F';
   if (keys & 0400)        /* int exception enabled */
     *sp++ = 'I';
