@@ -4396,10 +4396,7 @@ int main (int argc, char **argv) {
 
      NOTE: if instpermsec is off by more than a factor of 2, it causes
      some minor clock skew problems during the first few seconds of
-     system boot.  There is debug code in emdev.h/devcp to see this.
-     To remedy, a small benchmark is run after initialization to set a
-     "close" value based on empirical testing, then the clock process
-     adjusts it periodically. */
+     system boot.  There is debug code in emdev.h/devcp to see this. */
 
   gv.intvec = -1;
   gv.instcount = 0;
@@ -4693,33 +4690,6 @@ int main (int argc, char **argv) {
   }
   bzero(MEM, 64*1024*2);              /* zero first 64K words */
   
-  /* run a short benchmark to help determine initial MIPS rating.  For
-     a system with an actual Prime MIPS rating of 58, this benchmark
-     returns numbers around 160, so divide by 3-ish with -DFAST or
-     7-ish without -DFAST*/
-
-  {
-    #define BENCHINST 10000000
-    #ifdef FAST
-      #define BENCHFACTOR 2.9
-    #else
-      #define BENCHFACTOR 7.0
-    #endif
-    struct timeval start_tv, tv;
-    int elapsedms;
-    
-    if (gettimeofday(&start_tv, NULL) != 0)
-      fatal("em: gettimeofday failed");
-    for (templ=0; templ < BENCHINST; templ++) {
-      add16(1, 2, 3, 0);
-    }
-    if (gettimeofday(&tv, NULL) != 0)
-      fatal("em: gettimeofday failed");
-    elapsedms = (tv.tv_sec-start_tv.tv_sec)*1000.0 + (tv.tv_usec-start_tv.tv_usec)/1000.0;
-    gv.instpermsec = BENCHINST * 1.0 / elapsedms / BENCHFACTOR;
-    printf("=== %d Prime MIPS ===\n", gv.instpermsec / 1000);
-  }
-
   /* if no maps were specified on the command line, look for ring0.map and 
      ring3.map in the current directory and read them */
 
