@@ -75,6 +75,19 @@ are available from Bitsavers:
 * [Rev 22.1.4 repacked](https://yagi.h-net.org/m2214repack.tar.gz) [use this instead, resaved with Rev. 22 magsav]
 * [Rev 19.?](http://bitsavers.org/bits/Prime/pps/03_log.tape_I=boot_II=iptpal.tap.gz) [a backup from an installed system]
 
+## Pre-compiled binaries
+
+We'd prefer that you build your own from the source tree, but if that's
+not possible, a set of pre-compiled binaries is available.  Included are:
+
+* Linux i386
+* Linux amd64
+* Linux armhf (RasPi / BeagleBone)
+* FreeBSD amd64
+* Solaris amd64
+
+[download](https://sysovl.info/pages/blobs/emulator/embinaries.20200504.tar.gz)
+
 ## Sample System Images
 
 A set of sample system images derived from the public emulators can
