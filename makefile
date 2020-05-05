@@ -9,23 +9,27 @@ em_deps = \
   em.c regs.h emdev.h ea64v.h ea32i.h fp.h dispatch.h geom.h \
   devpnc.h devamlc.h swap.h
 
+CFLAGS =
+# Uncomment for building on SmartOS/Solaris:
+# CFLAGS += -lsocket -lnsl
+
 .PHONY:	emwarn debug trace fixed
 
 # normal
 em: $(em_deps) $(all_deps)
-	$(CC) -DREV=\"${REV}\" -DNOTRACE -DFAST -O -Winline -Wno-return-type em.c -o em
+	$(CC) -DREV=\"${REV}\" ${CFLAGS} -DNOTRACE -DFAST -O -Winline -Wno-return-type em.c -o em
 
 # lots of compiler warnings
 emwarn: $(em_deps) $(all_deps)
-	$(CC) -DREV=\"${REV}\" -DNOTRACE -DFAST -O -Wall -Wextra -pedantic -Wconversion em.c -o em
+	$(CC) -DREV=\"${REV}\" ${CFLAGS} -DNOTRACE -DFAST -O -Wall -Wextra -pedantic -Wconversion em.c -o em
 
 # gdb
 debug: $(em_deps) $(all_deps)
-	$(CC) -DREV=\"${REV}\" -DNOTRACE -DFAST -g -O0 em.c -o em
+	$(CC) -DREV=\"${REV}\" ${CFLAGS} -DNOTRACE -DFAST -g -O0 em.c -o em
 
 # tracing
 trace: $(em_deps) $(all_deps)
-	$(CC) -DREV=\"${REV}\" -DFAST -O em.c -o em
+	$(CC) -DREV=\"${REV}\" ${CFLAGS} -DFAST -O em.c -o em
 
 # the fixed clock rate build is useful for making problems reproduceable.
 #
@@ -35,7 +39,7 @@ trace: $(em_deps) $(all_deps)
 
 # fixed clock rate
 fixed: $(em_deps) $(all_deps)
-	$(CC) -DREV=\"${REV}\" -DFIXEDCLOCK -DNOIDLE -DFAST -O em.c -o em
+	$(CC) -DREV=\"${REV}\" ${CFLAGS} -DFIXEDCLOCK -DNOIDLE -DFAST -O em.c -o em
 
 clean:
 	rm -f $(em_objs)

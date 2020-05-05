@@ -650,9 +650,22 @@ int devamlc (int class, int func, int device) {
 	    break;
 	  }
 	  memset(&terminfo, 0, sizeof(terminfo));
+#ifdef __sun__
+      terminfo.c_iflag &= ~(IMAXBEL|IGNBRK|BRKINT|PARMRK|ISTRIP|INLCR|IGNCR|ICRNL|IXON);
+      terminfo.c_oflag &= ~OPOST;
+      terminfo.c_lflag &= ~(ECHO|ECHONL|ICANON|ISIG|IEXTEN);
+      terminfo.c_cflag &= ~(CSIZE|PARENB);
+      terminfo.c_cflag |= CS8;
+#else
 	  cfmakeraw(&terminfo);
+#endif
 	  baud = baudtable[(getcrs16(A) >> 6) & 7];
+#ifdef __sun__
+      if ((cfsetispeed(&terminfo, baud) == -1) ||
+          (cfsetospeed(&terminfo, baud) == -1))
+#else
 	  if (cfsetspeed(&terminfo, baud) == -1)
+#endif
 	    perror("em: unable to set AMLC line speed");
 	  else
 	    printf("em: AMLC line %d set to %d bps\n", dx*16 + lx, baud);

@@ -406,7 +406,11 @@ void pncinitfd(int fd) {
     perror("unable to get ts flags for PNC");
     fatal(NULL);
   }
+#ifdef __sun__
+  fdflags |= O_NONBLOCK;
+#else
   fdflags |= O_NONBLOCK+O_ASYNC;
+#endif
   if (fcntl(fd, F_SETFL, fdflags) == -1) {
     perror("unable to set fdflags for PNC");
     fatal(NULL);
