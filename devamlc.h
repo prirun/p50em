@@ -911,6 +911,9 @@ int devamlc (int class, int func, int device) {
 	  optval = 1;
 	  if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval)) == -1)
 	    perror("unable to set TCP_NODELAY");
+	  /* Should we re-set optval here?  Any chance it gets modified? */
+	  if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval)) == -1)
+	    perror("unable to set SO_KEEPALIVE");
 
 	  /* these Telnet commands put the connecting telnet client
 	     into character-at-a-time mode and binary mode.  Since
