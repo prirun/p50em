@@ -911,10 +911,12 @@ int devamlc (int class, int func, int device) {
 	  optval = 1;
 	  if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval)) == -1)
 	    perror("unable to set TCP_NODELAY");
+#ifndef __APPLE__
 	  /* Set 600 second keepalive idle time for this socket */
 	  optval = 600;
-	  if (setsockopt(fd, 6 /* TCP */, TCP_KEEPIDLE, &optval, sizeof(optval)) == -1)
+	  if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &optval, sizeof(optval)) == -1)
 	    perror("unable to set TCP_KEEPIDLE");
+#endif
 	  /* ... and turn on keepalive */
 	  optval = 1;
 	  if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval)) == -1)
