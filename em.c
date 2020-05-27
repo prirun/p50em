@@ -4770,6 +4770,12 @@ int main (int argc, char **argv) {
     for (i=0; i<9; i++)
       rvec[i] = swap16(rvec[i]);
 
+    if (rvec[3] != 0) {
+      if (rvec[2] > rvec[1]) {
+	rvec[0] += rvec[3];
+	rvec[1] += rvec[3];
+      }
+    }
   } else {
 
     /* If no filename follows -boot, then the sense switches are used to
