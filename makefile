@@ -6,7 +6,7 @@ REV=${shell [ -d .hg ] && hg id -n || git rev-parse --short HEAD}
 
 em:	# normal
 	rm -rf em.o
-	cc -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -Winline em.c -o em
+	cc -DREV=\"${REV}\" -DNOTRACE -DFAST -DNOMEM -O -Winline -Wno-error=return-type em.c -o em
 
 emwarn: # lots of compiler warnings
 	rm -rf em.o

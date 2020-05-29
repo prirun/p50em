@@ -2223,3 +2223,5 @@ int devdisk (int class, int func, int device) {
 #include "devpnc.h"
 
 #include "devamlc.h"
+
+#include "devsmlc.h"
