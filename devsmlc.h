@@ -534,8 +534,9 @@ int devsmlc (int class, int func, int device) {
 #if DEBUG
       fprintf(smlclog, "%s SKS '02%02o skip if not interrupting, state is %s\n", smlctimestamp, device, intstates[dc[dx].intstate]);
 #endif
-      if (dc[dx].intstate == SMLC_INTERRUPTING)
+      if (dc[dx].intstate == SMLC_INTERRUPTING) {
 	IOSKIP;
+      }
 
     } else {
       fprintf(stderr, "Unimplemented SKS device '%02o function '%02o\n", device, func);
@@ -1135,6 +1136,10 @@ int devsmlc (int class, int func, int device) {
             }
           }
         }
+        break;
+
+      default:
+        // nothing to do for other states
         break;
       }
     }
