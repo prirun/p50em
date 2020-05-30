@@ -406,7 +406,11 @@ void pncinitfd(int fd) {
     perror("unable to get ts flags for PNC");
     fatal(NULL);
   }
+#ifdef __sun__
+  fdflags |= O_NONBLOCK;
+#else
   fdflags |= O_NONBLOCK+O_ASYNC;
+#endif
   if (fcntl(fd, F_SETFL, fdflags) == -1) {
     perror("unable to set fdflags for PNC");
     fatal(NULL);
@@ -685,7 +689,7 @@ unsigned short pncxmit1(short nodeid) {
     return 0;
   }
   if (nwritten != ntowrite) {
-    fprintf(stderr, "devpnc: pncxmit1 wrote %d of %d bytes to node %d %d; disconnecting\n", nwritten, ntowrite, nodeid);
+    fprintf(stderr, "devpnc: pncxmit1 wrote %d of %d bytes to node %d; disconnecting\n", nwritten, ntowrite, nodeid);
     pncdisc(nodeid, "partial packet written");
     return 0;
   }
@@ -757,7 +761,8 @@ void pncrecv() {
   for (nodeid=0; nodeid<=MAXNODEID; nodeid++)
     if (ni[nodeid].cstate == PNCCSAUTH) {
       fd = ni[nodeid].fd;
-      FD_SET(fd, &fds);
+      if (fd != -1)
+        FD_SET(fd, &fds);
       if (fd > n)
 	n = fd;
     }
@@ -961,7 +966,7 @@ int devpnc (int class, int func, int device) {
 	  fprintf(stderr,"Line %d of ring.cfg ignored: IP address too long\n", linenum);
 	  continue;
 	}
-	strcpy(temphost, p);
+	strncpy(temphost, p, MAXHOSTLEN);
 
 	if ((p=strtok(NULL, DELIM)) == NULL) {
 	  fprintf(stderr,"Line %d of ring.cfg ignored: unique id/password missing\n", linenum);
@@ -979,14 +984,14 @@ int devpnc (int class, int func, int device) {
 	  }
         if (i <= MAXNODEID)
 	  continue;
-	strcpy(ni[tempid].uid, p);
+	strncpy(ni[tempid].uid, p, MAXUIDLEN);
 
 	/* parse the port number from the IP address */
 
 	tempport = 0;
 	if (strcmp(temphost, "-") != 0) {
 	  if ((p=strtok(temphost, PDELIM)) != NULL) {
-	    strcpy(ni[tempid].host, p);
+	    strncpy(ni[tempid].host, p, MAXHOSTLEN);
 	    if ((p=strtok(NULL, PDELIM)) != NULL) {
 	      tempport = atoi(p);
 	      if (tempport < 1 || tempport > 65000)
@@ -1059,11 +1064,13 @@ int devpnc (int class, int func, int device) {
        can be disabled, though that may cause problems for rings where
        the max node id > MAXACCEPTTIME because of connect delays */
 
+#ifdef __linux__
     optval = MAXNODEID;
     if (setsockopt(pncfd, IPPROTO_TCP, TCP_DEFER_ACCEPT, &optval, sizeof(optval))) {
       perror("setsockopt TCP_DEFER_ACCEPT failed for PNC");
       fatal(NULL);
     }
+#endif
 
     TRACE(T_RIO, "PNC configured\n");
     devpoll[device] = PNCPOLL*gv.instpermsec;

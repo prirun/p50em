@@ -650,9 +650,22 @@ int devamlc (int class, int func, int device) {
 	    break;
 	  }
 	  memset(&terminfo, 0, sizeof(terminfo));
+#ifdef __sun__
+      terminfo.c_iflag &= ~(IMAXBEL|IGNBRK|BRKINT|PARMRK|ISTRIP|INLCR|IGNCR|ICRNL|IXON);
+      terminfo.c_oflag &= ~OPOST;
+      terminfo.c_lflag &= ~(ECHO|ECHONL|ICANON|ISIG|IEXTEN);
+      terminfo.c_cflag &= ~(CSIZE|PARENB);
+      terminfo.c_cflag |= CS8;
+#else
 	  cfmakeraw(&terminfo);
+#endif
 	  baud = baudtable[(getcrs16(A) >> 6) & 7];
+#ifdef __sun__
+      if ((cfsetispeed(&terminfo, baud) == -1) ||
+          (cfsetospeed(&terminfo, baud) == -1))
+#else
 	  if (cfsetspeed(&terminfo, baud) == -1)
+#endif
 	    perror("em: unable to set AMLC line speed");
 	  else
 	    printf("em: AMLC line %d set to %d bps\n", dx*16 + lx, baud);
@@ -881,7 +894,7 @@ int devamlc (int class, int func, int device) {
   endconnect:
 	if (allbusy) {
 	  //warn("No free AMLC connection");
-	  strcpy(buf,"\r\nAll available connections are in use.\r\n\n");
+	  strncpy(buf,"\r\nAll available connections are in use.\r\n\n", 2047);
 	  write(fd, buf, strlen(buf));
 	  close(fd);
 	} else {
@@ -898,6 +911,16 @@ int devamlc (int class, int func, int device) {
 	  optval = 1;
 	  if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval)) == -1)
 	    perror("unable to set TCP_NODELAY");
+#ifndef __APPLE__
+	  /* Set 600 second keepalive idle time for this socket */
+	  optval = 600;
+	  if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &optval, sizeof(optval)) == -1)
+	    perror("unable to set TCP_KEEPIDLE");
+#endif
+	  /* ... and turn on keepalive */
+	  optval = 1;
+	  if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval)) == -1)
+	    perror("unable to set SO_KEEPALIVE");
 
 	  /* these Telnet commands put the connecting telnet client
 	     into character-at-a-time mode and binary mode.  Since

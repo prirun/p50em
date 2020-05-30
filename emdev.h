@@ -1530,14 +1530,16 @@ int devcp (int class, int func, int device) {
 	else if (cpuid >= 15)    /* newer machines: 250 ticks/second */
 	  clkpic = -1250;
       TRACE(T_INST, "Clock PIC %d requested, set to %d\n", getcrs16s(A), clkpic);
+      ticks = -1;
       SETCLKPOLL;
 
     } else if (func == 07) {
-      TRACE(T_INST, "Clock control register set to '%o\n", getcrs16(A));
       if (getcrs16(A) & 020)
 	clkrate = 102.4;
       else
 	clkrate = 3.2;
+      TRACE(T_INST, "Clock control register set to '%o\n", getcrs16(A));
+      ticks = -1;
       SETCLKPOLL;
 
     } else if (func == 013) {     /* set interrupt vector */
@@ -1583,9 +1585,8 @@ int devcp (int class, int func, int device) {
 	elapsedms = (tv.tv_sec-start_tv.tv_sec)*1000.0 + (tv.tv_usec-start_tv.tv_usec)/1000.0;
 	targetticks = elapsedms/(-clkpic*clkrate/1000);
 #if 0
-	absticks++;
-	if (absticks%1000 == 0 || abs(ticks-targetticks) > 5)
-	  printf("\nClock: target=%d, ticks=%d, offset=%d\n", targetticks, ticks, ticks-targetticks);
+	if (abs(ticks-targetticks) > 5)
+	  printf("\nClock: target=%d, ticks=%d, offset=%d, ipms=%d, poll=%d\n", targetticks, ticks, ticks-targetticks, gv.instpermsec, devpoll[device]);
 #endif
 
 	/* if the clock gets way out of whack (eg, because of a host
@@ -1628,7 +1629,7 @@ int devcp (int class, int func, int device) {
 	   XXX: this code should probably be done whether or not the
 	   clock is running */
 
-#define IPMTIME 5000
+#define IPMTIME 1000
 
 	if ((gv.instcount < previnstcount) || (gv.instcount-previnstcount > gv.instpermsec*IPMTIME)) {
 	  if (gv.instcount-previnstcount > gv.instpermsec*IPMTIME) {
@@ -1913,11 +1914,11 @@ int devdisk (int class, int func, int device) {
 	head = m2 & 077;
 	u = dc[dx].usel;
 	if (order == 2)
-	  strcpy(ordertext,"Format");
+	  strncpy(ordertext,"Format", 7);
 	else if (order == 5)
-	  strcpy(ordertext,"Read");
+	  strncpy(ordertext,"Read", 7);
 	else if (order == 6)
-	  strcpy(ordertext,"Write");
+	  strncpy(ordertext,"Write", 7);
 	TRACE(T_INST|T_DIO, "%s, head=%d, track=%d, rec=%d, recsize=%d\n", ordertext, head, track, rec, recsize);
 	if (u == -1) {
 	  fprintf(stderr," Device '%o, order %d with no unit selected\n", device, order);

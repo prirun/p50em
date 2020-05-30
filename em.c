@@ -6,9 +6,6 @@
    - booting from a Prime MAGSAV tape
    - restoring a Prime R-mode .save image from the host file system
 
-   This is a project in development, so please don't publish it or
-   make it available for others to use.
-
    Comments, suggestions, corrections, and general notes that you're
    interested in a Prime emulation project are welcome and
    appreciated.
@@ -496,8 +493,6 @@ void *disp_gen[4096];         /* generic dispatch table */
 
 typedef struct {
 
-  unsigned short *physmem;      /* pointer to Prime physical memory */
-
   int memlimit;                 /* user's desired memory limit (-mem) */
 
   int intvec;                   /* currently raised interrupt (if >= zero) */
@@ -569,24 +564,26 @@ static  jmp_buf jmpbuf;               /* for longjumps to the fetch loop */
 static  jmp_buf bootjmp;               /* for longjumps to the fetch loop */
 
 /* The standard Prime physical memory limit on early machines is 8MB.
-   Later machines have higher memory capacities, up to 1024MB, using 
-   32-bit page tables. 
+   Later machines have higher memory capacities, up to 1024MB
+   (unsupported in Primos though), using 32-bit page tables.
 
-   NOTE: 
+   NOTE:
+   - rev 19 custom Primos expands memory limit from 16MB to 32MB
+   - rev 19 custom Primos expands 9950 limit from 16MB to 32MB
+   - rev 19 custom Primos *requires* 32MB: Primos memory scan removed
    - rev 20 is limited to a max of 32MB
-   - rev 23.4 is limited to a max of 512MB
+   - rev 23.4 is limited to a max of 512MB (use -cpuid 5340)
+   - rev 23.4 RMS_PROCESS scans & adds memory after Primos is booted
 
-   "memlimit" is set with the -mem argument, taking an argument which is
-   the desired memory limit in MB.  Setting a memory limit is useful to
-   speed up system boots and diagnostics during emulator testing.
+   Prime physical memory size (MB) is set with the -mem argument.
+   Setting a small memory limit speeds up system boots and diagnostics
+   during emulator testing.
 */
 
-#define MAXMB   512     /* must be a power of 2 */
-#define MEMSIZE MAXMB/2*1024*1024
-#define MEMMASK MEMSIZE-1
+#define DEFMB 32
 #define MEM physmem
 
-static unsigned short physmem[MEMSIZE]; /* system's physical memory */
+static unsigned short *physmem = NULL; /* system's physical memory */
 
 #define get16mem(phyaddr) swap16(MEM[(phyaddr)])
 #define put16mem(phyaddr, val) MEM[(phyaddr)] = swap16((val))
@@ -667,10 +664,10 @@ static in_addr_t bindaddr = INADDR_ANY;     /* -naddr option (PnC/Ringnet) */
 /* load map related data, specified with -map */
 
 #define MAXSYMBOLS 15000
-#define MAXSYMLEN 9
+#define MAXSYMLEN 11
 static int numsyms = 0;
 static struct {
-  char symname[MAXSYMLEN];
+  char symname[MAXSYMLEN+1];
   ea_t address;
   char symtype;                /* o=other, c=common, e=ecb, p=proc, l=linkbase */
 } mapsym[MAXSYMBOLS];
@@ -762,7 +759,7 @@ void addsym(char *sym, unsigned short seg, unsigned short word, char type) {
       for (ix2 = numsyms; ix2 > ix; ix2--)
 	mapsym[ix2] = mapsym[ix2-1];
     //TRACEA("%s = %o/%o\n", sym, seg, words);
-    strcpy(mapsym[ix+1].symname, sym);
+    strncpy(mapsym[ix+1].symname, sym, MAXSYMLEN);
     mapsym[ix+1].address = addr;
     mapsym[ix+1].symtype = type;
     numsyms++;
@@ -1010,13 +1007,11 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
     pa = stlbp->ppa | (ea & 0x3FF);
     TRACE(T_MAP,"        for ea %o/%o, iacc=%d, stlbix=%d, pa=%o	loaded at #%u\n", ea>>16, ea&0xffff, intacc, stlbix, pa, stlbp->load_ic);
   } else {
-    pa = ea & MEMMASK;
+    pa = ea;
   }
-#ifndef NOMEM
   if (pa < gv.memlimit)
-#endif
     return pa;
-#ifdef DBG
+#if 0
   printf(" map: Memory address '%o (%o/%o) is out of range 0-'%o (%o/%o) at #%d!\n", pa, pa>>16, pa & 0xffff, gv.memlimit-1, (gv.memlimit-1)>>16, (gv.memlimit-1) & 0xffff, gv.instcount);
 #endif
 
@@ -1305,31 +1300,15 @@ static long long get64r(ea_t ea, ea_t rpring) {
    page instead of on every 16-bit fetch from the instruction stream.
 */
 
-#ifdef FAST
-
-unsigned short iget16t(ea_t ea) {
-  unsigned short access;
-
-  if (*(int *)&ea >= 0) {
-    gv.brp[RPBR].memp = MEM + (mapva(ea, RP, RACC, &access) & 0xFFFFFC00);
-    gv.brp[RPBR].vpn = ea & 0x0FFFFC00;
-    return swap16(gv.brp[RPBR].memp[ea & 0x3FF]);
-  }
-  return get16trap(ea);
+static inline unsigned short iget16t(ea_t ea) {
+  eap = &gv.brp[RPBR];
+  return get16t(ea);
 }
 
 static inline unsigned short iget16(ea_t ea) {
-
-  if ((ea & 0x8FFFFC00) == (gv.brp[RPBR].vpn & 0x0FFFFFFF))
-    return swap16(gv.brp[RPBR].memp[ea & 0x3FF]);
-  else
-    return iget16t(ea);
+  eap = &gv.brp[RPBR];
+  return get16(ea);
 }
-
-#else
-#define iget16(ea) get16((ea))
-#define iget16t(ea) get16t((ea))
-#endif
 
 static inline void put16(unsigned short value, ea_t ea) {
   unsigned short access;
@@ -1787,7 +1766,7 @@ char *keystring(unsigned short keys) {
     *sp++ = 'L';
   memcpy(sp, modes[(keys>>10) & 7], 3);
   sp += 3;
-  if (keys & 01000 == 0)  /* float exception enabled */
+  if (!(keys & 01000))    /* float exception enabled */
     *sp++ = 'F';
   if (keys & 0400)        /* int exception enabled */
     *sp++ = 'I';
@@ -1874,46 +1853,50 @@ static void fatal(char *msg) {
   printf("Fatal error");
   if (msg)
     printf(": %s", msg);
-  printf("\ninstruction #%u at %o/%o %s ^%06o^\nA='%o/%d  B='%o/%d  L='%o/%d  X='%o/%d K=%o [%s]\nowner=%o %s, modals=%o [%s]\n", gv.instcount, gv.prevpc >> 16, gv.prevpc & 0xFFFF, searchloadmap(gv.prevpc,' '), lights, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X), getcrs16(KEYS), keystring(getcrs16(KEYS)), getcrs16(OWNERL), searchloadmap(getcrs32(OWNER),' '), getcrs16(MODALS), modstring(getcrs16(MODALS)));
+  printf("\n");
   
-  /* dump concealed stack entries */
+  if (physmem != NULL) {
+    printf("instruction #%u at %o/%o %s ^%06o^\nA='%o/%d  B='%o/%d  L='%o/%d  X='%o/%d K=%o [%s]\nowner=%o %s, modals=%o [%s]\n", gv.instcount, gv.prevpc >> 16, gv.prevpc & 0xFFFF, searchloadmap(gv.prevpc,' '), lights, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X), getcrs16(KEYS), keystring(getcrs16(KEYS)), getcrs16(OWNERL), searchloadmap(getcrs32(OWNER),' '), getcrs16(MODALS), modstring(getcrs16(MODALS)));
 
-  if (getcrs16(MODALS) & 010) {   /* process exchange is enabled */
-    pcbp = getcrs32ea(OWNER);     /* my pcb pointer */
-    first = get16r0(pcbp+PCBCSFIRST);
-    next = get16r0(pcbp+PCBCSNEXT);
-    last = get16r0(pcbp+PCBCSLAST);
-    while (next != first) {
-      this = next-6;
-      csea = MAKEVA(getcrs16(OWNERH)+gv.csoffset, this);
-      for (i=0; i<6; i++)
-	cs[i] = get16r0(csea+i);
-      printf("Fault: RP=%o/%o, keys=%06o, fcode=%o, faddr=%o/%o\n", cs[0], cs[1], cs[2], cs[3], cs[4], cs[5]);
-      next = this;
+    /* dump concealed stack entries */
+
+    if (getcrs16(MODALS) & 010) {   /* process exchange is enabled */
+      pcbp = getcrs32ea(OWNER);     /* my pcb pointer */
+      first = get16r0(pcbp+PCBCSFIRST);
+      next = get16r0(pcbp+PCBCSNEXT);
+      last = get16r0(pcbp+PCBCSLAST);
+      while (next != first) {
+	this = next-6;
+	csea = MAKEVA(getcrs16(OWNERH)+gv.csoffset, this);
+	for (i=0; i<6; i++)
+	  cs[i] = get16r0(csea+i);
+	printf("Fault: RP=%o/%o, keys=%06o, fcode=%o, faddr=%o/%o\n", cs[0], cs[1], cs[2], cs[3], cs[4], cs[5]);
+	next = this;
+      }
     }
-  }
 
 #ifndef NOTRACE
-  printf("RP queue:");
-  i = gv.tracerpqx;
-  while(1) {
-    printf(" %o/%o", gv.tracerpq[i]>>16, gv.tracerpq[i]&0xFFFF);
-    i = (i+1) & (MAXRPQ-1);
-    if (i == gv.tracerpqx)
-      break;
-  }
-  printf("\n");
-  printf("STLB calls: %d  misses: %d  hitrate: %5.2f%%\n", gv.mapvacalls, gv.mapvamisses, (double)(gv.mapvacalls-gv.mapvamisses)/gv.mapvacalls*100.0);
-  printf("Supercache calls: %d  misses: %d  hitrate: %5.2f%%\n", gv.supercalls, gv.supermisses, (double)(gv.supercalls-gv.supermisses)/gv.supercalls*100.0);
+    printf("RP queue:");
+    i = gv.tracerpqx;
+    while(1) {
+      printf(" %o/%o", gv.tracerpq[i]>>16, gv.tracerpq[i]&0xFFFF);
+      i = (i+1) & (MAXRPQ-1);
+      if (i == gv.tracerpqx)
+	break;
+    }
+    printf("\n");
+    printf("STLB calls: %d  misses: %d  hitrate: %5.2f%%\n", gv.mapvacalls, gv.mapvamisses, (double)(gv.mapvacalls-gv.mapvamisses)/gv.mapvacalls*100.0);
+    printf("Supercache calls: %d  misses: %d  hitrate: %5.2f%%\n", gv.supercalls, gv.supermisses, (double)(gv.supercalls-gv.supermisses)/gv.supercalls*100.0);
 #endif
 
-  /* should do a register dump, RL dump, PCB dump, etc. here... */
+    /* should do a register dump, RL dump, PCB dump, etc. here... */
 
-  /* call all devices with a request to terminate */
+    /* call all devices with a request to terminate */
 
-  for (i=0; i<64; i++)
-    devmap[i](-2, 0, i);
-
+    for (i=0; i<64; i++)
+      devmap[i](-2, 0, i);
+  }
+  
 #ifndef NOTRACE
   fclose(gv.tracefile);
 #endif
@@ -2259,7 +2242,7 @@ special:
 #endif
 
   if (class < 2) {                               /* class 0/1 */
-    ea = iget16(RP);                             /* get A from next word */
+    ea = iget16t(RP);                            /* get A from next word */
     INCRP;
     TRACE(T_EAR, " Class %d, new ea=%o\n", class, ea);
     if (class == 1)
@@ -2288,7 +2271,7 @@ special:
 
   } else if (i && x) {                           /* class 2/3, ix=11 */
     TRACE(T_EAR, " class 2/3, ix=11\n");
-    ea = iget16(RP);                             /* get A from next word */
+    ea = iget16t(RP);                            /* get A from next word */
     INCRP;
     TRACE(T_EAR, " ea=%o\n", ea);
     if (class == 3) {
@@ -4382,9 +4365,6 @@ int main (int argc, char **argv) {
 #define XJ 0312
 #define XRBRACE 0375
 
-  struct timeval boot_tv;
-  struct timezone tz;
-
   printf("[Prime Emulator ver %s %s]\n", REV, __DATE__);
   printf("[Copyright (C) 2005-2019 Jim Wilcoxson prirun@gmail.com]\n");
   if (argc > 1 && (strcmp(argv[1],"--version") == 0)) {
@@ -4413,14 +4393,18 @@ int main (int argc, char **argv) {
       printf("Open returned %d redirecting stderr\n", templ);
     exit(1);
   }
+  setvbuf(stderr, NULL, _IONBF, 0);
 
-  /* initialize global variables */
+  /* initialize global variables
 
-  gv.physmem = physmem;
+     NOTE: if instpermsec is off by more than a factor of 2, it causes
+     some minor clock skew problems during the first few seconds of
+     system boot.  There is debug code in emdev.h/devcp to see this. */
+
   gv.intvec = -1;
   gv.instcount = 0;
   gv.inhcount = 0;
-  gv.instpermsec = 2000;
+  gv.instpermsec = 40000;
   gv.livereglim = 040;
   gv.mapvacalls = 0;
   gv.mapvamisses = 0;
@@ -4464,53 +4448,12 @@ int main (int argc, char **argv) {
 
 #include "dispatch.h"
 
-  /* master clear:
-     - clear all registers
-     - user register set is 0
-     - modals:
-     -- interrupts inhibited
-     -- standard interrupt mode
-     -- user register set is 0
-     -- non-mapped I/O
-     -- process exchange disabled
-     -- segmentation disabled
-     -- machine checks disabled
-     - keys:
-     -- C, L, LT, EQ clear
-     -- single precision
-     -- 16S mode
-     -- take fault on FP exception
-     -- no fault on integer or decimal exception
-     -- characters have high bit on
-     -- FP rounding disabled
-     -- not in dispatcher
-     -- register set is not saved
-     - set P to '1000
-     - all stlb entries are invalid
-     - all iotlb entries are invalid
-     - clear 64K words of memory
-  */
-
-  for (i=0; i < 32*REGSETS; i++)
-    regs.u32[i] = 0;
-
-  crsl = (void *)regs.sym.userregs[0]; /* first user register set */
-  
-  putcrs16(MODALS, 0);                /* interrupts inhibited */
-  newkeys(0);
-  RP = 01000;
-  for (i=0; i < STLBENTS; i++)
-    gv.stlb[i].seg = 0xFFFF;        /* marker for invalid STLB entry */
-  for (i=0; i < IOTLBENTS; i++)
-    gv.iotlb[i].valid = 0;
-  bzero(MEM, 64*1024*2);              /* zero first 64K words */
-
   domemdump = 0;
   bootarg = NULL;
   bootfile[0] = 0;
   gv.pmap32bits = 0;
   gv.csoffset = 0;
-  gv.memlimit = MEMSIZE;
+  gv.memlimit = DEFMB;
   tport = 0;
   nport = 0;
 
@@ -4583,17 +4526,15 @@ int main (int argc, char **argv) {
       } else
 	fatal("-cpuid needs an argument\n");
 
-#ifndef NOMEM
     } else if (strcmp(argv[i],"-mem") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
 	sscanf(argv[++i],"%d", &templ);
-	if (1 <= templ && templ <= MAXMB)
-	  gv.memlimit = templ*1024/2*1024;
+	if (1 <= templ && templ <= 512)
+	  gv.memlimit = templ;
 	else
 	  fatal("-mem arg range is 1 to 512 (megabytes)\n");
       } else
 	fatal("-mem needs an argument\n");
-#endif
 
     } else if (strcmp(argv[i],"-nport") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
@@ -4704,6 +4645,54 @@ int main (int argc, char **argv) {
 
   TRACEA("Boot sense switches=%06o, data switches=%06o\n", sswitch, dswitch);
 
+  /* master clear:
+     - clear all registers
+     - user register set is 0
+     - modals:
+     -- interrupts inhibited
+     -- standard interrupt mode
+     -- user register set is 0
+     -- non-mapped I/O
+     -- process exchange disabled
+     -- segmentation disabled
+     -- machine checks disabled
+     - keys:
+     -- C, L, LT, EQ clear
+     -- single precision
+     -- 16S mode
+     -- take fault on FP exception
+     -- no fault on integer or decimal exception
+     -- characters have high bit on
+     -- FP rounding disabled
+     -- not in dispatcher
+     -- register set is not saved
+     - set P to '1000
+     - all stlb entries are invalid
+     - all iotlb entries are invalid
+     - clear 64K words of memory
+  */
+
+  for (i=0; i < 32*REGSETS; i++)
+    regs.u32[i] = 0;
+
+  crsl = (void *)regs.sym.userregs[0]; /* first user register set */
+  
+  putcrs16(MODALS, 0);                /* interrupts inhibited */
+  newkeys(0);
+  RP = 01000;
+  for (i=0; i < STLBENTS; i++)
+    gv.stlb[i].seg = 0xFFFF;        /* marker for invalid STLB entry */
+  for (i=0; i < IOTLBENTS; i++)
+    gv.iotlb[i].valid = 0;
+  gv.memlimit *= 1024 * 1024;         /* memory size in bytes */
+  physmem = malloc(gv.memlimit);
+  gv.memlimit /= sizeof(*physmem);    /* max Prime word address */
+  if (physmem == NULL) {
+    perror("Error allocating Prime memory block");
+    fatal("Can't allocate Prime memory block");
+  }
+  bzero(MEM, 64*1024*2);              /* zero first 64K words */
+  
   /* if no maps were specified on the command line, look for ring0.map and 
      ring3.map in the current directory and read them */
 
@@ -4784,6 +4773,12 @@ int main (int argc, char **argv) {
     for (i=0; i<9; i++)
       rvec[i] = swap16(rvec[i]);
 
+    if (rvec[3] != 0) {
+      if (rvec[2] > rvec[1]) {
+	rvec[0] += rvec[3];
+	rvec[1] += rvec[3];
+      }
+    }
   } else {
 
     /* If no filename follows -boot, then the sense switches are used to
@@ -4916,13 +4911,6 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
     newkeys(rvec[6]);
   }
   RPL = rvec[2];
-
-  /* initialize the timer stuff */
-
-  if (gettimeofday(&boot_tv, &tz) != 0) {
-    perror("gettimeofday failed");
-    fatal(NULL);
-  }
 
   /* main instruction decode loop */
 
@@ -5162,7 +5150,7 @@ fetch:
 
   inst = iget16(RP | ((RPL >= gv.livereglim || (getcrs16(KEYS) & 0016000) == 010000) ? 0 : 0x80000000));
 #else
-  inst = iget16(RP);
+  inst = iget16t(RP);
 #endif
 
   INCRP;
@@ -5237,7 +5225,7 @@ xec:
 
   if ((getcrs16(KEYS) & 016000) == 014000) {   /* 64V mode */
     ea = ea64v(inst, earp);
-    TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
+    TRACE(T_FLOW, " EA: %o/%o  %s\n", ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
     goto *(gv.disp_vmr[VMRINSTIX(inst)]);
 
   } else if ((getcrs16(KEYS) & 0016000) == 010000) {  /* E32I */
@@ -5249,17 +5237,17 @@ xec:
 
   } else if (getcrs16(KEYS) & 004000) {        /* 32R/64R */
     ea = ea32r64r(earp, inst);
-    TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
+    TRACE(T_FLOW, " EA: %o/%o\n", ea>>16, ea & 0xFFFF);
     goto *(gv.disp_rmr[RMRINSTIX(inst)]);
 
   } else if (getcrs16(KEYS) & 002000) {
     ea = ea32s(inst);
-    TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
+    TRACE(T_FLOW, " EA: %o/%o\n", ea>>16, ea & 0xFFFF);
     goto *(gv.disp_rmr[SMRINSTIX(inst)]);
 
   } else if ((getcrs16(KEYS) & 016000) == 0) {
     ea = ea16s(inst);
-    TRACE(T_FLOW, " EA: %o/%o  %s\n",ea>>16, ea & 0xFFFF, searchloadmap(ea,' '));
+    TRACE(T_FLOW, " EA: %o/%o\n", ea>>16, ea & 0xFFFF);
     goto *(gv.disp_rmr[SMRINSTIX(inst)]);
 
   } else {

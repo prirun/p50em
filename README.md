@@ -2,30 +2,30 @@
 
 ## What Is This?
 
-This is a software emulator for a minicomputer architecture sold
-by Prime Computer from the early 70s through about 1993.  Prime's
-initial business plan was to make systems compatible with the
-Honeywell x16 family, which had then-recently been discontinued.
-Prime extended the architecture heavily.
+This is a software emulator for a minicomputer architecture sold by
+Prime Computer from the early 70s through about 1993.  Prime's initial
+business plan was to make systems compatible with the Honeywell x16
+family, which had then-recently been discontinued.  Prime extended
+the architecture heavily.
 
 ## Emulator History
 
 Beginning in 2005, Jim Wilcoxson developed an emulator for Prime
 Computer's 50-Series architecture.  The emulator originally ran on
 the PowerPC architecture.  In late 2011, Jim ported it so it would
-run on x86.  This entailed solving endianness issues (The 50-Series
-is big-endian), as well as re-optimizing the code for performance
-without the host processor having a large set of general-purpose
-registers.
+run on x86.  This entailed solving endianness issues (The 50-Series is
+big-endian), as well as re-optimizing the code for performance without
+the host processor having a large set of general-purpose registers.
 
 ## Emulator Documentation
 
-Coming soon, we swear!
+Coming soon, we swear!  There is a unix man page included in this
+repository.
 
 ## Public Systems
 
-There are a set of emulators available for public use.  These may
-be accessed via `telnet` to the appropriate port on `em.prirun.com`.
+There are a set of emulators available for public use.  These may be
+accessed via `telnet` to the appropriate port on `em.prirun.com`.
 
 | PRIMOS Revision | Port |
 |-----------------|------|
@@ -50,32 +50,64 @@ business unit ceased to exist.  A reformatted copy is available
 ## Prime Documentation
 
 A growing collection of Prime and related documentation is available
-at [sysovl.info](https://sysovl.info/reference_prime.html).  A howto
-on installing PRIMOS in the emulator is [here](https://sysovl.info/reference_prime_drb_installing_primos.html).
-Discussion of adapting these instructions to 22.1.4 has been occurring on the [cctalk mailing list](http://classiccmp.org/pipermail/cctalk/2020-March/052126.html).
+at [sysovl.info](https://sysovl.info/reference_prime.html).
+A howto on installing PRIMOS in the emulator is
+[here](https://sysovl.info/reference_prime_drb_installing_primos.html).
+Discussion of adapting these instructions to
+22.1.4 has been occurring on the [cctalk mailing
+list](http://classiccmp.org/pipermail/cctalk/2020-March/052126.html).
 
 ## Getting PRIMOS
 
-Two versions of PRIMOS are available from Bitsavers:
+Distribution tape sets for four versions of PRIMOS,
+with small sets of layered products, are available from
+[sysovl.info](https://sysovl.info/downloads_prime_primedist.html):
 
-* [Rev 22.1.4](http://bitsavers.org/bits/Prime/primos_22.1.4.zip) [has issues]
-* [Rev 22.1.4 repacked](https://yagi.h-net.org/m2214repack.tar.gz) [use this]
-* [Rev 19.?](http://bitsavers.org/bits/Prime/pps/03_log.tape_I=boot_II=iptpal.tap.gz)
+* Rev 21.0.6, including BASIC, FTN, BRMS, INFORMATION
+* Rev 23.2.0, including BASIC, FTN, MIDASPLUS, DRB, DTB, FS_RECOVER, PL1_LIBRARY
+* Rev 23.4.Y2K,R1, including BASIC, FTN, MIDASPLUS, DRB, DTB, FS_RECOVER, PL1_LIBRARY
+* Rev 24.0.0.r15, including BASIC, FTN, MIDASPLUS, DRB, DTB, FS_RECOVER, PL1_LIBRARY
 
-The Rev. 19 tape is a save from an installed system.
+Tapes for two versions of PRIMOS (these are not clean distribution sets)
+are available from Bitsavers:
+
+* [Rev 22.1.4](http://bitsavers.org/bits/Prime/primos_22.1.4.zip) [has issues, written with newer magsav, can't restore itself]
+* [Rev 22.1.4 repacked](https://yagi.h-net.org/m2214repack.tar.gz) [use this instead, resaved with Rev. 22 magsav]
+* [Rev 19.?](http://bitsavers.org/bits/Prime/pps/03_log.tape_I=boot_II=iptpal.tap.gz) [a backup from an installed system]
+
+## Pre-compiled binaries
+
+We'd prefer that you build your own from the source tree, but if that's
+not possible, a set of pre-compiled binaries is available.  Included are:
+
+* Linux i386
+* Linux amd64
+* Linux armhf (RasPi / BeagleBone)
+* FreeBSD amd64
+* Solaris amd64
+
+[download](https://sysovl.info/pages/blobs/emulator/embinaries.20200504.tar.gz)
 
 ## Sample System Images
 
 A set of sample system images derived from the public emulators can
-be downloaded to get you started.  The 
-[tarball](https://yagi.h-net.org/p50em_samplemachines_v3.tar)
-is 142882727 bytes, and its sha256sum is 
-32647dbcc3a0d541209eafc2f78d054e456d58046c9b3c5bc4ca64a8d9fc0037.
+be downloaded to get you started.  These tarballs preserve sparse
+allocation ("holes"), so that uninitialized space in the disk images
+does not occupy actual space.  You may need to tell `tar` to preserve
+this sparse allocation when you extract, e.g. with the `-S` option.
+
+The current
+[tarball](https://sysovl.info/pages/blobs/emulator/p50em_samplemachines_v5.tar)
+is 150,029,183 bytes, and its sha256sum is
+f5b8008d7c53171f50ad95dd5cc537ba48ca419049518f8ea28deee009c6541a.
 (gzip compression would only reduce this by ~400 kilobytes.)
-V3 removes additional junk, and rebuilds the disk images as 600 MB 
-drives, split 30/10 heads filesystem/paging.  This tarball preserves 
-sparse allocation ("holes"), so that uninitialized space in the disk 
-images does not occupy actual space.  You may need to tell `tar` to 
-preserve this sparse allocation when you extract, e.g. with the `-S` 
-option.  Also includes enhancements to the wrapper scripts: directory 
-independence and the ability to run the `runem` script from a terminal.
+
+V5 adds the source code for PRIMOS 19.2, and the diagnostics programs,
+to that image.
+
+V4 corrected ACL problems in the Rev19 and Rev24 images.
+
+V3 removed additional junk, and rebuilt the disk images as 600
+MB drives, split 30/10 heads filesystem/paging.  It also included
+enhancements to the wrapper scripts: directory independence and the
+ability to run the `runem` script from a terminal.
