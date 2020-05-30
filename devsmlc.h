@@ -335,15 +335,15 @@ int devsmlc (int class, int func, int device) {
       /* initially, we don't know about any SMLC boards */
 
       for (dx = 0; dx < SMLC_MAXBOARDS; dx++) {
-	dc[dx].deviceid = 0;
-	for (lx = 0; lx < SMLC_LINESPERBOARD; lx++) {
-	  dc[dx].plines[lx].connstate = SMLC_STATEDISCONNECTED;
-	  dc[dx].plines[lx].nextconntime = 0;
-	  dc[dx].plines[lx].fd = -1;
+        dc[dx].deviceid = 0;
+        for (lx = 0; lx < SMLC_LINESPERBOARD; lx++) {
+          dc[dx].plines[lx].connstate = SMLC_STATEDISCONNECTED;
+          dc[dx].plines[lx].nextconntime = 0;
+          dc[dx].plines[lx].fd = -1;
           dc[dx].plines[lx].remoteID = NULL;
-	  dc[dx].plines[lx].host = 0;
-	  dc[dx].plines[lx].port = 0;
-	}
+          dc[dx].plines[lx].host = 0;
+          dc[dx].plines[lx].port = 0;
+        }
       }
 
       /* read the smlc.cfg file.  This file specifies sync lines that
@@ -352,75 +352,75 @@ int devsmlc (int class, int func, int device) {
          and maintains connections to the specified TCP ports. The
          format of each line in this file is:
 
-	    <line #> tcpaddr:port
+            <line #> tcpaddr:port
 
          Entries can be in any order, comment lines begin with # or
-	 semi-colon. Line numbers range from 0 to 7. Line numbers 0 - 3
+         semi-colon. Line numbers range from 0 to 7. Line numbers 0 - 3
          will be associated with SMLC board 0 (device '50), and line
          numbers 4 - 7 will associated with SMLC board 1 (device '51).
       */
 
       if ((cfgfile = fopen("smlc.cfg", "r")) == NULL) {
-	if (errno != ENOENT)
-	  fprintf(stderr, "Failed to open smlc.cfg: %s", strerror(errno));
+        if (errno != ENOENT)
+          fprintf(stderr, "Failed to open smlc.cfg: %s", strerror(errno));
       } else {
-	lc = 0;
-	while (fgets(buf, sizeof(buf), cfgfile) != NULL) {
-	  int n;
-	  lc++;
-	  buf[sizeof(devname)] = 0;  /* don't let sscanf overwrite anything */
-	  buf[strlen(buf) - 1] = 0;  /* remove trailing newline */
-	  if (buf[0] == '\0' || buf[0] == ';' || buf[0] == '#')
-	    continue;
-	  n = sscanf(buf, "%d %s", &i, devname);
-	  if (n != 2) {
-	    fprintf(stderr, "Can't parse smlc.cfg line #%d: %s\n", lc, buf);
-	    continue;
-	  }
-	  if (i < 0 || i >= SMLC_MAXLINES) {
-	    fprintf(stderr, "Line # %d out of range in smlc.cfg at line #%d: %s\n", i, lc, buf);
-	    continue;
-	  }
+        lc = 0;
+        while (fgets(buf, sizeof(buf), cfgfile) != NULL) {
+          int n;
+          lc++;
+          buf[sizeof(devname)] = 0;  /* don't let sscanf overwrite anything */
+          buf[strlen(buf) - 1] = 0;  /* remove trailing newline */
+          if (buf[0] == '\0' || buf[0] == ';' || buf[0] == '#')
+            continue;
+          n = sscanf(buf, "%d %s", &i, devname);
+          if (n != 2) {
+            fprintf(stderr, "Can't parse smlc.cfg line #%d: %s\n", lc, buf);
+            continue;
+          }
+          if (i < 0 || i >= SMLC_MAXLINES) {
+            fprintf(stderr, "Line # %d out of range in smlc.cfg at line #%d: %s\n", i, lc, buf);
+            continue;
+          }
 #if DEBUG
-	  fprintf(smlclog, "%s Line %d, SMLC line %d set to device %s\n", smlctimestamp, lc, i, devname);
+          fprintf(smlclog, "%s Line %d, SMLC line %d set to device %s\n", smlctimestamp, lc, i, devname);
 #endif
-	  dx = i / SMLC_LINESPERBOARD;
-	  lx = i % SMLC_LINESPERBOARD;
-	  if (strlen(devname) > MAXHOSTLEN) {
-	    fprintf(stderr, "Line %d of smlc.cfg ignored: IP address too long\n", lc);
-	    continue;
-	  }
-	  tempport = 0;
-	  if ((p=strtok(devname, PDELIM)) != NULL) {
-	    host = gethostbyname(p);
-	    if (host == NULL) {
-	      fprintf(stderr, "Line %d of smlc.cfg ignored: can't resolve IP address %s\n", lc, p);
-	      continue;
-	    }
-	    if ((p=strtok(NULL, DELIM)) != NULL) {
-	      tempport = atoi(p);
-	      if (tempport < 1 || tempport > 65000) {
-		fprintf(stderr, "Line %d of smlc.cfg ignored: port number %d out of range 1-65000\n", tempport, lc);
-		continue;
-	      }
-	    }
+          dx = i / SMLC_LINESPERBOARD;
+          lx = i % SMLC_LINESPERBOARD;
+          if (strlen(devname) > MAXHOSTLEN) {
+            fprintf(stderr, "Line %d of smlc.cfg ignored: IP address too long\n", lc);
+            continue;
+          }
+          tempport = 0;
+          if ((p=strtok(devname, PDELIM)) != NULL) {
+            host = gethostbyname(p);
+            if (host == NULL) {
+              fprintf(stderr, "Line %d of smlc.cfg ignored: can't resolve IP address %s\n", lc, p);
+              continue;
+            }
+            if ((p=strtok(NULL, DELIM)) != NULL) {
+              tempport = atoi(p);
+              if (tempport < 1 || tempport > 65000) {
+                fprintf(stderr, "Line %d of smlc.cfg ignored: port number %d out of range 1-65000\n", tempport, lc);
+                continue;
+              }
+            }
           }
           if (tempport == 0) {
-	    fprintf(stderr, "Line %d of smlc.cfg ignored: no IP address or port number specified\n", lc);
-	    continue;
+            fprintf(stderr, "Line %d of smlc.cfg ignored: no IP address or port number specified\n", lc);
+            continue;
           }
           dc[dx].plines[lx].remoteID = (char *)malloc(32);
           hostaddr = ntohl(*(unsigned int *)host->h_addr);
           sprintf(dc[dx].plines[lx].remoteID, "%d.%d.%d.%d:%d", (hostaddr >> 24) & 0xff, (hostaddr >> 16) & 0xff,
             (hostaddr >> 8) & 0xff, hostaddr & 0xff, tempport);
-	  dc[dx].plines[lx].host = hostaddr;
-	  dc[dx].plines[lx].port = tempport;
+          dc[dx].plines[lx].host = hostaddr;
+          dc[dx].plines[lx].port = tempport;
 #if DEBUG
-	  fprintf(smlclog, "%s TCP address, host=%x, port=%d, controller=%d, line=%d\n", smlctimestamp, dc[dx].plines[lx].host,
+          fprintf(smlclog, "%s TCP address, host=%x, port=%d, controller=%d, line=%d\n", smlctimestamp, dc[dx].plines[lx].host,
             tempport, dx, lx);
 #endif
-	}
-	fclose(cfgfile);
+        }
+        fclose(cfgfile);
       }
       inited = 1;
     }
@@ -484,8 +484,8 @@ int devsmlc (int class, int func, int device) {
         if (dc[dx].plines[lx].fd != -1) {
           close(dc[dx].plines[lx].fd);
           dc[dx].plines[lx].fd = -1;
-	  dc[dx].plines[lx].connstate = SMLC_STATEDISCONNECTED;
-	  dc[dx].plines[lx].nextconntime = 0;
+          dc[dx].plines[lx].connstate = SMLC_STATEDISCONNECTED;
+          dc[dx].plines[lx].nextconntime = 0;
         }
         sp = &dc[dx].plines[lx].slines[SMLC_RECVIX];
         sp->enabled = 0;
@@ -535,7 +535,7 @@ int devsmlc (int class, int func, int device) {
       fprintf(smlclog, "%s SKS '02%02o skip if not interrupting, state is %s\n", smlctimestamp, device, intstates[dc[dx].intstate]);
 #endif
       if (dc[dx].intstate == SMLC_INTERRUPTING) {
-	IOSKIP;
+        IOSKIP;
       }
 
     } else {
@@ -635,8 +635,8 @@ int devsmlc (int class, int func, int device) {
 #endif
           close(lp->fd);
           lp->fd = -1;
-	  lp->connstate = SMLC_STATEDISCONNECTED;
-	  lp->nextconntime = 0;
+          lp->connstate = SMLC_STATEDISCONNECTED;
+          lp->nextconntime = 0;
         }
         IOSKIP;
         break;
@@ -808,7 +808,7 @@ int devsmlc (int class, int func, int device) {
           setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (void *)&optenable, sizeof(optenable));
           fcntl(fd, F_SETFL, O_NONBLOCK);
           bzero((char *) &raddr, sizeof(raddr));
-	  raddr.sin_family = AF_INET;
+          raddr.sin_family = AF_INET;
           raddr.sin_addr.s_addr = htonl(dc[dx].plines[lx].host);
           raddr.sin_port = htons(dc[dx].plines[lx].port);
           rc = connect(fd, (struct sockaddr *)&raddr, sizeof(raddr));

@@ -77,7 +77,7 @@
        1: "Type" word. 
           Bit 1 set = odd number of bytes (if set, last word is only 1 byte)
           Bit 7 set = normal data messages (otherwise, a timer message)
-	  Bit 16 set = broadcast timer message
+          Bit 16 set = broadcast timer message
 
   NOTE: at the hardware level, there are many other fields associated
   with a ring packet on the wire, for example, a CRC, ack byte, etc.
@@ -121,15 +121,15 @@
        7: data 2
 
   PNC diagnostic register:
-	NORXTX   EQU   '100000         DISABLE TX AND RX
-	TXDATER  EQU   '040000         FORCE RX CRC ERROR
-	TXACKER  EQU   '020000         FORCE TX ACK ERROR
-	RXACKER  EQU   '010000         FORCE RX ACK BYTE ERROR
-	CABLE    EQU   '000001         LOOPBACK OVER CABLE
-	ANALOG   EQU   '000002         LOOPBACK THRU ANALOG DEVICES
-	SINGSTEP EQU   '000004         LOOPBACK THRU SHIFT REG
-	RETRY    EQU   '000000         ALLOW HARDWR RETRY
-	NORETRY  EQU   '000010         NO HARDWR RETRY
+        NORXTX   EQU   '100000         DISABLE TX AND RX
+        TXDATER  EQU   '040000         FORCE RX CRC ERROR
+        TXACKER  EQU   '020000         FORCE TX ACK ERROR
+        RXACKER  EQU   '010000         FORCE RX ACK BYTE ERROR
+        CABLE    EQU   '000001         LOOPBACK OVER CABLE
+        ANALOG   EQU   '000002         LOOPBACK THRU ANALOG DEVICES
+        SINGSTEP EQU   '000004         LOOPBACK THRU SHIFT REG
+        RETRY    EQU   '000000         ALLOW HARDWR RETRY
+        NORETRY  EQU   '000010         NO HARDWR RETRY
 
   Primos PNC usage:
 
@@ -439,7 +439,7 @@ void pncaccept(time_t timenow) {
     fd = accept(pncfd, (struct sockaddr *)&addr, &addrlen);
     if (fd == -1) {
       if (errno != EWOULDBLOCK && errno != EINTR && errno != EAGAIN)
-	perror("accept error for PNC");
+        perror("accept error for PNC");
       return;
     }
     if (!(pncstat & PNCNSCONNECTED)) {
@@ -731,7 +731,7 @@ unsigned short pncxmit() {
   if (xmit.toid == 255) {
     for (nodeid=1; nodeid<=MAXNODEID; nodeid++)
       if (ni[nodeid].cstate != PNCCSNONE)
-	xmitstat |= pncxmit1(nodeid);
+        xmitstat |= pncxmit1(nodeid);
   } else {
     xmitstat |= pncxmit1(xmit.toid);
   }
@@ -764,7 +764,7 @@ void pncrecv() {
       if (fd != -1)
         FD_SET(fd, &fds);
       if (fd > n)
-	n = fd;
+        n = fd;
     }
   n = select(n+1, &fds, NULL, NULL, &timeout);
   if (n == -1) {
@@ -784,7 +784,7 @@ void pncrecv() {
     fd = ni[nodeid].fd;
     if (fd >= 0 && FD_ISSET(fd, &fds))
       if (pncrecv1(nodeid))
-	break;
+        break;
   } while (nodeid != prevnode);      /* went round once? */
   prevnode = nodeid;
 }
@@ -853,7 +853,7 @@ int pncread (int nodeid, int nbytes) {
   if (n == -1) {
     if (errno != EWOULDBLOCK && errno != EINTR && errno != EAGAIN) {
       if (errno != EPIPE)
-	fprintf(stderr, "error reading %d bytes from node %d: %s\n", nbytes, nodeid, strerror(errno));
+        fprintf(stderr, "error reading %d bytes from node %d: %s\n", nbytes, nodeid, strerror(errno));
       pncdisc(nodeid, "error reading packet");
     }
     n = 0;
@@ -925,92 +925,92 @@ int devpnc (int class, int func, int device) {
        where:
           nodeid = node's id (1-247) on my ring
           host = the remote emulator's TCP/IP address or name
-	  port = the remote emulator's TCP/IP PNC port
-	  NOTE: host:port may be - for incoming-only nodes
-	  uid = 16 byte password, no spaces
-	  NOTE: use od -h /dev/urandom|head to create a uid
+          port = the remote emulator's TCP/IP PNC port
+          NOTE: host:port may be - for incoming-only nodes
+          uid = 16 byte password, no spaces
+          NOTE: use od -h /dev/urandom|head to create a uid
     */
 
     linenum = 0;
     if ((ringfile=fopen("ring.cfg", "r")) != NULL) {
       while (fgets(buf, sizeof(buf), ringfile) != NULL) {
-	len = strlen(buf);
-	linenum++;
-	if (buf[len-1] != '\n') {
-	  fprintf(stderr,"Line %d of ring.cfg ignored: line too long, can't parse file\n", linenum);
-	  return -1;
-	}
-	buf[len-1] = 0;
-	if (strcmp(buf,"") == 0 || buf[0] == ';' || buf[0] == '#')
-	  continue;
+        len = strlen(buf);
+        linenum++;
+        if (buf[len-1] != '\n') {
+          fprintf(stderr,"Line %d of ring.cfg ignored: line too long, can't parse file\n", linenum);
+          return -1;
+        }
+        buf[len-1] = 0;
+        if (strcmp(buf,"") == 0 || buf[0] == ';' || buf[0] == '#')
+          continue;
 
-	if ((p=strtok(buf, DELIM)) == NULL) {
-	  fprintf(stderr,"Line %d of ring.cfg ignored: node id missing\n", linenum);
-	  continue;
-	}
-	tempid = atoi(p);
-	if (tempid < 1 || tempid > MAXNODEID) {
-	  fprintf(stderr,"Line %d of ring.cfg ignored: node id is out of range 1-%d\n", linenum, MAXNODEID);
-	  continue;
-	}
-	if (ni[tempid].cstate != PNCCSNONE) {
-	  fprintf(stderr,"Line %d of ring.cfg ignored: node id occurs more than once\n", linenum);
-	  continue;
-	}
+        if ((p=strtok(buf, DELIM)) == NULL) {
+          fprintf(stderr,"Line %d of ring.cfg ignored: node id missing\n", linenum);
+          continue;
+        }
+        tempid = atoi(p);
+        if (tempid < 1 || tempid > MAXNODEID) {
+          fprintf(stderr,"Line %d of ring.cfg ignored: node id is out of range 1-%d\n", linenum, MAXNODEID);
+          continue;
+        }
+        if (ni[tempid].cstate != PNCCSNONE) {
+          fprintf(stderr,"Line %d of ring.cfg ignored: node id occurs more than once\n", linenum);
+          continue;
+        }
 
-	if ((p=strtok(NULL, DELIM)) == NULL) {
-	  fprintf(stderr,"Line %d of ring.cfg ignored: host address missing\n", linenum);
-	  continue;
-	}
-	if (strlen(p) > MAXHOSTLEN) {
-	  fprintf(stderr,"Line %d of ring.cfg ignored: IP address too long\n", linenum);
-	  continue;
-	}
-	strncpy(temphost, p, MAXHOSTLEN);
+        if ((p=strtok(NULL, DELIM)) == NULL) {
+          fprintf(stderr,"Line %d of ring.cfg ignored: host address missing\n", linenum);
+          continue;
+        }
+        if (strlen(p) > MAXHOSTLEN) {
+          fprintf(stderr,"Line %d of ring.cfg ignored: IP address too long\n", linenum);
+          continue;
+        }
+        strncpy(temphost, p, MAXHOSTLEN);
 
-	if ((p=strtok(NULL, DELIM)) == NULL) {
-	  fprintf(stderr,"Line %d of ring.cfg ignored: unique id/password missing\n", linenum);
-	  continue;
-	}
-	if (strlen(p) > MAXUIDLEN) {
-	  fprintf(stderr,"Line %d of ring.cfg ignored: unique id/password too long\n", linenum);
-	  continue;
-	}
-	bzero(ni[tempid].uid, sizeof(ni[tempid].uid));
-	for (i=0; i<=MAXNODEID; i++)
-	  if (strcmp(p, ni[i].uid) == 0) {
-	    fprintf(stderr,"Line %d of ring.cfg ignored: unique id/password is not unique\n", linenum);
-	    break;
-	  }
+        if ((p=strtok(NULL, DELIM)) == NULL) {
+          fprintf(stderr,"Line %d of ring.cfg ignored: unique id/password missing\n", linenum);
+          continue;
+        }
+        if (strlen(p) > MAXUIDLEN) {
+          fprintf(stderr,"Line %d of ring.cfg ignored: unique id/password too long\n", linenum);
+          continue;
+        }
+        bzero(ni[tempid].uid, sizeof(ni[tempid].uid));
+        for (i=0; i<=MAXNODEID; i++)
+          if (strcmp(p, ni[i].uid) == 0) {
+            fprintf(stderr,"Line %d of ring.cfg ignored: unique id/password is not unique\n", linenum);
+            break;
+          }
         if (i <= MAXNODEID)
-	  continue;
-	strncpy(ni[tempid].uid, p, MAXUIDLEN);
+          continue;
+        strncpy(ni[tempid].uid, p, MAXUIDLEN);
 
-	/* parse the port number from the IP address */
+        /* parse the port number from the IP address */
 
-	tempport = 0;
-	if (strcmp(temphost, "-") != 0) {
-	  if ((p=strtok(temphost, PDELIM)) != NULL) {
-	    strncpy(ni[tempid].host, p, MAXHOSTLEN);
-	    if ((p=strtok(NULL, PDELIM)) != NULL) {
-	      tempport = atoi(p);
-	      if (tempport < 1 || tempport > 65000)
-		fprintf(stderr,"Line %d of ring.cfg ignored: port number out of range 1-65000\n", linenum);
-	    }
-	  }
-	  if (tempport <= 0) {
-	    fprintf(stderr, "Line %d of ring.cfg ignored: can't parse port number from %s\n", linenum, temphost);
-	    continue;
-	  }
-	}
-	ni[tempid].cstate = PNCCSDISC;
-	ni[tempid].port = tempport;
-	TRACE(T_RIO, "Line %d: id=%d, host=\"%s\", port=%d, uid=%s\n", linenum, tempid, temphost, tempport, ni[tempid].uid);
-	configured = 1;
+        tempport = 0;
+        if (strcmp(temphost, "-") != 0) {
+          if ((p=strtok(temphost, PDELIM)) != NULL) {
+            strncpy(ni[tempid].host, p, MAXHOSTLEN);
+            if ((p=strtok(NULL, PDELIM)) != NULL) {
+              tempport = atoi(p);
+              if (tempport < 1 || tempport > 65000)
+                fprintf(stderr,"Line %d of ring.cfg ignored: port number out of range 1-65000\n", linenum);
+            }
+          }
+          if (tempport <= 0) {
+            fprintf(stderr, "Line %d of ring.cfg ignored: can't parse port number from %s\n", linenum, temphost);
+            continue;
+          }
+        }
+        ni[tempid].cstate = PNCCSDISC;
+        ni[tempid].port = tempport;
+        TRACE(T_RIO, "Line %d: id=%d, host=\"%s\", port=%d, uid=%s\n", linenum, tempid, temphost, tempport, ni[tempid].uid);
+        configured = 1;
       }
       if (!feof(ringfile)) {
-	perror(" error reading ring.cfg");
-	fatal(NULL);
+        perror(" error reading ring.cfg");
+        fatal(NULL);
       }
       fclose(ringfile);
     } else
@@ -1087,7 +1087,7 @@ int devpnc (int class, int func, int device) {
     if (func == 00) {    /* OCP '0007 - disconnect */
       TRACE(T_INST|T_RIO, " OCP '%02o%02o - disconnect\n", func, device);
       for (i=0; i<=MAXNODEID; i++)
-	pncdisc(i, "ring disconnect");
+        pncdisc(i, "ring disconnect");
       rcv.state = PNCBSIDLE;
       rcvstat = PNCRSBUSY;
       xmitstat = PNCXSBUSY;
@@ -1183,12 +1183,12 @@ int devpnc (int class, int func, int device) {
       IOSKIP;
 
       /* these next two are mostly bogus: prmnt1 T&M wants them this
-	 way because it puts the PNC in diagnostic mode, disables
-	 transmit and receive, then does transmit and receive
-	 operations to see how the DMA registers are affected.  I
-	 couldn't get very far with this T&M (couldn't complete test
-	 1) because it is so specific to the exact states the PNC
-	 hardware moves through. */
+         way because it puts the PNC in diagnostic mode, disables
+         transmit and receive, then does transmit and receive
+         operations to see how the DMA registers are affected.  I
+         couldn't get very far with this T&M (couldn't complete test
+         1) because it is so specific to the exact states the PNC
+         hardware moves through. */
 
     } else if (func == 014) {   /* read recv DMX channel */
       TRACE(T_INST|T_RIO, " INA '%02o%02o - get recv DMX chan '%o 0x%04x\n", func, device, rcv.dmachan, rcv.dmachan);
@@ -1228,11 +1228,11 @@ int devpnc (int class, int func, int device) {
 
     } else if (func == 014) {   /* initiate recv, dma chan in A */
       if (!(pncstat & PNCNSCONNECTED)) {
-	break;                  /* yes, return and don't skip */
+        break;                  /* yes, return and don't skip */
       }
       if (rcvstat & PNCRSBUSY) {  /* already busy? */
-	warn("pnc: recv when already busy ignored");
-	break;                  /* yes, return and don't skip */
+        warn("pnc: recv when already busy ignored");
+        break;                  /* yes, return and don't skip */
       }
       IOSKIP;
       rcvstat = PNCRSBUSY;        /* set receive busy */
@@ -1241,11 +1241,11 @@ int devpnc (int class, int func, int device) {
 
     } else if (func == 015) {   /* initiate xmit, dma chan in A */
       if (!(pncstat & PNCNSCONNECTED)) {
-	break;                  /* yes, return and don't skip */
+        break;                  /* yes, return and don't skip */
       }
       if (xmitstat & PNCXSBUSY) {  /* already busy? */
-	warn("pnc: xmit when already busy ignored");
-	break;                  /* yes, return and don't skip */
+        warn("pnc: xmit when already busy ignored");
+        break;                  /* yes, return and don't skip */
       }
       IOSKIP;
       pncxmit();
@@ -1259,12 +1259,12 @@ int devpnc (int class, int func, int device) {
     } else if (func == 017) {   /* set my node ID */
       myid = getcrs16(A) & 0xFF;
       if (myid > MAXNODEID) {
-	printf("em: my nodeid %d > max nodeid %d; check Primenet config\n", myid, MAXNODEID);
-	myid = 0;
+        printf("em: my nodeid %d > max nodeid %d; check Primenet config\n", myid, MAXNODEID);
+        myid = 0;
       }
       if (myid != 0 && ni[myid].cstate == PNCCSNONE) {
-	printf("em: my nodeid %d not in ring.cfg; PNC disabled\n", myid);
-	myid = 0;
+        printf("em: my nodeid %d not in ring.cfg; PNC disabled\n", myid);
+        myid = 0;
       }
       pncstat = (pncstat & 0xFF00) | myid;
       ni[myid].cstate = PNCCSAUTH;
@@ -1303,10 +1303,10 @@ rcvexit:
 intrexit:
     if (enabled && ((pncstat & 0xC000) | intstat) != intstat) {
       if (gv.intvec == -1) {
-	gv.intvec = pncvec;
-	intstat |= (pncstat & 0xC000);
+        gv.intvec = pncvec;
+        intstat |= (pncstat & 0xC000);
       } else
-	devpoll[device] = 100;
+        devpoll[device] = 100;
     }
     break;
 

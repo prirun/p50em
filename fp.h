@@ -70,7 +70,7 @@ int prieee8(unsigned long long dp, double *d) {
     if (frac64 == 0x8000000000000000LL) {
       exp32 += (1023-128);
       if (exp32 < 0 || exp32 > 0x7fe)
-	return 0;
+        return 0;
       frac64 |= ((long long)exp32 << 52);
       *d = *(double *)&frac64;
       return 1;
@@ -142,11 +142,11 @@ retry:
     okay = 0;
     if (frac64 == 0)
       if (neg) {
-	printf("em: +infinity in ieeepr8\n");
-	d = DBL_MAX;
+        printf("em: +infinity in ieeepr8\n");
+        d = DBL_MAX;
       } else {
-	printf("em: -infinity in ieeepr8\n");
-	d = DBL_MIN;
+        printf("em: -infinity in ieeepr8\n");
+        d = DBL_MIN;
       }
     else {
       printf("em: NaN in ieeepr8\n");
@@ -267,8 +267,8 @@ unsigned long long dfcm (unsigned long long dp, int *oflow) {
     } else {
       frac64 = -frac64;                       /* complement fraction */
       while ((frac64 ^ (frac64 << 1)) >= 0) {
-	frac64 = frac64 << 1;                 /* normalize */
-	exp32--;
+        frac64 = frac64 << 1;                 /* normalize */
+        exp32--;
       }
     }
     if (exp32 > 32767 || exp32 < -32768)
@@ -322,10 +322,10 @@ unsigned long long frn(unsigned long long dp, int *oflow) {
     if (doround1 || doround2) {
       frac64 &= 0xFFFFFF0000000000LL;
       if (frac64 != 0x7FFFFF0000000000LL)
-	frac64 +=        0x10000000000LL;
+        frac64 +=        0x10000000000LL;
       else {
-	frac64 =    0x4000000000000000LL;
-	exp32++;
+        frac64 =    0x4000000000000000LL;
+        exp32++;
       }
       frac64 |= (exp32 & 0xFFFF);
       frac64 = norm(frac64, oflow);
@@ -359,13 +359,13 @@ int fcs (unsigned long long fac, int fop) {
   if ((templ & 0x80000000) == (fop & 0x80000000)) {  /* compare signs */
     if (facexp == fopexp)                            /* compare exponents */
       if (templ == fop) {                            /* compare fractions */
-	SETEQ;
-	return 1;
+        SETEQ;
+        return 1;
       } else if (templ < fop) {                      /* compare fractions */
-	SETLT;                                       /* FAC < operand */
-	return 2;
+        SETLT;                                       /* FAC < operand */
+        return 2;
       } else
-	return 0;                                    /* FAC > operand */
+        return 0;                                    /* FAC > operand */
     else if (facexp < fopexp) {                      /* compare exponents */
       SETLT;                                         /* FAC < operand */
       return 2;
@@ -410,13 +410,13 @@ int dfcs (unsigned long long fac, long long fop) {
   if ((templl & 0x8000000000000000LL) == (fop & 0x8000000000000000LL)) {  /* compare signs */
     if (facexp == fopexp)                            /* compare exponents */
       if (templl == fop) {                           /* compare fractions */
-	SETEQ;
-	return 1;
+        SETEQ;
+        return 1;
       } else if (templl < fop) {                     /* compare fractions */
-	SETLT;                                       /* FAC < operand */
-	return 2;
+        SETLT;                                       /* FAC < operand */
+        return 2;
       } else
-	return 0;                                    /* FAC > operand */
+        return 0;                                    /* FAC > operand */
     else if (facexp < fopexp) {                      /* compare exponents */
       SETLT;                                         /* FAC < operand */
       return 2;

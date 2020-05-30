@@ -55,18 +55,18 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
 
     if (xok)
       if (ixy == 2 || ixy == 6)
-	ea_w += getcrs16(X);
+        ea_w += getcrs16(X);
       else if (ixy == 1 || ixy == 4)
-	ea_w += getcrs16(Y);
+        ea_w += getcrs16(Y);
 
 #if 0
       /* if this is a PB% address, use RPBR instead if it's in range
 
-	 NOTE: this has been disabled, because gcov showed it only
-	 occurred 0.5% of the time */
+         NOTE: this has been disabled, because gcov showed it only
+         occurred 0.5% of the time */
 
       if (br == 0 && ((((ea_s & 0x8FFF) << 16) | (ea_w & 0xFC00)) == gv.brp[RPBR].vpn))
-	eap = &gv.brp[RPBR];
+        eap = &gv.brp[RPBR];
 #endif
 
     if (ixy >= 3) {
@@ -74,26 +74,26 @@ static inline ea_t ea64v (unsigned short inst, ea_t earp) {
       TRACE(T_EAV, " Long indirect, ea=%o/%o, ea_s=%o, ea_w=%o\n", ea>>16, ea&0xFFFF, ea_s, ea_w);
       m = get16(ea);
       if (m & 0x8000)
-	fault(POINTERFAULT, m, ea);
+        fault(POINTERFAULT, m, ea);
       ea_s = m | (ea_s & RINGMASK16);
       ea_w = get16(INCVA(ea,1));
       TRACE(T_EAV, " After indirect, ea_s=%o, ea_w=%o\n", ea_s, ea_w);
 
       /* when passing stack variables, callee references will be
-	 SB%+20,*, which may still be in the same page.  Don't switch to
-	 UNBR if the new ea is still in the current page */
+         SB%+20,*, which may still be in the same page.  Don't switch to
+         UNBR if the new ea is still in the current page */
 
       if ((((ea_s & 0x8FFF) << 16) | (ea_w & 0xFC00)) != (eap->vpn & 0x0FFFFFFF))
-	eap = &gv.brp[UNBR];
+        eap = &gv.brp[UNBR];
 
       if (xok)
-	if (ixy == 7) {
-	  TRACE(T_EAV, " Postindex, old ea_w=%o, X='%o/%d\n", ea_w, getcrs16(X), getcrs16s(X));
-	  ea_w += getcrs16(X);
-	} else if (ixy == 5) {
-	  TRACE(T_EAV, " Postindex, old ea_w=%o, Y='%o/%d\n", ea_w, getcrs16(Y), getcrs16s(Y));
-	  ea_w += getcrs16(Y);
-	}
+        if (ixy == 7) {
+          TRACE(T_EAV, " Postindex, old ea_w=%o, X='%o/%d\n", ea_w, getcrs16(X), getcrs16s(X));
+          ea_w += getcrs16(X);
+        } else if (ixy == 5) {
+          TRACE(T_EAV, " Postindex, old ea_w=%o, Y='%o/%d\n", ea_w, getcrs16(Y), getcrs16s(Y));
+          ea_w += getcrs16(Y);
+        }
     }
     return MAKEVA(ea_s, ea_w);
   }

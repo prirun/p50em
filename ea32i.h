@@ -26,33 +26,33 @@ static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned int *immu32, 
       d = iget16(RP);
       RPL++;
       if (sr == 0)                            /* imm type 1 */
-	*immu32 = d << 16;
+        *immu32 = d << 16;
       else                                    /* imm type 2 */
-	*(int *)immu32 = *(short *)&d;
+        *(int *)immu32 = *(short *)&d;
       return IMM_EA;
 
     case 2:
       switch (sr) {
       case 0:                                 /* imm type 3 */
-	d = iget16(RP);
-	INCRP;
-	*immu64 = (((long long)(d & 0xFF00)) << 48) | (d & 0xFF);
-	return IMM_EA;
+        d = iget16(RP);
+        INCRP;
+        *immu64 = (((long long)(d & 0xFF00)) << 48) | (d & 0xFF);
+        return IMM_EA;
       case 1:                                 /* FAC0 source */
-	*immu64 = getgr64(FAC0);
-	return IMM_EA;
+        *immu64 = getgr64(FAC0);
+        return IMM_EA;
       case 3:                                 /* FAC1 source */
-	*immu64 = getgr64(FAC1);
-	return IMM_EA;
+        *immu64 = getgr64(FAC1);
+        return IMM_EA;
       case 2:
       case 4:
       case 5:
       case 6:
       case 7:
-	fault(UIIFAULT, RPL, RP);
-	fatal("ea32i: return from UII fault!");
+        fault(UIIFAULT, RPL, RP);
+        fatal("ea32i: return from UII fault!");
       default:
-	fatal("ea32i: sr < 0 or > 7?");
+        fatal("ea32i: sr < 0 or > 7?");
       }
       fatal("ea32i: case tm=0 br=2 fall-through");
 
@@ -62,7 +62,7 @@ static inline ea_t ea32i (ea_t earp, unsigned short inst, unsigned int *immu32, 
       ea = (getgr32(sr) & 0xFFFF0000) | ((getgr32(sr) + d) & 0xFFFF);
       TRACE(T_EAI, " GRR, d=%x, [sr]=%o/%o, ea=%o/%o\n", d, getgr32(sr)>>16, getgr32(sr)&0xFFFF, ea>>16, ea&0xFFFF);
       if (ea & 0x80000000)
-	fault(POINTERFAULT, ea>>16, ea);
+        fault(POINTERFAULT, ea>>16, ea);
       return ea | ring;
 
     default:

@@ -216,7 +216,7 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 /* macros for handling the C-bit (overflow) and L-bit (carry out) */
 
 #define EXPC(onoff) \
-  if ((onoff)) putcrs16(KEYS, getcrs16(KEYS) | 0100000);	\
+  if ((onoff)) putcrs16(KEYS, getcrs16(KEYS) | 0100000);        \
   else putcrs16(KEYS, getcrs16(KEYS) & 077777)
 
 #define SETC putcrs16(KEYS, getcrs16(KEYS) | 0100000)
@@ -225,14 +225,14 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 /* EXPCL sets both the C and L bits for shift instructions */
 
 #define EXPCL(onoff) \
-  if ((onoff)) putcrs16(KEYS, getcrs16(KEYS) | 0120000);	\
+  if ((onoff)) putcrs16(KEYS, getcrs16(KEYS) | 0120000);        \
   else putcrs16(KEYS, getcrs16(KEYS) & ~0120000)
 
 #define SETCL putcrs16(KEYS, getcrs16(KEYS) | 0120000)
 #define CLEARCL putcrs16(KEYS, getcrs16(KEYS) & ~0120000)
 
 #define SETL(onoff) \
-  if ((onoff)) putcrs16(KEYS, getcrs16(KEYS) | 020000);	\
+  if ((onoff)) putcrs16(KEYS, getcrs16(KEYS) | 020000); \
   else putcrs16(KEYS, getcrs16(KEYS) & ~020000)
 
 /* XSETL is a dummy to indicate that the L-bit may not be set correctly */
@@ -270,11 +270,11 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 
 /* trace flags to control aspects of emulator tracing:
 
-   T_EAR	trace R-mode effective address calculation
-   T_EAV	trace V-mode effective address calculation
-   T_EAI	trace I-mode effective address calculation
+   T_EAR        trace R-mode effective address calculation
+   T_EAV        trace V-mode effective address calculation
+   T_EAI        trace I-mode effective address calculation
    T_FLOW       instruction summary
-   T_INST	detailed instruction trace
+   T_INST       detailed instruction trace
    T_MODE       trace CPU mode changes
    T_EAAP       AP effective address calculation
    T_DIO        disk I/O
@@ -757,7 +757,7 @@ void addsym(char *sym, unsigned short seg, unsigned short word, char type) {
     ix = findsym(addr, 'x');
     if (ix+1 < numsyms)          /* make room for the new symbol */
       for (ix2 = numsyms; ix2 > ix; ix2--)
-	mapsym[ix2] = mapsym[ix2-1];
+        mapsym[ix2] = mapsym[ix2-1];
     //TRACEA("%s = %o/%o\n", sym, seg, words);
     strncpy(mapsym[ix+1].symname, sym, MAXSYMLEN);
     mapsym[ix+1].address = addr;
@@ -795,11 +795,11 @@ void readloadmap(char *filename, int showerr) {
 #if 0
       printf("adding proc symbol, line=%s\n", line);
       if (tnou_ea == 0 && strcmp(sym,"TNOU") == 0)
-	tnou_ea = MAKEVA(ecbseg, ecbword);
+        tnou_ea = MAKEVA(ecbseg, ecbword);
       if (tnoua_ea == 0 && strcmp(sym,"TNOUA") == 0)
-	tnoua_ea = MAKEVA(ecbseg, ecbword);
+        tnoua_ea = MAKEVA(ecbseg, ecbword);
       if (tsrc_ea == 0 && strcmp(sym,"TSRC$$") == 0)
-	tsrc_ea = MAKEVA(ecbseg, ecbword);
+        tsrc_ea = MAKEVA(ecbseg, ecbword);
 #endif
     } else if (sscanf(line, "%s %o %o", sym, &segno, &wordno) == 3) {
       addsym(sym, segno, wordno, 'x');
@@ -843,7 +843,7 @@ char *searchloadmap(int addr, char type) {
     diff = addr - mapsym[ix].address;
     if (diff) {
       if (++bufix == MAXBUFIX)
-	bufix = 0;
+        bufix = 0;
       snprintf(buf[bufix], sizeof(buf[0]), "%s+'%o", mapsym[ix].symname, diff);
       return buf[bufix];
     } else
@@ -936,34 +936,34 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       relseg = seg & 0x3FF;     /* segment within segment table */
       TRACE(T_MAP, "   MAP: ea=%o/%o, seg=%o, dtar=%o, nsegs=%d, relseg=%d, page=%d\n", ea>>16, ea&0xFFFF, seg, dtar, nsegs, relseg, PAGENO(ea));
       if (relseg >= nsegs)
-	fault(SEGFAULT, 1, ea);   /* fcode = segment too big */
+        fault(SEGFAULT, 1, ea);   /* fcode = segment too big */
       staddr = (dtar & 0x003F0000) | ((dtar & 0x7FFF)<<1);
       sdw = get32mem(staddr+relseg*2);
       TRACE(T_MAP,"        staddr=%o, sdw=%o\n", staddr, sdw);
       if (sdw & 0x8000)
-	fault(SEGFAULT, 2, ea);   /* fcode = sdw fault bit set */
+        fault(SEGFAULT, 2, ea);   /* fcode = sdw fault bit set */
       ptaddr = (((sdw & 0x3F)<<10) | (sdw>>22)) << 6;
       if (gv.pmap32bits) {
-	pmaddr = ptaddr + 2*PAGENO(ea);
-	pte = get16mem(pmaddr);
+        pmaddr = ptaddr + 2*PAGENO(ea);
+        pte = get16mem(pmaddr);
 
-	/* this line enables 512MB on the 53xx and later machines that
-	   support more than 128MB of physical memory.  The pmap32mask
-	   is cpu-dependant: older machines like the 9950 looked at
-	   fewer bits, and the older software like Primos rev 19 had
-	   other stuff in the higher-order bits that the hardware
-	   ignored.  So on older machines, we need to ignore them
-	   too, so older software still works. */
+        /* this line enables 512MB on the 53xx and later machines that
+           support more than 128MB of physical memory.  The pmap32mask
+           is cpu-dependant: older machines like the 9950 looked at
+           fewer bits, and the older software like Primos rev 19 had
+           other stuff in the higher-order bits that the hardware
+           ignored.  So on older machines, we need to ignore them
+           too, so older software still works. */
 
-	ppa = (get32mem(pmaddr) & gv.pmap32mask) << 10;
+        ppa = (get32mem(pmaddr) & gv.pmap32mask) << 10;
       } else {
-	pmaddr = ptaddr + PAGENO(ea);
-	pte = get16mem(pmaddr);
-	ppa = (pte & 0xFFF) << 10;
+        pmaddr = ptaddr + PAGENO(ea);
+        pte = get16mem(pmaddr);
+        ppa = (pte & 0xFFF) << 10;
       }
       TRACE(T_MAP,"        ptaddr=%o, pmaddr=%o, pte=%o\n", ptaddr, pmaddr, pte);
       if (!(pte & 0x8000))
-	fault(PAGEFAULT, 0, ea);
+        fault(PAGEFAULT, 0, ea);
       put16mem(pmaddr, get16mem(pmaddr) | 040000);     /* set referenced bit */
       stlbp->access[0] = 7;
       stlbp->access[1] = (sdw >> 12) & 7;
@@ -979,16 +979,16 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
 #endif
 
       /* if this is an I/O segment reference, load the I/O TLB too.
-	 This is done because earlier machines didn't have the LIOT
-	 instruction to load the IOTLB; instead, they loaded it with
-	 regular memory reference instructions like LDA (they also
-	 only had a 64-entry IOTLB, so the emulation is not exact) */
+         This is done because earlier machines didn't have the LIOT
+         instruction to load the IOTLB; instead, they loaded it with
+         regular memory reference instructions like LDA (they also
+         only had a 64-entry IOTLB, so the emulation is not exact) */
 
       if (seg < 4) {
-	iotlbix = (ea & 0x3FFFF) >> 10;
-	gv.iotlb[iotlbix].valid = 1;
-	gv.iotlb[iotlbix].ppa = ppa;
-	TRACE(T_TLB, "iotlb[%d] loaded at %o/%o for %o/%o, ppn=%d\n", stlbix, RPH, RPL, seg, ea&0xFFFF, ppa>>10);
+        iotlbix = (ea & 0x3FFFF) >> 10;
+        gv.iotlb[iotlbix].valid = 1;
+        gv.iotlb[iotlbix].ppa = ppa;
+        TRACE(T_TLB, "iotlb[%d] loaded at %o/%o for %o/%o, ppn=%d\n", stlbix, RPH, RPL, seg, ea&0xFFFF, ppa>>10);
       }
     }
 #if 0
@@ -1005,7 +1005,7 @@ static pa_t mapva(ea_t ea, ea_t rp, short intacc, unsigned short *access) {
       put16mem(stlbp->pmaddr, get16mem(stlbp->pmaddr) & ~020000);    /* reset unmodified bit in memory */
     }
     pa = stlbp->ppa | (ea & 0x3FF);
-    TRACE(T_MAP,"        for ea %o/%o, iacc=%d, stlbix=%d, pa=%o	loaded at #%u\n", ea>>16, ea&0xffff, intacc, stlbix, pa, stlbp->load_ic);
+    TRACE(T_MAP,"        for ea %o/%o, iacc=%d, stlbix=%d, pa=%o        loaded at #%u\n", ea>>16, ea&0xffff, intacc, stlbix, pa, stlbp->load_ic);
   } else {
     pa = ea;
   }
@@ -1866,12 +1866,12 @@ static void fatal(char *msg) {
       next = get16r0(pcbp+PCBCSNEXT);
       last = get16r0(pcbp+PCBCSLAST);
       while (next != first) {
-	this = next-6;
-	csea = MAKEVA(getcrs16(OWNERH)+gv.csoffset, this);
-	for (i=0; i<6; i++)
-	  cs[i] = get16r0(csea+i);
-	printf("Fault: RP=%o/%o, keys=%06o, fcode=%o, faddr=%o/%o\n", cs[0], cs[1], cs[2], cs[3], cs[4], cs[5]);
-	next = this;
+        this = next-6;
+        csea = MAKEVA(getcrs16(OWNERH)+gv.csoffset, this);
+        for (i=0; i<6; i++)
+          cs[i] = get16r0(csea+i);
+        printf("Fault: RP=%o/%o, keys=%06o, fcode=%o, faddr=%o/%o\n", cs[0], cs[1], cs[2], cs[3], cs[4], cs[5]);
+        next = this;
       }
     }
 
@@ -1882,7 +1882,7 @@ static void fatal(char *msg) {
       printf(" %o/%o", gv.tracerpq[i]>>16, gv.tracerpq[i]&0xFFFF);
       i = (i+1) & (MAXRPQ-1);
       if (i == gv.tracerpqx)
-	break;
+        break;
     }
     printf("\n");
     printf("STLB calls: %d  misses: %d  hitrate: %5.2f%%\n", gv.mapvacalls, gv.mapvamisses, (double)(gv.mapvacalls-gv.mapvamisses)/gv.mapvacalls*100.0);
@@ -2033,12 +2033,12 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
     if (T_FAULT && fvec == POINTERFAULT) {
       ea = get32(faddr);
       if ((ea & 0xF0000000) == 0x80000000) {
-	ea &= 0x0FFFFFFF;
-	namlen = get16(ea);
-	for (i=0; i<(namlen+1)/2; i++)
-	  name[i] = get16(ea+i+1) & 0x7f7f;
-	name[i] = 0;
-	TRACE(T_FAULT, "fault: DYNT addr=%o/%o, length=%d, name=%s\n", ea>>16, ea&0xffff, namlen, name);
+        ea &= 0x0FFFFFFF;
+        namlen = get16(ea);
+        for (i=0; i<(namlen+1)/2; i++)
+          name[i] = get16(ea+i+1) & 0x7f7f;
+        name[i] = 0;
+        TRACE(T_FAULT, "fault: DYNT addr=%o/%o, length=%d, name=%s\n", ea>>16, ea&0xffff, namlen, name);
       }
     }
 #endif
@@ -2254,16 +2254,16 @@ special:
     }
     for (indlevel=0; i; indlevel++) {
       if (indlevel == INDLEVELS)
-	fault(RESTRICTFAULT, 0, 0);
+        fault(RESTRICTFAULT, 0, 0);
       if (ea >= gv.livereglim)
-	m = get16(MAKEVA(rph,ea));
+        m = get16(MAKEVA(rph,ea));
       else
-	m = get16trap(ea);
+        m = get16trap(ea);
       TRACE(T_EAR, " Indirect, old ea=%o, [ea]=%o\n", ea, m);
       if ((getcrs16(KEYS) & 016000) == 04000)
-	i = 0;
+        i = 0;
       else
-	i = m & 0100000;
+        i = m & 0100000;
       ea = m & amask;
       TRACE(T_EAR, " Indirect, new i=%d, new ea=%o\n", i!=0, ea);
       eap = &gv.brp[UNBR];
@@ -2280,16 +2280,16 @@ special:
     }
     for (indlevel=0; i; indlevel++) {
       if (indlevel == INDLEVELS)
-	fault(RESTRICTFAULT, 0, 0);
+        fault(RESTRICTFAULT, 0, 0);
       if (ea >= gv.livereglim)
-	m = get16(MAKEVA(rph,ea));
+        m = get16(MAKEVA(rph,ea));
       else
-	m = get16trap(ea);
+        m = get16trap(ea);
       TRACE(T_EAR, " Indirect, ea=%o, [ea]=%o\n", ea, m);
       if ((getcrs16(KEYS) & 016000) == 04000)
-	i = 0;
+        i = 0;
       else
-	i = m & 0100000;
+        i = m & 0100000;
       ea = m & amask;
       TRACE(T_EAR, " Indirect, new i=%d, new ea=%o\n", i!=0, ea);
     }
@@ -2310,24 +2310,24 @@ special:
     TRACE(T_EAR, " Class 2/3, new ea=%o, new S=%o\n", ea, getcrs16(S));
     if (x) {
       if (ea >= gv.livereglim)
-	m = get16(MAKEVA(rph,ea));
+        m = get16(MAKEVA(rph,ea));
       else
-	m = get16trap(ea);
+        m = get16trap(ea);
       if ((getcrs16(KEYS) & 016000) == 06000)
-	i = m & 0100000;
+        i = m & 0100000;
       ea = m & amask;
     }
     for (indlevel=0; i; indlevel++) {
       if (indlevel == INDLEVELS)
-	fault(RESTRICTFAULT, 0, 0);
+        fault(RESTRICTFAULT, 0, 0);
       if (ea >= gv.livereglim)
-	m = get16(MAKEVA(rph,ea));
+        m = get16(MAKEVA(rph,ea));
       else
-	m = get16trap(ea);
+        m = get16trap(ea);
       if ((getcrs16(KEYS) & 016000) == 04000)
-	i = 0;
+        i = 0;
       else
-	i = m & 0100000;
+        i = m & 0100000;
       ea = m & amask;
       eap = &gv.brp[UNBR];
     }
@@ -2473,11 +2473,11 @@ static void dumpsegs() {
       xxx = (sdw>>16)&0x3F;
       if (xxx != 0) TRACEA("WARNING: X=%o\n", xxx);
       if (ptaddr != 0)
-	for (page=0; page<64; page++) {
-	  pmaddr = (ptaddr<<6) + page;
-	  pte = get16mem(pmaddr);
-	  TRACEA(" Seg %o page %d: pmaddr=%o, V=%d R=%d U=%d S=%d PPA=%o\n", segno, page, pmaddr, pte>>15, (pte>>14)&1, (pte>>13)&1, (pte>>12)&1, pte&0xFFF);
-	}
+        for (page=0; page<64; page++) {
+          pmaddr = (ptaddr<<6) + page;
+          pte = get16mem(pmaddr);
+          TRACEA(" Seg %o page %d: pmaddr=%o, V=%d R=%d U=%d S=%d PPA=%o\n", segno, page, pmaddr, pte>>15, (pte>>14)&1, (pte>>13)&1, (pte>>12)&1, pte&0xFFF);
+        }
       staddr += 2;
     }
   }
@@ -2630,11 +2630,11 @@ static inline ea_t pclea(unsigned short brsave[6], ea_t rp, unsigned short *bita
     if (getcrs16(XBH) & EXTMASK16) {
       bit += getcrs16(X);
       if (bit > 15) {
-	bit -= 16;
-	ea_w++;
+        bit -= 16;
+        ea_w++;
       }
       if (bit == 0)
-	ea_s &= ~EXTMASK16;
+        ea_s &= ~EXTMASK16;
     }
   }
   ea = MAKEVA(ea_s, ea_w);
@@ -2651,7 +2651,7 @@ static inline ea_t pclea(unsigned short brsave[6], ea_t rp, unsigned short *bita
 #if 1
     if (ea & 0x80000000) {
       if (!*store || (ea & 0x8FFF0000) != 0x80000000)
-	fault(POINTERFAULT, ea>>16, iwea);
+        fault(POINTERFAULT, ea>>16, iwea);
     } else
       ea |= (RP & RINGMASK32);             /* weaken */
 #endif
@@ -2738,32 +2738,32 @@ static void argt() {
       eap = &gv.brp[SBBR];
 
       /* NOTE: some version of ucode only store 16 bits for omitted args.
-	 Set EHDB to prevent this error.
+         Set EHDB to prevent this error.
 
-	 Case 29 wants ring/E-bits preserved for omitted arguments */
+         Case 29 wants ring/E-bits preserved for omitted arguments */
 
       /* 6650 (cpuid 40) strips ring bits on omitted arguments in
-	 V-mode, but leaves them in I-mode :-( */
+         V-mode, but leaves them in I-mode :-( */
 
 #define OMITTEDARG_MASK1 0x8FFFFFFF
 #define OMITTEDARG_MASK2 0xEFFFFFFF
 
       if ((ea & 0x8FFF0000) == 0x80000000) {
-	ea = ea & OMITTEDARG_MASK2;      /* keep ring bits */
+        ea = ea & OMITTEDARG_MASK2;      /* keep ring bits */
 #if 0
-	if ((getcrs16(KEYS) & 0016000) == 0010000)
-	  ea = ea & OMITTEDARG_MASK2;      /* I-mode keeps ring bits */
-	else
-	  ea = ea & OMITTEDARG_MASK1;      /* V-mode strips ring bits */
+        if ((getcrs16(KEYS) & 0016000) == 0010000)
+          ea = ea & OMITTEDARG_MASK2;      /* I-mode keeps ring bits */
+        else
+          ea = ea & OMITTEDARG_MASK1;      /* V-mode strips ring bits */
 #endif
 #if 0
-	ea = MAKEVA(0100000,0);            /* some machines do this instead */
+        ea = MAKEVA(0100000,0);            /* some machines do this instead */
 #endif
-	put32(ea, stackfp+getcrs16(Y));
+        put32(ea, stackfp+getcrs16(Y));
       } else {
-	put32(ea, stackfp+getcrs16(Y));
-	if (ea & EXTMASK32)
-	  put16(bit<<12, stackfp+getcrs16(Y)+2);
+        put32(ea, stackfp+getcrs16(Y));
+        if (ea & EXTMASK32)
+          put16(bit<<12, stackfp+getcrs16(Y)+2);
       }
       TRACE(T_PCL, " Stored arg IP at %o/%o\n\n", stackfp>>16, (stackfp+getcrs16(Y)) & 0xFFFF);
       argsleft--;
@@ -3000,28 +3000,28 @@ static void pcl (ea_t ecbea) {
       ea = getcrs32(SB) + ecb[4];
       utempa = get16(get32(ea));       /* 1st arg: userid */
       if (utempa == ((getcrs16(OWNERL)>>6) & 0xff)) {
-	ea = ea + 6;                   /* 3rd arg: length */
-	tnlen = get16(get32(ea));
-	ea = get32(ea-3);              /* 2nd arg: string */
-	j = 0;
-	for (i=0; i<tnlen; i++) {
-	  if (i & 1)
-	    tnchar = tnword & 0x7f;
-	  else {
-	    tnword = get16(ea+i/2);
-	    tnchar = (tnword >> 8) & 0x7f;
-	  }
-	  if (j > sizeof(tnstring)-5)
-	    j = sizeof(tnstring)-5;
-	  if (tnchar >= ' ' && tnchar < 0177)
-	    tnstring[j++] = tnchar;
-	    else {
-	      sprintf((char *)(tnstring+j), "%03o ", tnchar);
-	      j = j+4;
-	    }
-	}
-	tnstring[j] = 0;
-	TRACE(T_TERM, " TNOUx user %d, len %d: %s\n", utempa, tnlen, tnstring);
+        ea = ea + 6;                   /* 3rd arg: length */
+        tnlen = get16(get32(ea));
+        ea = get32(ea-3);              /* 2nd arg: string */
+        j = 0;
+        for (i=0; i<tnlen; i++) {
+          if (i & 1)
+            tnchar = tnword & 0x7f;
+          else {
+            tnword = get16(ea+i/2);
+            tnchar = (tnword >> 8) & 0x7f;
+          }
+          if (j > sizeof(tnstring)-5)
+            j = sizeof(tnstring)-5;
+          if (tnchar >= ' ' && tnchar < 0177)
+            tnstring[j++] = tnchar;
+            else {
+              sprintf((char *)(tnstring+j), "%03o ", tnchar);
+              j = j+4;
+            }
+        }
+        tnstring[j] = 0;
+        TRACE(T_TERM, " TNOUx user %d, len %d: %s\n", utempa, tnlen, tnstring);
       }
     }
 #endif
@@ -3047,20 +3047,20 @@ static void pcl (ea_t ecbea) {
       ea = get32(ea+3);              /* 2nd arg: string */
       j = 0;
       for (i=utempa1; i<utempa1+utempa2; i++) {
-	if (i & 1)
-	  tnchar = tnword & 0x7f;
-	else {
-	  tnword = get16(ea+i/2);
-	  tnchar = (tnword >> 8) & 0x7f;
-	}
-	if (j > sizeof(tnstring)-5)
-	  j = sizeof(tnstring)-5;
-	if (tnchar >= ' ' && tnchar < 0177)
-	  tnstring[j++] = tnchar;
-	else {
-	  sprintf((char *)(tnstring+j), "%03o ", tnchar);
-	  j = j+4;
-	}
+        if (i & 1)
+          tnchar = tnword & 0x7f;
+        else {
+          tnword = get16(ea+i/2);
+          tnchar = (tnword >> 8) & 0x7f;
+        }
+        if (j > sizeof(tnstring)-5)
+          j = sizeof(tnstring)-5;
+        if (tnchar >= ' ' && tnchar < 0177)
+          tnstring[j++] = tnchar;
+        else {
+          sprintf((char *)(tnstring+j), "%03o ", tnchar);
+          j = j+4;
+        }
       }
       tnstring[j] = 0;
       TRACEA(" TSRC$$ path = %s\n", tnstring);
@@ -3246,7 +3246,7 @@ static void ors(unsigned short pcbw) {
 
     if (ownerl == pcbw) {
       if (ownedx >= 0) 
-	fatal("Process owns more than 1 register set!");
+        fatal("Process owns more than 1 register set!");
       ownedx = rx;
     } else if (ownerl == 0)
       freex = rx;
@@ -3334,7 +3334,7 @@ static void dispatcher() {
     while(1) {
       rlbol = get16r0(rlp);
       if (rlbol != 0)
-	break;
+        break;
       rlp += 2;
     }
     if (rlbol == 1)
@@ -3651,9 +3651,9 @@ owner=71600 DUMPCB, keys=14000, modals=77           */
       prevpcbp = pcbp;
       bol = pcblevnext & 0xFFFF;
       if (bol != 0) {
-	pcbp = MAKEVA(getcrs16(OWNERH),bol);
-	pcblevnext = get32r0(pcbp);
-	pcblev = pcblevnext >> 16;
+        pcbp = MAKEVA(getcrs16(OWNERH),bol);
+        pcblevnext = get32r0(pcbp);
+        pcblev = pcblevnext >> 16;
       }
     }
     put16r0(getcrs16(OWNERL), prevpcbp+PCBLINK);
@@ -3791,9 +3791,9 @@ static void lpsw() {
       utempa = get16(ea);
       TRACE(T_PX, " Level %o: BOL=%o, EOL=%o\n", i, utempa, get16(ea+1));
       if (utempa == 1)
-	break;
+        break;
       while (utempa > 0)
-	utempa = dumppcb(utempa);
+        utempa = dumppcb(utempa);
     }
 #endif
     if (getcrs16(KEYS) & 2) {
@@ -4463,177 +4463,177 @@ int main (int argc, char **argv) {
 
     if ((strcmp(argv[i],"-map") == 0) || (strcmp(argv[i],"-maps") == 0)) {
       while (i+1 < argc && argv[i+1][0] != '-')
-	readloadmap(argv[++i], 1);
+        readloadmap(argv[++i], 1);
 
     } else if (strcmp(argv[i],"-memdump") == 0) {
       domemdump = 1;
 
     } else if (strcmp(argv[i],"-ss") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
-	sscanf(argv[++i],"%o", &templ);
-	sswitch = templ;
+        sscanf(argv[++i],"%o", &templ);
+        sswitch = templ;
       } else
-	fatal("-ss needs an octal sense switch setting\n");
+        fatal("-ss needs an octal sense switch setting\n");
 
     } else if (strcmp(argv[i],"-ds") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
-	sscanf(argv[++i],"%o", &templ);
-	dswitch = templ;
+        sscanf(argv[++i],"%o", &templ);
+        dswitch = templ;
       } else
-	fatal("-ds needs an octal data switch setting\n");
+        fatal("-ds needs an octal data switch setting\n");
 
     } else if (strcmp(argv[i],"-boot") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
-	if (strcmp(argv[i+1],"help") == 0) {
-	  sswitch = 0;
-	  i++;
-	} else {
-	  if (sscanf(argv[i+1],"%o", &templ) == 0) {
-	    bootarg = argv[++i];
-	    sswitch = 0;
-	  }
-	  if (i+1 < argc && argv[i+1][0] != '-' && sscanf(argv[i+1],"%o", &templ) == 1) {
-	    i++;
-	    sswitch = templ;
-	  }
-	  if (i+1 < argc && argv[i+1][0] != '-' && sscanf(argv[i+1],"%o", &templ) == 1) {
-	    i++;
-	    dswitch = templ;
-	  }
-	  if (i+1 < argc && strcmp(argv[i+1],"regs") == 0) {
-	    i++;
-	    bootregs = 1;
-	  }
-	}
+        if (strcmp(argv[i+1],"help") == 0) {
+          sswitch = 0;
+          i++;
+        } else {
+          if (sscanf(argv[i+1],"%o", &templ) == 0) {
+            bootarg = argv[++i];
+            sswitch = 0;
+          }
+          if (i+1 < argc && argv[i+1][0] != '-' && sscanf(argv[i+1],"%o", &templ) == 1) {
+            i++;
+            sswitch = templ;
+          }
+          if (i+1 < argc && argv[i+1][0] != '-' && sscanf(argv[i+1],"%o", &templ) == 1) {
+            i++;
+            dswitch = templ;
+          }
+          if (i+1 < argc && strcmp(argv[i+1],"regs") == 0) {
+            i++;
+            bootregs = 1;
+          }
+        }
       }
 
     } else if (strcmp(argv[i],"-cpuid") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
-	sscanf(argv[++i],"%d", &templ);
-	if (0 <= templ && templ <= 44)
-	  cpuid = templ;
-	else {
-	  cpuid = 9999;
-	  for (j=0; cputab[j].cpumodel; j++) {
-	    if (templ == cputab[j].cpumodel) {
-	      cpuid = cputab[j].cputype;
-	      break;
-	    }
-	  }
-	  if (cpuid > 44)
-	    fatal("-cpuid arg range is 0 to 44 or model name: 400, 550, 9950, etc\n");
-	}
+        sscanf(argv[++i],"%d", &templ);
+        if (0 <= templ && templ <= 44)
+          cpuid = templ;
+        else {
+          cpuid = 9999;
+          for (j=0; cputab[j].cpumodel; j++) {
+            if (templ == cputab[j].cpumodel) {
+              cpuid = cputab[j].cputype;
+              break;
+            }
+          }
+          if (cpuid > 44)
+            fatal("-cpuid arg range is 0 to 44 or model name: 400, 550, 9950, etc\n");
+        }
       } else
-	fatal("-cpuid needs an argument\n");
+        fatal("-cpuid needs an argument\n");
 
     } else if (strcmp(argv[i],"-mem") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
-	sscanf(argv[++i],"%d", &templ);
-	if (1 <= templ && templ <= 512)
-	  gv.memlimit = templ;
-	else
-	  fatal("-mem arg range is 1 to 512 (megabytes)\n");
+        sscanf(argv[++i],"%d", &templ);
+        if (1 <= templ && templ <= 512)
+          gv.memlimit = templ;
+        else
+          fatal("-mem arg range is 1 to 512 (megabytes)\n");
       } else
-	fatal("-mem needs an argument\n");
+        fatal("-mem needs an argument\n");
 
     } else if (strcmp(argv[i],"-nport") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
-	sscanf(argv[++i],"%d", &templ);
-	nport = templ;
+        sscanf(argv[++i],"%d", &templ);
+        nport = templ;
       } else
-	fatal("-nport needs an argument\n");
+        fatal("-nport needs an argument\n");
 
     } else if (strcmp(argv[i],"-naddr") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
-	inet_aton(argv[++i], &bindaddr);
+        inet_aton(argv[++i], &bindaddr);
       } else
-	fatal("-naddr needs an argument\n");
+        fatal("-naddr needs an argument\n");
 
     } else if (strcmp(argv[i],"-tport") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {
-	sscanf(argv[++i],"%d", &templ);
-	tport = templ;
+        sscanf(argv[++i],"%d", &templ);
+        tport = templ;
       } else
-	fatal("-tport needs an argument\n");
+        fatal("-tport needs an argument\n");
 
 #ifndef NOTRACE
     } else if (strcmp(argv[i],"-trace") == 0) {
       while (i+1 < argc && argv[i+1][0] != '-') {
-	i++;
-	if (strcmp(argv[i],"ear") == 0)
-	  gv.traceflags |= T_EAR;
-	else if (strcmp(argv[i],"eav") == 0)
-	  gv.traceflags |= T_EAV;
-	else if (strcmp(argv[i],"eai") == 0)
-	  gv.traceflags |= T_EAI;
-	else if (strcmp(argv[i],"eas") == 0)
-	  gv.traceflags |= T_EAS;
-	else if (strcmp(argv[i],"inst") == 0)
-	  gv.traceflags |= T_INST;
-	else if (strcmp(argv[i],"flow") == 0)
-	  gv.traceflags |= T_FLOW;
-	else if (strcmp(argv[i],"mode") == 0)
-	  gv.traceflags |= T_MODE;
-	else if (strcmp(argv[i],"eaap") == 0)
-	  gv.traceflags |= T_EAAP;
-	else if (strcmp(argv[i],"dio") == 0)
-	  gv.traceflags |= T_DIO;
-	else if (strcmp(argv[i],"map") == 0)
-	  gv.traceflags |= T_MAP;
-	else if (strcmp(argv[i],"pcl") == 0)
-	  gv.traceflags |= T_PCL;
-	else if (strcmp(argv[i],"fault") == 0)
-	  gv.traceflags |= T_FAULT;
-	else if (strcmp(argv[i],"px") == 0)
-	  gv.traceflags |= T_PX;
-	else if (strcmp(argv[i],"tio") == 0)
-	  gv.traceflags |= T_TIO;
-	else if (strcmp(argv[i],"term") == 0)
-	  gv.traceflags |= T_TERM;
-	else if (strcmp(argv[i],"rio") == 0)
-	  gv.traceflags |= T_RIO;
-	else if (strcmp(argv[i],"off") == 0)
-	  gv.tracetriggered = 0;
-	else if (strcmp(argv[i],"lm") == 0)
-	  gv.traceflags |= T_LM;
-	else if (strcmp(argv[i],"put") == 0)
-	  gv.traceflags |= T_PUT;
-	else if (strcmp(argv[i],"get") == 0)
-	  gv.traceflags |= T_GET;
-	else if (strcmp(argv[i],"all") == 0)
-	  gv.traceflags = ~0;
-	else if (strcmp(argv[i],"flush") == 0)
-	  setlinebuf(gv.tracefile);
-	else if (strcmp(argv[i],"tlb") == 0)
-	  gv.traceflags |= T_TLB;
-	else if (isdigit(argv[i][0]) && strlen(argv[i]) <= 3 && sscanf(argv[i],"%d", &templ) == 1)
-	  gv.traceuser = 0100000 | (templ<<6);   /* form OWNERL for user # */
-	else if (isdigit(argv[i][0]) && sscanf(argv[i],"%d", &templ) == 1)
-	  gv.traceinstcount = templ;
-	else if (strlen(argv[i]) == 6 && sscanf(argv[i],"%o", &templ) == 1)
-	  gv.traceuser = templ;                  /* specify OWNERL directly */
-	else if (strlen(argv[i]) == 4 && sscanf(argv[i],"%o", &templ) == 1)
-	  gv.traceseg = templ;                   /* specify RPH segno */
-	else if (strlen(argv[i]) <= 8 && argv[i][0] != '-') {
-	  if (gv.numtraceprocs >= MAXTRACEPROCS)
-	    fprintf(stderr,"Only %d trace procs are allowed\n", MAXTRACEPROCS);
-	  else {
-	    printf("Request to trace proc %s\n", argv[i]);
-	    traceprocs[gv.numtraceprocs].oneshot = 1;
-	    for (j=0; argv[i][j]; j++)
-	      if (argv[i][j] == '+')
-		traceprocs[gv.numtraceprocs].oneshot = 0;
-	      else
-		traceprocs[gv.numtraceprocs].name[j] = argv[i][j];
-	    traceprocs[gv.numtraceprocs].name[j] = 0;
-	    traceprocs[gv.numtraceprocs].sb = -1;
-	    traceprocs[gv.numtraceprocs].ecb = 0;
-	    gv.numtraceprocs++;
-	  }
-	} else {
-	  fprintf(stderr,"Unrecognized trace flag: %s\n", argv[i]);
-	  printf("Unrecognized trace flag: %s\n", argv[i]);
-	}
+        i++;
+        if (strcmp(argv[i],"ear") == 0)
+          gv.traceflags |= T_EAR;
+        else if (strcmp(argv[i],"eav") == 0)
+          gv.traceflags |= T_EAV;
+        else if (strcmp(argv[i],"eai") == 0)
+          gv.traceflags |= T_EAI;
+        else if (strcmp(argv[i],"eas") == 0)
+          gv.traceflags |= T_EAS;
+        else if (strcmp(argv[i],"inst") == 0)
+          gv.traceflags |= T_INST;
+        else if (strcmp(argv[i],"flow") == 0)
+          gv.traceflags |= T_FLOW;
+        else if (strcmp(argv[i],"mode") == 0)
+          gv.traceflags |= T_MODE;
+        else if (strcmp(argv[i],"eaap") == 0)
+          gv.traceflags |= T_EAAP;
+        else if (strcmp(argv[i],"dio") == 0)
+          gv.traceflags |= T_DIO;
+        else if (strcmp(argv[i],"map") == 0)
+          gv.traceflags |= T_MAP;
+        else if (strcmp(argv[i],"pcl") == 0)
+          gv.traceflags |= T_PCL;
+        else if (strcmp(argv[i],"fault") == 0)
+          gv.traceflags |= T_FAULT;
+        else if (strcmp(argv[i],"px") == 0)
+          gv.traceflags |= T_PX;
+        else if (strcmp(argv[i],"tio") == 0)
+          gv.traceflags |= T_TIO;
+        else if (strcmp(argv[i],"term") == 0)
+          gv.traceflags |= T_TERM;
+        else if (strcmp(argv[i],"rio") == 0)
+          gv.traceflags |= T_RIO;
+        else if (strcmp(argv[i],"off") == 0)
+          gv.tracetriggered = 0;
+        else if (strcmp(argv[i],"lm") == 0)
+          gv.traceflags |= T_LM;
+        else if (strcmp(argv[i],"put") == 0)
+          gv.traceflags |= T_PUT;
+        else if (strcmp(argv[i],"get") == 0)
+          gv.traceflags |= T_GET;
+        else if (strcmp(argv[i],"all") == 0)
+          gv.traceflags = ~0;
+        else if (strcmp(argv[i],"flush") == 0)
+          setlinebuf(gv.tracefile);
+        else if (strcmp(argv[i],"tlb") == 0)
+          gv.traceflags |= T_TLB;
+        else if (isdigit(argv[i][0]) && strlen(argv[i]) <= 3 && sscanf(argv[i],"%d", &templ) == 1)
+          gv.traceuser = 0100000 | (templ<<6);   /* form OWNERL for user # */
+        else if (isdigit(argv[i][0]) && sscanf(argv[i],"%d", &templ) == 1)
+          gv.traceinstcount = templ;
+        else if (strlen(argv[i]) == 6 && sscanf(argv[i],"%o", &templ) == 1)
+          gv.traceuser = templ;                  /* specify OWNERL directly */
+        else if (strlen(argv[i]) == 4 && sscanf(argv[i],"%o", &templ) == 1)
+          gv.traceseg = templ;                   /* specify RPH segno */
+        else if (strlen(argv[i]) <= 8 && argv[i][0] != '-') {
+          if (gv.numtraceprocs >= MAXTRACEPROCS)
+            fprintf(stderr,"Only %d trace procs are allowed\n", MAXTRACEPROCS);
+          else {
+            printf("Request to trace proc %s\n", argv[i]);
+            traceprocs[gv.numtraceprocs].oneshot = 1;
+            for (j=0; argv[i][j]; j++)
+              if (argv[i][j] == '+')
+                traceprocs[gv.numtraceprocs].oneshot = 0;
+              else
+                traceprocs[gv.numtraceprocs].name[j] = argv[i][j];
+            traceprocs[gv.numtraceprocs].name[j] = 0;
+            traceprocs[gv.numtraceprocs].sb = -1;
+            traceprocs[gv.numtraceprocs].ecb = 0;
+            gv.numtraceprocs++;
+          }
+        } else {
+          fprintf(stderr,"Unrecognized trace flag: %s\n", argv[i]);
+          printf("Unrecognized trace flag: %s\n", argv[i]);
+        }
       }
 #endif
 
@@ -4716,11 +4716,11 @@ int main (int argc, char **argv) {
   for (i=0; i<gv.numtraceprocs; i++) {
     for (j=0; j<numsyms; j++) {
       if (strcasecmp(mapsym[j].symname, traceprocs[i].name) == 0 && mapsym[j].symtype == 'e') {
-	ea = mapsym[j].address;
-	traceprocs[i].ecb = ea;
-	TRACEA("Tracing procedure %s ecb ea '%o/%o\n", traceprocs[i].name, SEGNO32(ea), ea&0xFFFF);
-	printf("Tracing procedure %s ecb ea '%o/%o\n", traceprocs[i].name, SEGNO32(ea), ea&0xFFFF);
-	break;
+        ea = mapsym[j].address;
+        traceprocs[i].ecb = ea;
+        TRACEA("Tracing procedure %s ecb ea '%o/%o\n", traceprocs[i].name, SEGNO32(ea), ea&0xFFFF);
+        printf("Tracing procedure %s ecb ea '%o/%o\n", traceprocs[i].name, SEGNO32(ea), ea&0xFFFF);
+        break;
       }
     }
     if (j == numsyms) {
@@ -4775,8 +4775,8 @@ int main (int argc, char **argv) {
 
     if (rvec[3] != 0) {
       if (rvec[2] > rvec[1]) {
-	rvec[0] += rvec[3];
-	rvec[1] += rvec[3];
+        rvec[0] += rvec[3];
+        rvec[1] += rvec[3];
       }
     }
   } else {
@@ -4801,8 +4801,8 @@ int main (int argc, char **argv) {
       /* setup DMA register '20 (address only) for the next boot record */
       putar16(REGDMX16 + 041, 03000);
       if (globdisk(bootfile, sizeof(bootfile), bootctrl, bootunit) != 0) {
-	printf("Can't find disk boot device file %s, or multiple files match this device.\nTo boot from tape (mt0), use -boot 10005", bootfile);
-	fatal(NULL);
+        printf("Can't find disk boot device file %s, or multiple files match this device.\nTo boot from tape (mt0), use -boot 10005", bootfile);
+        fatal(NULL);
       }
 
     } else if ((sswitch & 0x7) == 5) {  /* tape boot */
@@ -4856,8 +4856,8 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
 
     if ((sswitch & 0x7) == 5) {  /* tape boot */
       if ((read(bootfd, boottaphdr, 4)) != 4) {
-	perror("Error reading boot tape header");
-	fatal(NULL);
+        perror("Error reading boot tape header");
+        fatal(NULL);
       }
       nw = (boottaphdr[0] | boottaphdr[1]<<8 | boottaphdr[2]<<16 | boottaphdr[3]<<24)/2;
       rvec[1] = rvec[0]+nw-1;
@@ -4981,7 +4981,7 @@ fetch:
 
 #if 0
   /* NOTE: doing something like this sometimes causes Primos to do a
-	 controlled shutdown, flushing disk buffers, etc. */
+         controlled shutdown, flushing disk buffers, etc. */
   RPH = 07777;
 #endif
 
@@ -5040,8 +5040,8 @@ fetch:
   if ((gv.instcount & TIMERMASK) == 0) {
     for (i=0; i<64; i++)
       if (devpoll[i] && ((devpoll[i] -= (TIMERMASK+1)) <= 0)) {
-	devpoll[i] = 0;
-	devmap[i](4, 0, i);
+        devpoll[i] = 0;
+        devmap[i](4, 0, i);
       }
 
     /* bump the 1ms process timer; docs say to only bump this if px is
@@ -5052,17 +5052,17 @@ fetch:
     if (getcrs16(MODALS) & 010) {
       putcrs16(TIMERL, getcrs16(TIMERL) + TIMERMASK + 1);
       if (getcrs16(TIMERL) > gv.instpermsec) {
-	putcrs16(TIMERL, getcrs16(TIMERL) - gv.instpermsec);
+        putcrs16(TIMERL, getcrs16(TIMERL) - gv.instpermsec);
 
-	/* if 1ms resolution process timer overflows, set pcb abort flag */
+        /* if 1ms resolution process timer overflows, set pcb abort flag */
 
-	putcrs16(TIMERH, getcrs16(TIMERH) + 1);
-	if (getcrs16(TIMERH) == 0) {
-	  TRACE(T_PX,  "#%u: pcb %o timer overflow\n", gv.instcount, getcrs16(OWNERL));
-	  ea = getcrs32ea(OWNER);
-	  m = get16r0(ea+4) | 1;       /* set process abort flag */
-	  put16r0(m, ea+4);
-	}
+        putcrs16(TIMERH, getcrs16(TIMERH) + 1);
+        if (getcrs16(TIMERH) == 0) {
+          TRACE(T_PX,  "#%u: pcb %o timer overflow\n", gv.instcount, getcrs16(OWNERL));
+          ea = getcrs32ea(OWNER);
+          m = get16r0(ea+4) | 1;       /* set process abort flag */
+          put16r0(m, ea+4);
+        }
       }
     }
   }
@@ -5077,34 +5077,34 @@ fetch:
       regs.sym.pswkeys = crs[KEYS];              /* Prime->Prime: no byte swap */
 
       /* NOTE: this code doesn't match the description on page B-21 of
-	 the Sys Arch Guide 2nd Ed. for Standard Interrupt Mode */
+         the Sys Arch Guide 2nd Ed. for Standard Interrupt Mode */
 
       if (getcrs16(MODALS) & 010) {              /* PX enabled */
-	//gv.traceflags = ~T_MAP;
-	newkeys(014000);
-	RPH = 4;
-	RPL = gv.intvec;
+        //gv.traceflags = ~T_MAP;
+        newkeys(014000);
+        RPH = 4;
+        RPL = gv.intvec;
 
       } else if (getcrs16(MODALS) & 040000) {    /* vectored interrupt mode */
-	m = get16(gv.intvec);
-	if (m != 0) {
-	  put16(RPL, m);
-	  RP = m+1;
-	} else {
-	  printf("fetch: interrupt vector '%o = 0 in vectored interrupt mode\n", gv.intvec);
-	  fatal(NULL);
-	}
+        m = get16(gv.intvec);
+        if (m != 0) {
+          put16(RPL, m);
+          RP = m+1;
+        } else {
+          printf("fetch: interrupt vector '%o = 0 in vectored interrupt mode\n", gv.intvec);
+          fatal(NULL);
+        }
 
       } else {                              /* standard interrupt mode */
-	m = get16(063);
-	//printf("Standard mode interrupt vector loc = %o\n", m);
-	//gv.traceflags = ~T_MAP;
-	if (m != 0) {
-	  put16(RPL, m);
-	  RP = m+1;
-	} else {
-	  fatal("em: loc '63 = 0 when standard mode interrupt occurred");
-	}
+        m = get16(063);
+        //printf("Standard mode interrupt vector loc = %o\n", m);
+        //gv.traceflags = ~T_MAP;
+        if (m != 0) {
+          put16(RPL, m);
+          RP = m+1;
+        } else {
+          fatal("em: loc '63 = 0 when standard mode interrupt occurred");
+        }
       }
       putcrs16(MODALS, getcrs16(MODALS) & 077777);   /* inhibit interrupts */
     } else
@@ -5185,9 +5185,9 @@ xec:
 #endif
 
 #if 1
-  TRACE(T_FLOW, "\n			#%u [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X='%o/%d Y='%o/%d%s%s%s%s K=%o M=%o\n", gv.instcount, searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16s(TIMERH), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS));
+  TRACE(T_FLOW, "\n                     #%u [%s %o] IT=%d SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o           A='%o/%u B='%o/%d L='%o/%d E='%o/%d X='%o/%d Y='%o/%d%s%s%s%s K=%o M=%o\n", gv.instcount, searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16s(TIMERH), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS));
 #else
-  TRACE(T_FLOW, "\n			[%s %o] SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o		A='%o/%u B='%o/%d L='%o/%d E='%o/%d X='%o/%d Y='%o/%d%s%s%s%s K=%o M=%o\n", searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS) & 0177437);
+  TRACE(T_FLOW, "\n                     [%s %o] SB: %o/%o LB: %o/%o %s XB: %o/%o\n%o/%o: %o             A='%o/%u B='%o/%d L='%o/%d E='%o/%d X='%o/%d Y='%o/%d%s%s%s%s K=%o M=%o\n", searchloadmap(getcrs32(OWNER),'x'), getcrs16(OWNERL), getcrs16(SBH), getcrs16(SBL), getcrs16(LBH), getcrs16(LBL), searchloadmap(getcrs32(LBH),'l'), getcrs16(XBH), getcrs16(XBL), RPH, RPL-1, inst, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(L), getcrs32s(L), getcrs32(E), getcrs32s(E), getcrs16(X), getcrs16s(X), getcrs16(Y), getcrs16s(Y), (getcrs16(KEYS)&0100000)?" C":"", (getcrs16(KEYS)&020000)?" L":"", (getcrs16(KEYS)&0200)?" LT":"", (getcrs16(KEYS)&0100)?" EQ":"", getcrs16(KEYS), getcrs16(MODALS) & 0177437);
 #endif
 
   /* begin instruction decode: generic? */
@@ -5418,13 +5418,13 @@ d_prtn:  /* 000611 */
   if (gv.numtraceprocs > 0 && TRACEUSER)
     for (i=0; i<gv.numtraceprocs; i++)
       if (getcrs32s(SB) == traceprocs[i].sb) {
-	traceprocs[i].sb = -1;
-	fflush(gv.tracefile);
-	if (traceprocs[i].oneshot) {
-	  printf("Disabled trace for %s at sb '%o/%o\n", traceprocs[i].name, getcrs16(SBH), getcrs16(SBL));
-	  gv.savetraceflags = 0;
-	}
-	break;
+        traceprocs[i].sb = -1;
+        fflush(gv.tracefile);
+        if (traceprocs[i].oneshot) {
+          printf("Disabled trace for %s at sb '%o/%o\n", traceprocs[i].name, getcrs16(SBH), getcrs16(SBL));
+          gv.savetraceflags = 0;
+        }
+        break;
       }
 #endif
   goto fetch;
@@ -5535,16 +5535,16 @@ d_calf:  /* 000705 */
     IMPORTANT NOTE: when using the Z macros, be sure to use curly
     braces, ie,
 
-	 Instead of:
+         Instead of:
 
-	   if (cond)
-	     ZPUTC ...
+           if (cond)
+             ZPUTC ...
 
-	 use:
+         use:
 
-	   if (cond) {
-	     ZPUTC ...
-	   }
+           if (cond) {
+             ZPUTC ...
+           }
   */
 
 #define ZSTEP(zea, zlen, zcp, zclen, zacc) \
@@ -5644,7 +5644,7 @@ d_zmvd:  /* 001115 */
 #else
     /* this causes error: 
           Coldstarting PRIMOS, Please wait...
-	  Unable to initialize gate segment.  (GATE_INIT) */
+          Unable to initialize gate segment.  (GATE_INIT) */
     memcpy(zcp2, zcp1, utempa);
 #endif
 #else
@@ -5779,13 +5779,13 @@ d_zed:  /* 001111 */
     switch ((utempa >> 8) & 3) {
     case 0:  /* copy M chars */
       while (m && zlen1) {
-	ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-	ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-	m--;
+        ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+        ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+        m--;
       }
       while (m) {
-	ZPUTC(zea2, zlen2, zcp2, zclen2, zspace);
-	m--;
+        ZPUTC(zea2, zlen2, zcp2, zclen2, zspace);
+        m--;
       }
       break;
 
@@ -5795,17 +5795,17 @@ d_zed:  /* 001111 */
 
     case 2:  /* skip M characters */
       if (m >= zlen1)
-	zlen1 = 0;
+        zlen1 = 0;
       else while (m) {
-	ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-	m--;
+        ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+        m--;
       }
       break;
 
     case 3:  /* insert M blanks */
       while (m) {
-	ZPUTC(zea2, zlen2, zcp2, zclen2, zspace);
-	m--;
+        ZPUTC(zea2, zlen2, zcp2, zclen2, zspace);
+        m--;
       }
       break;
 
@@ -5851,18 +5851,18 @@ d_xed:  /* 001112 */
     switch ((utempa >> 8) & 037) {
     case 0:  /* Zero Suppress */
       while (m) {
-	ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-	if (!xsig)
-	  if (zch1 == XZERO)
-	    zch1 = xsc;
-	  else {
-	    xsig = 1;
-	    if (xfc) {
-	      ZPUTC(zea2, zlen2, zcp2, zclen2, xfc);
-	    }
-	  }
-	ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-	m--;
+        ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+        if (!xsig)
+          if (zch1 == XZERO)
+            zch1 = xsc;
+          else {
+            xsig = 1;
+            if (xfc) {
+              ZPUTC(zea2, zlen2, zcp2, zclen2, xfc);
+            }
+          }
+        ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+        m--;
       }
       break;
 
@@ -5876,37 +5876,37 @@ d_xed:  /* 001112 */
 
     case 3:  /* insert character */
       if (xsig)
-	zch1 = m;
+        zch1 = m;
       else
-	zch1 = xsc;
+        zch1 = xsc;
       ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
       break;
 
     case 4:  /* insert digits */
       if (!xsig && xfc) {
-	ZPUTC(zea2, zlen2, zcp2, zclen2, xfc);
+        ZPUTC(zea2, zlen2, zcp2, zclen2, xfc);
       }
       while (m) {
-	ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-	ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-	m--;
+        ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+        ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+        m--;
       }
       xsig = 1;
       break;
 
     case 5:  /* insert char if minus */
       if (xsign)
-	zch1 = m;
+        zch1 = m;
       else
-	zch1 = xsc;
+        zch1 = xsc;
       ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
       break;
 
     case 6:  /* insert char if plus */
       if (!xsign)
-	zch1 = m;
+        zch1 = m;
       else
-	zch1 = xsc;
+        zch1 = xsc;
       ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
       break;
 
@@ -5916,72 +5916,72 @@ d_xed:  /* 001112 */
 
     case 010:  /* set floating if plus */
       if (!xsign)
-	xfc = m;
+        xfc = m;
       else
-	xfc = xsc;
+        xfc = xsc;
       break;
 
     case 011:  /* set floating if minus */
       if (xsign)
-	xfc = m;
+        xfc = m;
       else
-	xfc = xsc;
+        xfc = xsc;
       break;
 
     case 012:  /* set floating to sign */
       if (xsign)
-	xfc = XMINUS;
+        xfc = XMINUS;
       else
-	xfc = XPLUS;
+        xfc = XPLUS;
       break;
 
     case 013:  /* jump if zero */
       if (getcrs16(A))
-	i += m;
+        i += m;
       break;
 
     case 014:  /* fill with suppress */
       while (m) {
-	ZPUTC(zea2, zlen2, zcp2, zclen2, xsc);
-	m--;
+        ZPUTC(zea2, zlen2, zcp2, zclen2, xsc);
+        m--;
       }
       break;
 
     case 015:  /* set significance */
       if (!xsig && xfc) {
-	ZPUTC(zea2, zlen2, zcp2, zclen2, xfc);
+        ZPUTC(zea2, zlen2, zcp2, zclen2, xfc);
       }
       xsig = 1;
       break;
 
     case 016:  /* insert sign */
       if (xsign)
-	zch1 = XMINUS;
+        zch1 = XMINUS;
       else
-	zch1 = XPLUS;
+        zch1 = XPLUS;
       ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
       break;
 
     case 017:  /* suppress digits */
       while (m) {
-	ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-	if (zch1 == XZERO)
-	  zch1 = xsc;
-	ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-	m--;
+        ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+        if (zch1 == XZERO)
+          zch1 = xsc;
+        ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+        m--;
       }
       break;
 
     case 020:  /* embed sign */
       while (m) {
-	ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
-	if (xsign)
-	  if (zch1 == XZERO)
-	    zch1 = XRBRACE;
-	  else
-	    zch1 = zch1-XONE+XJ;
-	ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
-	m--;
+        ZGETC(zea1, zlen1, zcp1, zclen1, zch1);
+        if (xsign)
+          if (zch1 == XZERO)
+            zch1 = XRBRACE;
+          else
+            zch1 = zch1-XONE+XJ;
+        ZPUTC(zea2, zlen2, zcp2, zclen2, zch1);
+        m--;
       }
       break;
 
@@ -6041,7 +6041,7 @@ d_wait:  /* 000315 */
   goto fetch;
 
 d_nfy:  /* 1210 (nfye), 1211 (nfyb), 
-	   1214 (inen), 1215 (inbn), 1216 (inec), 1217 (inbc) */
+           1214 (inen), 1215 (inbn), 1216 (inec), 1217 (inbc) */
   TRACE(T_FLOW, " NFY\n", inst);
   RESTRICT();
   nfy(inst);
@@ -6137,18 +6137,18 @@ d_dbgill:  /*  001700, 001701 */
   fatal(NULL);
 
       /* JW: I think 1702 is an invalid opcode that Prime uses as
-	 an assertion when unexpected things happen, for example:
+         an assertion when unexpected things happen, for example:
 
-	 LDA modals        get modals
-	 SAS 1             interrupts enabled?
-	 1702              no, they should be, die
+         LDA modals        get modals
+         SAS 1             interrupts enabled?
+         1702              no, they should be, die
 
-	 Update: this is the "slow halt" instruction.  Ewan Milne
-	 explained that if a HLT instruction is encountered on some
-	 machines,, any DMX in progress will stop, possibly leading to
-	 partial disk records being written.  Using this illegal
-	 instruction instead of HLT lets Primos delay the halt until
-	 DMX has completed.
+         Update: this is the "slow halt" instruction.  Ewan Milne
+         explained that if a HLT instruction is encountered on some
+         machines,, any DMX in progress will stop, possibly leading to
+         partial disk records being written.  Using this illegal
+         instruction instead of HLT lets Primos delay the halt until
+         DMX has completed.
       */
 
 d_pbug:  /* 001702 */
@@ -6251,13 +6251,13 @@ d_cea:  /* 000111 */
       x = ea & 040000;
       ea &= 037777;
       if (x)                           /* indexed */
-	ea = (ea + getcrs16(X)) & 037777;
+        ea = (ea + getcrs16(X)) & 037777;
       if (!i)                          /* not indirect */
-	break;
+        break;
       if (ea < gv.livereglim)
-	ea = get16trap(ea);
+        ea = get16trap(ea);
       else
-	ea = get16(MAKEVA(RPH,ea));
+        ea = get16(MAKEVA(RPH,ea));
     }
     putcrs16(A, ea);
     break;
@@ -6266,9 +6266,9 @@ d_cea:  /* 000111 */
     while (getcrs16(A) & 0100000) {
       ea = getcrs16(A) & 077777;
       if (ea < gv.livereglim)
-	putcrs16(A, get16trap(ea));
+        putcrs16(A, get16trap(ea));
       else
-	putcrs16(A, get16(MAKEVA(RPH,ea)));
+        putcrs16(A, get16(MAKEVA(RPH,ea)));
     }
   }
   goto fetch;
@@ -6283,9 +6283,9 @@ d_hlt:  /* 000000 */
       utempa = getchar();
       printf("\n");
       if (utempa == '\r' || utempa == '\n')
-	goto fetch;
+        goto fetch;
       if (utempa == 'h')
-	break;
+        break;
     }
   }
   fatal("CPU halt");
@@ -6594,88 +6594,88 @@ d_bdx:  /* 0140734 */
       long delayusec, actualmsec;
 
       /* for BDX * loop (backstop process mainly), we want to change
-	 this to a long sleep so that the emulation host's CPU isn't 
-	 pegged the whole time the emulator is running.
+         this to a long sleep so that the emulation host's CPU isn't 
+         pegged the whole time the emulator is running.
 
-	 So first, check to see if any device times expire sooner than
-	 this, and if so, limit the sleep time to the lowest expiration
-	 value (this is stored as number of instructions left until the
-	 timer expires).
+         So first, check to see if any device times expire sooner than
+         this, and if so, limit the sleep time to the lowest expiration
+         value (this is stored as number of instructions left until the
+         timer expires).
 
-	 NOTE: In practice, the clock device ticks at 330 times a sec
-	 under standard Primos so we only get to delay about 3ms here,
-	 but it still keeps CPU usage to 4-5% on a 1.5GHz Mac.  Primos
-	 mods to make the clock tick 20 times per second allows for
-	 much longer sleeps here, ie, CPU overhead is 0.7% while idle.
+         NOTE: In practice, the clock device ticks at 330 times a sec
+         under standard Primos so we only get to delay about 3ms here,
+         but it still keeps CPU usage to 4-5% on a 1.5GHz Mac.  Primos
+         mods to make the clock tick 20 times per second allows for
+         much longer sleeps here, ie, CPU overhead is 0.7% while idle.
       */
 
       putcrs16(X, 1);                     /* exit on next loop */
       if (!firstbdx) {
-	//printf("%o ", getcrs16(OWNERL)); fflush(stdout);
-	utempl = gv.instpermsec*100;    /* limit delay to 100 msecs */
-	for (i=0; i<64; i++)              /* check device timers */
-	  if (devpoll[i])                 /* poll set? */
-	    if (devpoll[i] <= 100) {      /* too fast! */
-	      utempl = 1;
-	      break;
-	    } else if (devpoll[i] < utempl)
-	      utempl = devpoll[i];
+        //printf("%o ", getcrs16(OWNERL)); fflush(stdout);
+        utempl = gv.instpermsec*100;    /* limit delay to 100 msecs */
+        for (i=0; i<64; i++)              /* check device timers */
+          if (devpoll[i])                 /* poll set? */
+            if (devpoll[i] <= 100) {      /* too fast! */
+              utempl = 1;
+              break;
+            } else if (devpoll[i] < utempl)
+              utempl = devpoll[i];
       } else {
-	firstbdx = 0;
-	utempl = 1;
+        firstbdx = 0;
+        utempl = 1;
       }
 
       /* this decrement ensures that if a device had a poll pending,
-	 we won't decrement it to zero below, ie, it'll still fire
-	 in the main loop */
+         we won't decrement it to zero below, ie, it'll still fire
+         in the main loop */
 
       utempl--;                         /* utempl = # instructions */
 
       delayusec = utempl*1000/gv.instpermsec;
       if (delayusec > 1000) {
-	if (gettimeofday(&tv0, NULL) != 0)
-	  fatal("em: gettimeofday 0 failed");
-	
-	/* for some reason, the SIGTERM signal handler gets reset
-	   during emulator initialization; this re-installs it */
+        if (gettimeofday(&tv0, NULL) != 0)
+          fatal("em: gettimeofday 0 failed");
+        
+        /* for some reason, the SIGTERM signal handler gets reset
+           during emulator initialization; this re-installs it */
 
-	{
-	  static int firsttime=1;
-	  if (firsttime) {
-	    signal (SIGTERM, sensorcheck);
-	    firsttime = 0;
-	  }
-	}
+        {
+          static int firsttime=1;
+          if (firsttime) {
+            signal (SIGTERM, sensorcheck);
+            firsttime = 0;
+          }
+        }
 
-	/* NOTE: on OSX, a signal (sigio for pnc) will interrupt usleep */
+        /* NOTE: on OSX, a signal (sigio for pnc) will interrupt usleep */
 
-	usleep(delayusec);
-	if (gettimeofday(&tv1, NULL) != 0)
-	  fatal("em: gettimeofday 1 failed");
-	actualmsec = (tv1.tv_sec-tv0.tv_sec-1)*1000 + (tv1.tv_usec+1000000-tv0.tv_usec)/1000;
+        usleep(delayusec);
+        if (gettimeofday(&tv1, NULL) != 0)
+          fatal("em: gettimeofday 1 failed");
+        actualmsec = (tv1.tv_sec-tv0.tv_sec-1)*1000 + (tv1.tv_usec+1000000-tv0.tv_usec)/1000;
 #if 0
-	if (actualmsec > delayusec*1.2/1000) {
-	  TRACEA(" BDX loop at %o/%o, owner=%o, utempl=%d, wanted %d ms, got %d ms\n", gv.prevpc>>16, gv.prevpc&0xffff, getcrs16(OWNERL), utempl, delayusec/1000, actualmsec);
-	}
+        if (actualmsec > delayusec*1.2/1000) {
+          TRACEA(" BDX loop at %o/%o, owner=%o, utempl=%d, wanted %d ms, got %d ms\n", gv.prevpc>>16, gv.prevpc&0xffff, getcrs16(OWNERL), utempl, delayusec/1000, actualmsec);
+        }
 #endif
-	/* do timer bookkeeping that would have occurred if we had 
-	   actually looped on BDX utempl times */
+        /* do timer bookkeeping that would have occurred if we had 
+           actually looped on BDX utempl times */
 
-	for (i=0; i<64; i++)
-	  if (devpoll[i] > 0)
-	    devpoll[i] -= utempl;
-	if (actualmsec > 0) {
-	  utempa = getcrs16(TIMERH);
-	  putcrs16(TIMERH, getcrs16(TIMERH) + actualmsec);
-	  if (getcrs16(TIMERH) < utempa) {     /* timer overflowed */
-	    tempea = getcrs32ea(OWNER);
-	    utempa = get16r0(tempea+4) | 1;    /* set process abort flag */
-	    put16r0(utempa, tempea+4);
-	  }
-	} else {
-	  putcrs16(TIMERL, getcrs16(TIMERL) + utempl);
-	}
-	gv.instcount += actualmsec*gv.instpermsec;
+        for (i=0; i<64; i++)
+          if (devpoll[i] > 0)
+            devpoll[i] -= utempl;
+        if (actualmsec > 0) {
+          utempa = getcrs16(TIMERH);
+          putcrs16(TIMERH, getcrs16(TIMERH) + actualmsec);
+          if (getcrs16(TIMERH) < utempa) {     /* timer overflowed */
+            tempea = getcrs32ea(OWNER);
+            utempa = get16r0(tempea+4) | 1;    /* set process abort flag */
+            put16r0(utempa, tempea+4);
+          }
+        } else {
+          putcrs16(TIMERL, getcrs16(TIMERL) + utempl);
+        }
+        gv.instcount += actualmsec*gv.instpermsec;
       }
     }
 #endif
@@ -7760,19 +7760,19 @@ imode:
 
     default:
       if (brop <= 037) {
-	TRACE(T_FLOW, " BRBS\n");
-	if (getgr32(dr) & BITMASK32(brop+1))
-	  RPL = iget16(RP);
-	else
-	  INCRP;
+        TRACE(T_FLOW, " BRBS\n");
+        if (getgr32(dr) & BITMASK32(brop+1))
+          RPL = iget16(RP);
+        else
+          INCRP;
       } else if (brop <= 077) {
-	TRACE(T_FLOW, " BRBR\n");
-	if (getgr32(dr) & BITMASK32(brop-040+1))
-	  INCRP;
-	else
-	  RPL = iget16(RP);
+        TRACE(T_FLOW, " BRBR\n");
+        if (getgr32(dr) & BITMASK32(brop-040+1))
+          INCRP;
+        else
+          RPL = iget16(RP);
       } else
-	fault(UIIFAULT, RPL, RP);
+        fault(UIIFAULT, RPL, RP);
     }
     goto fetch;
   }
@@ -7783,9 +7783,9 @@ imode:
       TRACE(T_FLOW, " ABQ\n");
       ea = apea(NULL);
       if (abq(ea, getgr16(dr), RP))
-	CLEAREQ;
+        CLEAREQ;
       else
-	SETEQ;
+        SETEQ;
       break;
 
     case 0014:
@@ -7807,9 +7807,9 @@ imode:
       TRACE(T_FLOW, " ATQ\n");
       ea = apea(NULL);
       if (atq(ea, getgr16(dr), RP))
-	CLEAREQ;
+        CLEAREQ;
       else
-	SETEQ;
+        SETEQ;
       break;
 
     case 0026:
@@ -7877,18 +7877,18 @@ imode:
 #else
       putgr32(dr, getgr32(dr) ^ EXTMASK32);
       if (getgr32(dr) & EXTMASK32)
-	putgr32(dr, getgr32(dr) - 1);
+        putgr32(dr, getgr32(dr) - 1);
 #endif
       break;
 
     case 0144:
       {
-	int oflow;
-	TRACE(T_FLOW, " DFCM\n");
+        int oflow;
+        TRACE(T_FLOW, " DFCM\n");
 dfcmdr:
-	putfr64(dr, dfcm(getfr64(dr), &oflow));
-	if (oflow)
-	  mathexception('f', FC_DFP_OFLOW, 0);
+        putfr64(dr, dfcm(getfr64(dr), &oflow));
+        if (oflow)
+          mathexception('f', FC_DFP_OFLOW, 0);
       }
       break;
 
@@ -7939,12 +7939,12 @@ dfcmdr:
 
     case 0107:
       {
-	int oflow;
-	TRACE(T_FLOW, " FRN\n");
-	CLEARC;
-	putfr64(dr, frn(getfr64(dr), &oflow));
-	if (oflow)
-	  mathexception('f', FC_DFP_OFLOW, 0);
+        int oflow;
+        TRACE(T_FLOW, " FRN\n");
+        CLEARC;
+        putfr64(dr, frn(getfr64(dr), &oflow));
+        if (oflow)
+          mathexception('f', FC_DFP_OFLOW, 0);
       }
       break;
 
@@ -7984,7 +7984,7 @@ dfcmdr:
 #else
       putgr32(dr, getgr32(dr) ^ EXTMASK32);
       if ((getgr32(dr) & EXTMASK32) == 0)
-	putgr32(dr, getgr32(dr) + 1);
+        putgr32(dr, getgr32(dr) + 1);
 #endif
       break;
 
@@ -8006,37 +8006,37 @@ dfcmdr:
     case 0103:
       TRACE(T_FLOW, " INT 0\n");
       if (prieee8(getfr64(0), &tempd) && -2147483648.0 <= tempd && tempd <= 2147483647.0) {
-	putgr32s(dr, (int)tempd);
-	CLEARC;
+        putgr32s(dr, (int)tempd);
+        CLEARC;
       } else
-	mathexception('f', FC_INT_CONV, ea);
+        mathexception('f', FC_INT_CONV, ea);
       break;
 
     case 0113:
       TRACE(T_FLOW, " INT 1\n");
       if (prieee8(getfr64(2), &tempd) && -2147483648.0 <= tempd && tempd <= 2147483647.0) {
-	putgr32s(dr, (int)tempd);
-	CLEARC;
+        putgr32s(dr, (int)tempd);
+        CLEARC;
       } else
-	mathexception('f', FC_INT_CONV, ea);
+        mathexception('f', FC_INT_CONV, ea);
       break;
 
     case 0101:
       TRACE(T_FLOW, " INTH 0\n");
       if (prieee8(getfr64(0), &tempd) && -32768.0 <= tempd && tempd <= 32767.0) {
-	putgr16s(dr, (short)tempd);
-	CLEARC;
+        putgr16s(dr, (short)tempd);
+        CLEARC;
       } else
-	mathexception('f', FC_INT_CONV, ea);
+        mathexception('f', FC_INT_CONV, ea);
       break;
 
     case 0111:
       TRACE(T_FLOW, " INTH 1\n");
       if (prieee8(getfr64(2), &tempd) && -32768.0 <= tempd && tempd <= 32767.0) {
-	putgr16s(dr, (short)tempd);
-	CLEARC;
+        putgr16s(dr, (short)tempd);
+        CLEARC;
       } else
-	mathexception('f', FC_INT_CONV, ea);
+        mathexception('f', FC_INT_CONV, ea);
       break;
 
     case 0122:
@@ -8263,9 +8263,9 @@ dfcmdr:
       utempl = getgr32(dr);
       putgr32(dr, getgr32(dr+1));
       if (((utempl ^ getgr32(dr+1)) & 0x80000000) || (utempl != 0 && ~utempl != 0))
-	mathexception('i', FC_INT_OFLOW, 0);
+        mathexception('i', FC_INT_OFLOW, 0);
       else
-	CLEARC;
+        CLEARC;
       break;
 
     case 0051:
@@ -8277,89 +8277,89 @@ dfcmdr:
       TRACE(T_FLOW, " RBQ\n");
       ea = apea(NULL);
       if (rbq(ea, crs+dr*2, RP))
-	CLEAREQ;
+        CLEAREQ;
       else
-	SETEQ;
+        SETEQ;
       break;
 
     case 0132:
       TRACE(T_FLOW, " RTQ\n");
       ea = apea(NULL);
       if (rtq(ea,crs+dr*2,RP))
-	CLEAREQ;
+        CLEAREQ;
       else
-	SETEQ;
+        SETEQ;
       break;
 
     case 0076:
       TRACE(T_FLOW, " SHL1\n");
       if (getgr16(dr) & 0x8000)
-	SETCL;
+        SETCL;
       else
-	CLEARCL;
+        CLEARCL;
       putgr16(dr, getgr16(dr) << 1);
       break;
 
     case 0077:
       TRACE(T_FLOW, " SHL2\n");
       if (getgr16(dr) & 0x4000)
-	SETCL;
+        SETCL;
       else
-	CLEARCL;
+        CLEARCL;
       putgr16(dr, getgr16(dr) << 2);
       break;
 
     case 0120:
       TRACE(T_FLOW, " SHR1\n");
       if (getgr16(dr) & 0x0001)
-	SETCL;
+        SETCL;
       else
-	CLEARCL;
+        CLEARCL;
       putgr16(dr, getgr16(dr) >> 1);
       break;
 
     case 0121:
       TRACE(T_FLOW, " SHR2\n");
       if (getgr16(dr) & 0x0002)
-	SETCL;
+        SETCL;
       else
-	CLEARCL;
+        CLEARCL;
       putgr16(dr, getgr16(dr) >> 2);
       break;
 
     case 0072:
       TRACE(T_FLOW, " SL1\n");
       if (getgr32(dr) & 0x80000000)
-	SETCL;
+        SETCL;
       else
-	CLEARCL;
+        CLEARCL;
       putgr32(dr, getgr32(dr) << 1);
       break;
 
     case 0073:
       TRACE(T_FLOW, " SL2\n");
       if (getgr32(dr) & 0x40000000)
-	SETCL;
+        SETCL;
       else
-	CLEARCL;
+        CLEARCL;
       putgr32(dr, getgr32(dr) << 2);
       break;
 
     case 0074:
       TRACE(T_FLOW, " SR1\n");
       if (getgr32(dr) & 0x00000001)
-	SETCL;
+        SETCL;
       else
-	CLEARCL;
+        CLEARCL;
       putgr32(dr, getgr32(dr) >> 1);
       break;
 
     case 0075:
       TRACE(T_FLOW, " SR2\n");
       if (getgr32(dr) & 0x00000002)
-	SETCL;
+        SETCL;
       else
-	CLEARCL;
+        CLEARCL;
       putgr32(dr, getgr32(dr) >> 2);
       break;
 
@@ -8387,20 +8387,20 @@ dfcmdr:
       TRACE(T_FLOW, " STCD\n");
       ea = apea(NULL);
       if (get32(ea) == getgr32(dr+1)) {
-	put32(getgr32(dr), ea);
-	SETEQ;
+        put32(getgr32(dr), ea);
+        SETEQ;
       } else 
-	CLEAREQ;
+        CLEAREQ;
       break;
 
     case 0136:
       TRACE(T_FLOW, " STCH\n");
       ea = apea(NULL);
       if (get16(ea) == (getcrs16(dr*2+1))) {
-	put16(getgr16(dr), ea);
-	SETEQ;
+        put16(getgr16(dr), ea);
+        SETEQ;
       } else 
-	CLEAREQ;
+        CLEAREQ;
       break;
 
     case 0027:
@@ -8421,9 +8421,9 @@ dfcmdr:
     case 0170:
       TRACE(T_FLOW, " TCNP\n");
       if ((getgr32(dr) & 0x1FFFFFFF) == 0)
-	SETEQ;
+        SETEQ;
       else
-	CLEAREQ;
+        CLEAREQ;
       break;
 
     case 0163:
@@ -8531,11 +8531,11 @@ dfcmdr:
       dr &= 2;
       TRACE(T_FLOW, " FL\n");
       if (*(int *)&ea < 0)
-	putgr64s(FAC0+dr, immu64);
+        putgr64s(FAC0+dr, immu64);
       else {
-	utempl = get32(ea);
-	putgr32(FAC0+dr,   utempl & 0xFFFFFF00);
-	putgr32(FAC0+dr+1, utempl & 0x000000FF);
+        utempl = get32(ea);
+        putgr32(FAC0+dr,   utempl & 0xFFFFFF00);
+        putgr32(FAC0+dr+1, utempl & 0x000000FF);
       }
       break;
 
@@ -8544,9 +8544,9 @@ dfcmdr:
       dr &= 2;
       TRACE(T_FLOW, " DFL\n");
       if (*(int *)&ea < 0)
-	putgr64s(FAC0+dr, immu64);
+        putgr64s(FAC0+dr, immu64);
       else
-	putgr64s(FAC0+dr, get64(ea));
+        putgr64s(FAC0+dr, get64(ea));
       break;
 
     case 4:
@@ -8554,9 +8554,9 @@ dfcmdr:
       dr &= 2;
       TRACE(T_FLOW, " FC\n");
       if (*(int *)&ea < 0)
-	utempl = ((immu64 >> 32) & 0xffffff00) | (immu64 & 0xff);
+        utempl = ((immu64 >> 32) & 0xffffff00) | (immu64 & 0xff);
       else
-	utempl = get32(ea);
+        utempl = get32(ea);
       fcs(getfr64(dr), utempl);
       break;
 
@@ -8565,7 +8565,7 @@ dfcmdr:
       dr &= 2;
       TRACE(T_FLOW, " DFC\n");
       if (*(int *)&ea >= 0)
-	immu64 = get64(ea);
+        immu64 = get64(ea);
       dfcs(getfr64(dr), immu64);
     break;
 
@@ -8623,12 +8623,12 @@ dfcmdr:
     case 0:
       putgr32(dr, lls(getgr32(dr), ea));
       if ((getcrs16(KEYS) & 0100400) == 0100400)
-	mathexception('i', FC_INT_OFLOW, 0);
+        mathexception('i', FC_INT_OFLOW, 0);
       break;
     case 1:
       putgr16(dr, als(getgr16(dr), ea));
       if ((getcrs16(KEYS) & 0100400) == 0100400)
-	mathexception('i', FC_INT_OFLOW, 0);
+        mathexception('i', FC_INT_OFLOW, 0);
       break;
     case 2:
       putgr32(dr, lrs(getgr32(dr), ea));
@@ -8651,15 +8651,15 @@ dfcmdr:
       TRACE(T_FLOW, " FST\n");
       CLEARC;
       if (*(int *)&ea >= 0) {
-	if (getcrs16(KEYS) & 010)
-	  putfr64(dr, frn(getfr64(dr), &oflow));  /* sing prec can't overflow */
-	if ((getgr32(FAC0+dr+1) & 0xFF00) == 0)
-	  put32((getfr32(dr) & 0xFFFFFF00) | (getgr32(FAC0+dr+1) & 0xFF), ea);
-	else
-	  mathexception('f', FC_SFP_STORE, ea);
+        if (getcrs16(KEYS) & 010)
+          putfr64(dr, frn(getfr64(dr), &oflow));  /* sing prec can't overflow */
+        if ((getgr32(FAC0+dr+1) & 0xFF00) == 0)
+          put32((getfr32(dr) & 0xFFFFFF00) | (getgr32(FAC0+dr+1) & 0xFF), ea);
+        else
+          mathexception('f', FC_SFP_STORE, ea);
       } else {
-	warn("I-mode immediate FST?");
-	fault(ILLINSTFAULT, RPL, RP);
+        warn("I-mode immediate FST?");
+        fault(ILLINSTFAULT, RPL, RP);
       }
       break;
 
@@ -8668,10 +8668,10 @@ dfcmdr:
       dr &= 2;
       TRACE(T_FLOW, " DFST\n");
       if (*(int *)&ea >= 0)
-	put64(getgr64s(FAC0+dr), ea);
+        put64(getgr64s(FAC0+dr), ea);
       else {
-	warn("I-mode immediate DFST?");
-	fault(ILLINSTFAULT, RPL, RP);
+        warn("I-mode immediate DFST?");
+        fault(ILLINSTFAULT, RPL, RP);
       }
       break;
 
@@ -8680,26 +8680,26 @@ dfcmdr:
       dr &= 2;
       TRACE(T_FLOW, " FA\n");
       if (*(int *)&ea >= 0) {
-	immu64 = get32(ea);
-	immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
+        immu64 = get32(ea);
+        immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
       }
       if (immu64 & 0xFFFFFFFF00000000LL)
-	if (getgr32s(FAC0+dr)) {
-	  tempa1 = getgr32(FAC0+dr+1) & 0xffff;
-	  tempa2 = immu64 & 0xffff;
-	  if (abs(tempa1-tempa2) < 48)
-	    if (prieee8(getfr64(dr), &tempd1) 
-		&& prieee8(immu64, &tempd2)
-		&& ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC0+dr), 0))
-	      CLEARC;
-	    else
-	      mathexception('f', FC_SFP_OFLOW, ea);
-	  else if (tempa1 < tempa2)
-	    putgr64s(FAC0+dr, immu64);
-	} else
-	  putgr64s(FAC0+dr, immu64);
+        if (getgr32s(FAC0+dr)) {
+          tempa1 = getgr32(FAC0+dr+1) & 0xffff;
+          tempa2 = immu64 & 0xffff;
+          if (abs(tempa1-tempa2) < 48)
+            if (prieee8(getfr64(dr), &tempd1) 
+                && prieee8(immu64, &tempd2)
+                && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC0+dr), 0))
+              CLEARC;
+            else
+              mathexception('f', FC_SFP_OFLOW, ea);
+          else if (tempa1 < tempa2)
+            putgr64s(FAC0+dr, immu64);
+        } else
+          putgr64s(FAC0+dr, immu64);
       else if (getgr32s(FAC0+dr) == 0)
-	putgr64s(FAC0+dr, 0);
+        putgr64s(FAC0+dr, 0);
       break;
 
     case 5:
@@ -8707,19 +8707,19 @@ dfcmdr:
       dr &= 2;
       TRACE(T_FLOW, " DFA\n");
       if (*(int *)&ea >= 0)
-	immu64 = get64(ea);
+        immu64 = get64(ea);
       if (immu64 & 0xFFFFFFFF00000000LL)
-	if (getgr32s(FAC0+dr))
-	  if (prieee8(getfr64(dr), &tempd1) 
-	      && prieee8(immu64, &tempd2)
-	      && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC0+dr), 0))
-	    CLEARC;
-	  else
-	    mathexception('f', FC_DFP_OFLOW, ea);
-	else
-	  putgr64s(FAC0+dr, immu64);
+        if (getgr32s(FAC0+dr))
+          if (prieee8(getfr64(dr), &tempd1) 
+              && prieee8(immu64, &tempd2)
+              && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC0+dr), 0))
+            CLEARC;
+          else
+            mathexception('f', FC_DFP_OFLOW, ea);
+        else
+          putgr64s(FAC0+dr, immu64);
       else if (getgr32s(FAC0+dr) == 0)
-	putgr64s(FAC0+dr, 0);
+        putgr64s(FAC0+dr, 0);
       break;
 
     default:
@@ -8794,30 +8794,30 @@ dfcmdr:
       dr &= 2;
       TRACE(T_FLOW, " FS\n");
       if (*(int *)&ea >= 0) {
-	immu64 = get32(ea);
-	immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
+        immu64 = get32(ea);
+        immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
       }
       if (immu64 & 0xFFFFFFFF00000000LL)
-	if (getgr32s(FAC0+dr)) {
-	  tempa1 = getgr32(FAC0+dr+1) & 0xffff;
-	  tempa2 = immu64 & 0xffff;
-	  if (abs(tempa1-tempa2) < 48)
-	    if (prieee8(getfr64(dr), &tempd1) 
-		&& prieee8(immu64, &tempd2)
-	        && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC0+dr), 0))
-	      CLEARC;
-	    else
-	      mathexception('f', FC_SFP_OFLOW, ea);
-	  else if (tempa1 < tempa2) {
-	    putgr64s(FAC0+dr, immu64);
-	    goto dfcmdr;
-	  }
-	} else {
-	  putgr64s(FAC0+dr, immu64);
-	  goto dfcmdr;
-	}
+        if (getgr32s(FAC0+dr)) {
+          tempa1 = getgr32(FAC0+dr+1) & 0xffff;
+          tempa2 = immu64 & 0xffff;
+          if (abs(tempa1-tempa2) < 48)
+            if (prieee8(getfr64(dr), &tempd1) 
+                && prieee8(immu64, &tempd2)
+                && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC0+dr), 0))
+              CLEARC;
+            else
+              mathexception('f', FC_SFP_OFLOW, ea);
+          else if (tempa1 < tempa2) {
+            putgr64s(FAC0+dr, immu64);
+            goto dfcmdr;
+          }
+        } else {
+          putgr64s(FAC0+dr, immu64);
+          goto dfcmdr;
+        }
       else if (getgr32s(FAC0+dr) == 0)
-	putgr64s(FAC0+dr, 0);
+        putgr64s(FAC0+dr, 0);
       break;
 
     case 1:
@@ -8825,21 +8825,21 @@ dfcmdr:
       dr &= 2;
       TRACE(T_FLOW, " DFS\n");
       if (*(int *)&ea >= 0)
-	immu64 = get64(ea);
+        immu64 = get64(ea);
       if (immu64 & 0xFFFFFFFF00000000LL)
-	if (getgr32s(FAC0+dr))
-	  if (prieee8(getfr64(dr), &tempd1) 
-	      && prieee8(immu64, &tempd2)
-	      && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC0+dr), 0))
-	    CLEARC;
-	  else
-	    mathexception('f', FC_DFP_OFLOW, ea);
-	else {
-	  putgr64s(FAC0+dr, immu64);
-	  goto dfcmdr;
-	}
+        if (getgr32s(FAC0+dr))
+          if (prieee8(getfr64(dr), &tempd1) 
+              && prieee8(immu64, &tempd2)
+              && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC0+dr), 0))
+            CLEARC;
+          else
+            mathexception('f', FC_DFP_OFLOW, ea);
+        else {
+          putgr64s(FAC0+dr, immu64);
+          goto dfcmdr;
+        }
       else if (getgr32s(FAC0+dr) == 0)
-	putgr64s(FAC0+dr, 0);
+        putgr64s(FAC0+dr, 0);
       break;
 
     case 4:
@@ -8847,21 +8847,21 @@ dfcmdr:
       dr &= 2;
       TRACE(T_FLOW, " FM\n");
       if (getgr32s(FAC0+dr)) {
-	if (*(int *)&ea >= 0) {
-	  immu64 = get32(ea);
-	  immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
-	}
-	if (immu64 & 0xFFFFFFFF00000000LL)
-	  if (prieee8(immu64, &tempd2) 
-	      && prieee8(getfr64(dr), &tempd1)
-	      && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC0+dr), 0))
-	    CLEARC;
-	  else
-	    mathexception('f', FC_SFP_OFLOW, ea);
-	else            /* operand = 0.0: no multiply */
-	  putgr64s(FAC0+dr, 0);
+        if (*(int *)&ea >= 0) {
+          immu64 = get32(ea);
+          immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
+        }
+        if (immu64 & 0xFFFFFFFF00000000LL)
+          if (prieee8(immu64, &tempd2) 
+              && prieee8(getfr64(dr), &tempd1)
+              && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC0+dr), 0))
+            CLEARC;
+          else
+            mathexception('f', FC_SFP_OFLOW, ea);
+        else            /* operand = 0.0: no multiply */
+          putgr64s(FAC0+dr, 0);
       } else            /* clean up (maybe) dirty zero */
-	putgr64s(FAC0+dr, 0);
+        putgr64s(FAC0+dr, 0);
       break;
 
     case 5:
@@ -8869,19 +8869,19 @@ dfcmdr:
       dr &= 2;
       TRACE(T_FLOW, " DFM\n");
       if (getgr32s(FAC0+dr)) {
-	if (*(int *)&ea >= 0)
-	  immu64 = get64(ea);
-	if (immu64 & 0xFFFFFFFF00000000LL)
-	  if (prieee8(immu64, &tempd2) 
-	      && prieee8(getfr64(dr), &tempd1)
-	      && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC0+dr), 0))
-	    CLEARC;
-	  else
-	    mathexception('f', FC_DFP_OFLOW, ea);
-	else             /* operand = 0.0: no multiply */
-	  putgr64s(FAC0+dr, 0);
+        if (*(int *)&ea >= 0)
+          immu64 = get64(ea);
+        if (immu64 & 0xFFFFFFFF00000000LL)
+          if (prieee8(immu64, &tempd2) 
+              && prieee8(getfr64(dr), &tempd1)
+              && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC0+dr), 0))
+            CLEARC;
+          else
+            mathexception('f', FC_DFP_OFLOW, ea);
+        else             /* operand = 0.0: no multiply */
+          putgr64s(FAC0+dr, 0);
       } else
-	putgr64s(FAC0+dr, 0);
+        putgr64s(FAC0+dr, 0);
       break;
 
     default:
@@ -8945,21 +8945,21 @@ dfcmdr:
       dr &= 2;
       TRACE(T_FLOW, " FD\n");
       if (*(int *)&ea >= 0) {
-	immu64 = get32(ea);
-	immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
+        immu64 = get32(ea);
+        immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
       }
       if (immu64 & 0xFFFFFFFF00000000LL)
-	if (getgr32s(FAC0+dr))
-	  if (prieee8(immu64, &tempd2) 
-	      && prieee8(getfr64(dr), &tempd1)
-	      && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC0+dr), 1))
-	    CLEARC;
-	  else
-	    mathexception('f', FC_SFP_OFLOW, ea);
-	else            /* operand = 0.0 */
-	  putgr64s(FAC0+dr, 0);
+        if (getgr32s(FAC0+dr))
+          if (prieee8(immu64, &tempd2) 
+              && prieee8(getfr64(dr), &tempd1)
+              && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC0+dr), 1))
+            CLEARC;
+          else
+            mathexception('f', FC_SFP_OFLOW, ea);
+        else            /* operand = 0.0 */
+          putgr64s(FAC0+dr, 0);
       else            /* clean up (maybe) dirty zero */
-	mathexception('f', FC_SFP_ZDIV, ea);
+        mathexception('f', FC_SFP_ZDIV, ea);
       break;
 
     case 1:
@@ -8967,19 +8967,19 @@ dfcmdr:
       dr &= 2;
       TRACE(T_FLOW, " DFD\n");
       if (*(int *)&ea >= 0)
-	immu64 = get64(ea);
+        immu64 = get64(ea);
       if (immu64 & 0xFFFFFFFF00000000LL)
-	if (getgr32s(FAC0+dr))
-	  if (prieee8(immu64, &tempd2) 
-	      && prieee8(getfr64(dr), &tempd1)
-	      && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC0+dr), 1))
-	    CLEARC;
-	  else
-	    mathexception('f', FC_DFP_OFLOW, ea);
-	else
-	  putgr64s(FAC0+dr, 0);
+        if (getgr32s(FAC0+dr))
+          if (prieee8(immu64, &tempd2) 
+              && prieee8(getfr64(dr), &tempd1)
+              && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC0+dr), 1))
+            CLEARC;
+          else
+            mathexception('f', FC_DFP_OFLOW, ea);
+        else
+          putgr64s(FAC0+dr, 0);
       else
-	mathexception('f', FC_DFP_ZDIV, ea);
+        mathexception('f', FC_DFP_ZDIV, ea);
       break;
 
     case 4:  /* QFLD */
@@ -9044,24 +9044,24 @@ dfcmdr:
       utempl1 = EACP(getgr32(dr));
       utempl2 = EACP(immu32);
       if (utempl1 < utempl2)
-	putcrs16(KEYS, getcrs16(KEYS) & ~0300 | 0200);
+        putcrs16(KEYS, getcrs16(KEYS) & ~0300 | 0200);
       else if (utempl1 == utempl2)
-	putcrs16(KEYS, getcrs16(KEYS) & ~0300 | 0100);
+        putcrs16(KEYS, getcrs16(KEYS) & ~0300 | 0100);
       else
-	putcrs16(KEYS, getcrs16(KEYS) & ~0300);
+        putcrs16(KEYS, getcrs16(KEYS) & ~0300);
     } else {
       TRACE(T_FLOW, " LCC\n");
       utempa = get16(ea);
       TRACE(T_INST, " before load, keys=%o, ea=%o/%o, [ea]=0x%x, dr=%d, [dr]=0x%x\n", getcrs16(KEYS), ea>>16, ea&0xFFFF, utempa, dr, getgr32(dr));
       if (ea & EXTMASK32)
-	utempa &= 0xFF;
+        utempa &= 0xFF;
       else
-	utempa >>= 8;
+        utempa >>= 8;
       putgr16(dr, utempa);
       if (utempa == 0)
-	SETEQ;
+        SETEQ;
       else
-	CLEAREQ;
+        CLEAREQ;
       TRACE(T_INST, " after load, keys=%o, ea=%o/%o, utempa=0x%x, dr=%d, [dr]=0x%x\n", getcrs16(KEYS), ea>>16, ea&0xFFFF, utempa, dr, getgr32(dr));
     }
     goto fetch;
@@ -9075,9 +9075,9 @@ dfcmdr:
       CLEARCC;
       /* NOTE: test pre-incremented values to get true LT (overflow) */
       if (templ == -1)
-	SETEQ;
+        SETEQ;
       else if (templ < 0)
-	SETLT;
+        SETLT;
       break;
 
     /* NOTE: V-mode PCL may jump here! */
@@ -9091,14 +9091,14 @@ imodepcl:
 #endif
 #ifndef NOTRACE
       if (gv.numtraceprocs > 0 && TRACEUSER)
-	for (i=0; i<gv.numtraceprocs; i++)
-	  if (traceprocs[i].ecb == (ea & 0xFFFFFFF) && traceprocs[i].sb == -1) {
-	    gv.traceflags = ~T_MAP;
-	    gv.savetraceflags = gv.traceflags;
-	    traceprocs[i].sb = getcrs32s(SB);
-	    printf("Enabled trace for %s at sb '%o/%o\n", traceprocs[i].name, getcrs16(SBH), getcrs16(SBL));
-	    break;
-	  }
+        for (i=0; i<gv.numtraceprocs; i++)
+          if (traceprocs[i].ecb == (ea & 0xFFFFFFF) && traceprocs[i].sb == -1) {
+            gv.traceflags = ~T_MAP;
+            gv.savetraceflags = gv.traceflags;
+            traceprocs[i].sb = getcrs32s(SB);
+            printf("Enabled trace for %s at sb '%o/%o\n", traceprocs[i].name, getcrs16(SBH), getcrs16(SBL));
+            break;
+          }
 #endif
       pcl(ea);
       break;
@@ -9198,9 +9198,9 @@ imodepcl:
       TRACE(T_FLOW, " SCC\n");
       utempa = get16(ea);
       if (ea & EXTMASK32)
-	utempa = (utempa & 0xFF00) | (getgr16(dr) & 0xFF);
+        utempa = (utempa & 0xFF00) | (getgr16(dr) & 0xFF);
       else
-	utempa = (getgr16(dr) << 8) | (utempa & 0xFF);
+        utempa = (getgr16(dr) << 8) | (utempa & 0xFF);
       put16(utempa, ea);
     }
     goto fetch;
@@ -9213,9 +9213,9 @@ imodepcl:
       put16(tempa+1, ea);
       CLEARCC;
       if (tempa == -1)
-	SETEQ;
+        SETEQ;
       else if (tempa < 0)
-	SETLT;
+        SETLT;
       break;
 
     case 1:
@@ -9281,9 +9281,9 @@ imodepcl:
       putgr32(dr, templl2);
       putgr32(dr+1, templl1 % templ);
       if (-2147483648LL <= templl2 && templl2 <= 2147483647LL)
-	CLEARC;
+        CLEARC;
       else
-	mathexception('i', FC_INT_OFLOW, 0);
+        mathexception('i', FC_INT_OFLOW, 0);
     } else
       mathexception('i', FC_INT_ZDIV, 0);
     goto fetch;
@@ -9320,9 +9320,9 @@ imodepcl:
       /* NOTE: test pre-decremented values to get true LT (overflow) */
       CLEARCC;
       if (templ == 1)
-	SETEQ;
+        SETEQ;
       else if (templ <= 0)
-	SETLT;
+        SETLT;
       break;
 
     case 1:
@@ -9371,9 +9371,9 @@ imodepcl:
       templ2 = templ1 / tempa;
       putgr32(dr, (templ2 << 16) | (templ1 % tempa));
       if (-32768 <= templ2 && templ2 <= 32767)
-	CLEARC;
+        CLEARC;
       else
-	mathexception('i', FC_INT_OFLOW, 0);
+        mathexception('i', FC_INT_OFLOW, 0);
     } else
       mathexception('i', FC_INT_ZDIV, 0);
     goto fetch;
@@ -9411,20 +9411,20 @@ imodepcl:
       CLEARCC;
       /* NOTE: test pre-decremented values to get true LT (overflow) */
       if (tempa == 1)
-	SETEQ;
+        SETEQ;
       else if (tempa <= 0)
-	SETLT;
+        SETLT;
       break;
 
     case 6:
       TRACE(T_FLOW, " TCNP\n");
       if (*(int *)&ea > 0)
-	if ((get32(ea) & 0x1FFFFFFF) == 0)
-	  SETEQ;
-	else
-	  CLEAREQ;
+        if ((get32(ea) & 0x1FFFFFFF) == 0)
+          SETEQ;
+        else
+          CLEAREQ;
       else
-	fault(UIIFAULT, RPL, RP);
+        fault(UIIFAULT, RPL, RP);
       break;
 
     default:
@@ -9900,14 +9900,14 @@ d_fad:  /* 00601 */
       tempa1 = getcrs16(FEXP);
       tempa2 = immu64 & 0xffff;
       if (abs(tempa1-tempa2) < 48)
-	if (prieee8(getfr64(2), &tempd1) 
-	    && prieee8(immu64, &tempd2)
-	    && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC1), 0))
-	  CLEARC;
-	else
-	  mathexception('f', FC_SFP_OFLOW, ea);
+        if (prieee8(getfr64(2), &tempd1) 
+            && prieee8(immu64, &tempd2)
+            && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC1), 0))
+          CLEARC;
+        else
+          mathexception('f', FC_SFP_OFLOW, ea);
       else if (tempa1 < tempa2)
-	putgr64s(FAC1, immu64);
+        putgr64s(FAC1, immu64);
     } else
       putgr64s(FAC1, immu64);
   else if (getgr32s(FAC1) == 0)
@@ -9929,11 +9929,11 @@ d_fdv:  /* 01701 */
   if (immu64 & 0xFFFFFFFF00000000LL)
     if (getgr32s(FAC1))
       if (prieee8(immu64, &tempd2) 
-	  && prieee8(getfr64(2), &tempd1)
-	  && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC1), 1))
-	CLEARC;
+          && prieee8(getfr64(2), &tempd1)
+          && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC1), 1))
+        CLEARC;
       else
-	mathexception('f', FC_SFP_OFLOW, ea);
+        mathexception('f', FC_SFP_OFLOW, ea);
     else            /* operand = 0.0 */
       putgr64s(FAC1, 0);
   else            /* clean up (maybe) dirty zero */
@@ -9954,11 +9954,11 @@ d_fmp:  /* 01601 */
     immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
     if (immu64 & 0xFFFFFFFF00000000LL)
       if (prieee8(immu64, &tempd2) 
-	  && prieee8(getfr64(2), &tempd1)
-	  && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC1), 0))
-	CLEARC;
+          && prieee8(getfr64(2), &tempd1)
+          && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC1), 0))
+        CLEARC;
       else
-	mathexception('f', FC_SFP_OFLOW, ea);
+        mathexception('f', FC_SFP_OFLOW, ea);
     else            /* operand = 0.0: no multiply */
       putgr64s(FAC1, 0);
   } else            /* clean up (maybe) dirty zero */
@@ -9974,15 +9974,15 @@ d_fsb:  /* 00701 */
       tempa1 = getcrs16(FEXP);
       tempa2 = immu64 & 0xffff;
       if (abs(tempa1-tempa2) < 48)
-	if (prieee8(getfr64(2), &tempd1) 
-	    && prieee8(immu64, &tempd2)
-	    && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC1), 0))
-	  CLEARC;
-	else
-	  mathexception('f', FC_SFP_OFLOW, ea);
+        if (prieee8(getfr64(2), &tempd1) 
+            && prieee8(immu64, &tempd2)
+            && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC1), 0))
+          CLEARC;
+        else
+          mathexception('f', FC_SFP_OFLOW, ea);
       else if (tempa1 < tempa2) {
-	putgr64s(FAC1, immu64);
-	goto dfcmfac1;
+        putgr64s(FAC1, immu64);
+        goto dfcmfac1;
       }
     } else {
       putgr64s(FAC1, immu64);
@@ -10014,13 +10014,13 @@ d_dfad:  /* 0602 */
   if (immu64 & 0xFFFFFFFF00000000LL)
     if (getgr32s(FAC1))
       if (prieee8(getfr64(2), &tempd1) 
-	  && prieee8(immu64, &tempd2)
-	  && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC1), 0)) {
-	CLEARC;
-	TRACE(T_FLOW, " %f ('%o %o %o %o) + %f (%o %o %o %o)\n", tempd1, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP), tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
-	TRACE(T_FLOW, " = %f ('%o %o %o %o)\n", tempd1+tempd2, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP));
+          && prieee8(immu64, &tempd2)
+          && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC1), 0)) {
+        CLEARC;
+        TRACE(T_FLOW, " %f ('%o %o %o %o) + %f (%o %o %o %o)\n", tempd1, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP), tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
+        TRACE(T_FLOW, " = %f ('%o %o %o %o)\n", tempd1+tempd2, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP));
       } else
-	mathexception('f', FC_DFP_OFLOW, ea);
+        mathexception('f', FC_DFP_OFLOW, ea);
     else
       putgr64s(FAC1, immu64);
   else if (getgr32s(FAC1) == 0)
@@ -10040,13 +10040,13 @@ d_dfdv:  /* 01702 */
   if (immu64 & 0xFFFFFFFF00000000LL)
     if (getgr32s(FAC1))
       if (prieee8(immu64, &tempd2) 
-	  && prieee8(getfr64(2), &tempd1)
-	  && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC1), 1)) {
-	CLEARC;
-	TRACE(T_FLOW, " %f ('%o %o %o %o) / %f (%o %o %o %o)\n", tempd1, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP), tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
-	TRACE(T_FLOW, " = %f ('%o %o %o %o)\n", tempd1/tempd2, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP));
+          && prieee8(getfr64(2), &tempd1)
+          && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC1), 1)) {
+        CLEARC;
+        TRACE(T_FLOW, " %f ('%o %o %o %o) / %f (%o %o %o %o)\n", tempd1, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP), tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
+        TRACE(T_FLOW, " = %f ('%o %o %o %o)\n", tempd1/tempd2, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP));
       } else
-	mathexception('f', FC_DFP_OFLOW, ea);
+        mathexception('f', FC_DFP_OFLOW, ea);
     else
       putgr64s(FAC1, 0);
   else
@@ -10069,13 +10069,13 @@ d_dfmp:  /* 01602 */
     immu64 = get64(ea);
     if (immu64 & 0xFFFFFFFF00000000LL)
       if (prieee8(immu64, &tempd2) 
-	  && prieee8(getfr64(2), &tempd1)
-	  && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC1), 0)) {
-	CLEARC;
-	TRACE(T_FLOW, " %f ('%o %o %o %o) * %f (%o %o %o %o)\n", tempd1, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP), tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
-	TRACE(T_FLOW, " = %f ('%o %o %o %o)\n", tempd1*tempd2, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP));
+          && prieee8(getfr64(2), &tempd1)
+          && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC1), 0)) {
+        CLEARC;
+        TRACE(T_FLOW, " %f ('%o %o %o %o) * %f (%o %o %o %o)\n", tempd1, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP), tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
+        TRACE(T_FLOW, " = %f ('%o %o %o %o)\n", tempd1*tempd2, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP));
       } else
-	mathexception('f', FC_DFP_OFLOW, ea);
+        mathexception('f', FC_DFP_OFLOW, ea);
     else             /* operand = 0.0: no multiply */
       putgr64s(FAC1, 0);
   } else
@@ -10088,13 +10088,13 @@ d_dfsb:  /* 0702 */
   if (immu64 & 0xFFFFFFFF00000000LL)
     if (getgr32s(FAC1))
       if (prieee8(getfr64(2), &tempd1) 
-	  && prieee8(immu64, &tempd2)
-	  && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC1), 0)) {
-	CLEARC;
-	TRACE(T_FLOW, " %f ('%o %o %o %o) - %f (%o %o %o %o)\n", tempd1, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP), tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
-	TRACE(T_FLOW, " = %f ('%o %o %o %o)\n", tempd1-tempd2, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP));
+          && prieee8(immu64, &tempd2)
+          && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC1), 0)) {
+        CLEARC;
+        TRACE(T_FLOW, " %f ('%o %o %o %o) - %f (%o %o %o %o)\n", tempd1, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP), tempd2, (unsigned short)(immu64>>48), (unsigned short)((immu64>>32)&0xffff), (unsigned short)((immu64>>16)&0xffff), (unsigned short)(immu64&0xffff));
+        TRACE(T_FLOW, " = %f ('%o %o %o %o)\n", tempd1-tempd2, getcrs16(FLTH), getcrs16(FLTL), getcrs16(FLTD), getcrs16(FEXP));
       } else
-	mathexception('f', FC_DFP_OFLOW, ea);
+        mathexception('f', FC_DFP_OFLOW, ea);
     else {
       putgr64s(FAC1, immu64);
       goto dfcmfac1;
