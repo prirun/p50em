@@ -7,7 +7,7 @@ all_deps = makefile
 em_objs = em.o em
 em_deps = \
   em.c regs.h emdev.h ea64v.h ea32i.h fp.h dispatch.h geom.h \
-  devpnc.h devamlc.h swap.h
+  devpnc.h devamlc.h devsmlc.h swap.h
 
 CFLAGS =
 # Uncomment for building on SmartOS/Solaris:

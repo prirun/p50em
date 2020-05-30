@@ -1689,6 +1689,8 @@ static int devpoll[64] = {0};
    '35 = devamlc: 4th AMLC (16 lines)
    '45 = devdisk: 7th disk controller (8 drives)
    '46 = devdisk: 8th disk controller (8 drives)
+   '50 = devsmlc: 1st HSSMLC/MDLC (4 lines)
+   '51 = devsmlc: 2nd HSSMLC/MDLC (4 lines)
    '52 = devamlc: 3rd AMLC (16 lines)
    '53 = devamlc: 2nd AMLC (16 lines)
    '54 = devamlc: 1st AMLC (16 lines)
@@ -1700,7 +1702,7 @@ static int (*devmap[64])(int, int, int) = {
   /* '2x */ devcp,devnone,devdisk,devdisk,devdisk,devdisk,devdisk,devdisk,
   /* '3x */ devnone,devnone,devamlc,devnone,devnone,devamlc,devnone,devnone,
   /* '4x */ devnone,devnone,devnone,devnone,devnone,devdisk,devdisk,devnone,
-  /* '5x */ devnone,devnone,devamlc,devamlc,devamlc,devnone,devnone,devnone,
+  /* '5x */ devsmlc,devsmlc,devamlc,devamlc,devamlc,devnone,devnone,devnone,
   /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
   /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
 
@@ -1714,6 +1716,7 @@ static int (*devmap[64])(int, int, int) = {
    '20 = devcp: clock / VCP / SOC
    '26 = devdisk: 1st disk controller (8 drives)
    '27 = devdisk: 2nd disk controller (8 drives)
+   '50 = devsmlc: 1st HSSMLC/MDLC (4 lines)
    '54 = 1st amlc (terminal) controller (16 lines)
    '53 = devamlc: 2nd AMLC (16 lines)
 */
@@ -1724,7 +1727,7 @@ static int (*devmap[64])(int, int, int) = {
   /* '2x */ devcp,devnone,devnone,devnone,devnone,devnone,devdisk,devdisk,
   /* '3x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
   /* '4x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
-  /* '5x */ devnone,devnone,devnone,devamlc,devamlc,devnone,devnone,devnone,
+  /* '5x */ devsmlc,devnone,devnone,devamlc,devamlc,devnone,devnone,devnone,
   /* '6x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone,
   /* '7x */ devnone,devnone,devnone,devnone,devnone,devnone,devnone,devnone};
 #endif
