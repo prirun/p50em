@@ -3,6 +3,7 @@
 *.log
 *.swp
 tags
+cmraw
 cscope.*
 em
 emlink
