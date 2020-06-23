@@ -250,7 +250,7 @@ int devsmlc (int class, int func, int device) {
   char *bp;
   char buf[SMLC_BUFSIZE];
   int bufidx;
-  char ch;
+  unsigned char ch;
   time_t currenttime;
   uint16_t data;
   ea_t dmcbufbegea;
