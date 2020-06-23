@@ -2,7 +2,7 @@
 .\" em.1, Boone, 03/13/20
 .\" Man page for Jim Wilcoxson's Prime 50-Series emulator
 .\" ---------------------------------------------------------------------------
-.TH em 1 "2020-03-14" "Jim Wilcoxson" "50-Series Emulator"
+.TH em 1 "2020-06-23" "Jim Wilcoxson" "50-Series Emulator"
 .\" ---------------------------------------------------------------------------
 .SH NAME
 em \- Emulator for Prime 50-Series systems
@@ -34,6 +34,8 @@ support for all 25 disk drives sold by Prime
 a tape controller, 4 drives, using the .TAP format
 .IP \(bu
 a PNC controller emulating RingNet over TCP/IP
+.IP \(bu
+two sync serial controllers supporting up to 8 lines
 .IP \(bu
 a bypass for Primos system serial number checks
 .IP \(bu
@@ -163,6 +165,16 @@ Example:
 8 192.168.10.4:9000  # Outbound socket connection e.g. for spooler
 .EE
 .TP
+smlc.cfg
+Used to associate sync serial (MDLC or HSSMLC) lines with a destination
+IP address and port number.  Optional.  Comments work the same as
+amlc.cfg.  Example:
+
+.EX
+0 10.1.1.3:2554
+1 127.0.0.1:2554
+.EE
+.TP
 console.log
 All console output is also written to this file.  It is overwritten
 at each invocation.  Created by
@@ -276,7 +288,9 @@ flush|Flush trace file after each write
 tlb|STLB and IOTLB changes
 OWNERL|Execution of this PCB
 #instruction count|Begin after specified number of instructions
+|(the leading # is literal)
 octal segno|Execution in the given segment number
+|(may interact poorly with "off")
 process number|Execution of this user number
 .TE
 .\" ---------------------------------------------------------------------------
@@ -360,7 +374,8 @@ CMD,1/3/5+1,Cartridge Module 32/64/96 MB
 .\" ---------------------------------------------------------------------------
 .SH AUTHOR
 .PP
-This emulator was written by Jim Wilcoxson.  Man page by Dennis Boone.
+This emulator was written by Jim Wilcoxson.  MDLC/HSSMLC support by
+Kevin Jordan.  Man page by Dennis Boone.
 .\" ---------------------------------------------------------------------------
 .SH SEE ALSO
 This project is hosted at
