@@ -49,6 +49,7 @@
 */
 
 #include <stdbool.h>
+#include <time.h>
 
 #define SMLC_DEVICEID      0050  /* HSSMLC/MDLC is '50, SMLC is '56 */
 
@@ -126,7 +127,7 @@ static void smlclogflush(void);
 static FILE *smlclog = NULL;
 static char smlclogbuf[LogLineLength + 1];
 static int  smlclogbytescol = 0;
-static char smlctimestamp[10];
+static char smlctimestamp[20];
 #endif
 
 /* connection states */
@@ -285,12 +286,14 @@ int devsmlc (int class, int func, int device) {
   fd_set writefds;
 #if DEBUG
   struct tm *tp;
+  struct timespec sts;
 #endif
 
   currenttime = time(0);
 #if DEBUG
   tp = localtime(&currenttime);
-  sprintf(smlctimestamp, "%02d:%02d:%02d", tp->tm_hour, tp->tm_min, tp->tm_sec);
+  clock_gettime(CLOCK_REALTIME, &sts);
+  sprintf(smlctimestamp, "%02d:%02d:%02d.%09d", tp->tm_hour, tp->tm_min, tp->tm_sec, sts.tv_nsec);
 #endif
 
   switch (device) {
