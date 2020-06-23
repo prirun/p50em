@@ -4608,12 +4608,12 @@ int main (int argc, char **argv) {
           gv.traceflags |= T_TLB;
         else if (isdigit(argv[i][0]) && strlen(argv[i]) <= 3 && sscanf(argv[i],"%d", &templ) == 1)
           gv.traceuser = 0100000 | (templ<<6);   /* form OWNERL for user # */
-        else if (isdigit(argv[i][0]) && sscanf(argv[i],"%d", &templ) == 1)
-          gv.traceinstcount = templ;
         else if (strlen(argv[i]) == 6 && sscanf(argv[i],"%o", &templ) == 1)
           gv.traceuser = templ;                  /* specify OWNERL directly */
         else if (strlen(argv[i]) == 4 && sscanf(argv[i],"%o", &templ) == 1)
           gv.traceseg = templ;                   /* specify RPH segno */
+        else if (argv[i][0] == '#' && sscanf(argv[i]+1,"%d", &templ) == 1)
+          gv.traceinstcount = templ;
         else if (strlen(argv[i]) <= 8 && argv[i][0] != '-') {
           if (gv.numtraceprocs >= MAXTRACEPROCS)
             fprintf(stderr,"Only %d trace procs are allowed\n", MAXTRACEPROCS);
@@ -4704,6 +4704,7 @@ int main (int argc, char **argv) {
   /* finish setting up tracing after all options are read, ie, maps */
 
 #ifndef NOTRACE
+  TRACEA("Trace file initialized\n");
   TRACEA("Trace flags = 0x%x\n", gv.traceflags);
   gv.savetraceflags = gv.traceflags;
   gv.traceflags = 0;
@@ -4713,6 +4714,14 @@ int main (int argc, char **argv) {
     TRACEA("Tracing enabled for all users\n");
   if (gv.traceinstcount != 0)
     TRACEA("Tracing enabled after instruction %u\n", gv.traceinstcount);
+  if (gv.traceseg != 0)
+  {
+    TRACEA("Tracing enabled for segment %04o\n", gv.traceseg);
+    /* This could be splattering other settings that aren't really
+       compatible with RPH trace.  C'est la vie? */
+    gv.savetraceflags |= T_FLOW;
+    gv.tracetriggered = 0;
+  }
   for (i=0; i<gv.numtraceprocs; i++) {
     for (j=0; j<numsyms; j++) {
       if (strcasecmp(mapsym[j].symname, traceprocs[i].name) == 0 && mapsym[j].symtype == 'e') {
@@ -4939,7 +4948,12 @@ fetch:
 #endif
 
 #ifndef NOTRACE
-  gv.traceflags = 0;
+  if (gv.traceseg != 0)
+    if (gv.traceseg == (RPH & 0xFFF))
+      gv.tracetriggered = 1;
+    else
+      gv.tracetriggered = 0;
+    gv.traceflags = 0;
   if (gv.tracetriggered &&
       (gv.instcount >= gv.traceinstcount) &&
       (TRACEUSER && ((gv.traceseg == 0) || (gv.traceseg == (RPH & 0xFFF))))
