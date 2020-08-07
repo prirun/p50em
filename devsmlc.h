@@ -1,4 +1,3 @@
-#define DEBUG 0
 /* 
   Implements the SMLC subsystem for Primos.
 
@@ -48,8 +47,10 @@
 
 */
 
+#include <ctype.h>
 #include <stdbool.h>
 #include <time.h>
+#include <arpa/inet.h>
 
 #define SMLC_DEVICEID      0050  /* HSSMLC/MDLC is '50, SMLC is '56 */
 
@@ -111,12 +112,12 @@
 #define SMLC_ACK0_STATUS  (007<<4) /* encoded ACK0 status */
 #define SMLC_NAK_STATUS   (013<<4) /* encoded NAK status */
 #define SMLC_ENQ_STATUS   (014<<4) /* encoded soh-ENQ status */
+#define SMLC_MASK_STATUS  (017<<4) /* encoded status mask */
 
   /* seconds between attempts to make TCP connections */
 
 #define SMLC_CONNECTINTERVAL 15
 
-#if DEBUG
 #define HexColumn(x) (3 * (x) + 4)
 #define AsciiColumn(x) (HexColumn(16) + 2 + (x))
 #define LogLineLength (AsciiColumn(16))
@@ -124,11 +125,9 @@
 static void smlclogbytes(unsigned char *bytes, int len);
 static void smlclogflush(void);
 
-static FILE *smlclog = NULL;
 static char smlclogbuf[LogLineLength + 1];
 static int  smlclogbytescol = 0;
 static char smlctimestamp[20];
-#endif
 
 /* connection states */
 
@@ -144,7 +143,9 @@ typedef enum {
 typedef enum {
   SMLC_STATERCVSYN = 0,
   SMLC_STATERCVDLE,
-  SMLC_STATERCVCHAR
+  SMLC_STATERCVCHAR,
+  SMLC_STATERCVSOH,
+  SMLC_STATERCVENQ
 } SmlcReceiveState;
 
 /* controller interrupt states */
@@ -155,20 +156,18 @@ typedef enum {
   SMLC_INTERRUPTPENDING
 } SmlcInterruptState;
 
-#if DEBUG
 static char *intstates[] = {
   "not interrupting",
   "interrupting",
   "interrupt pending"
 };
-#endif
 
 /* send/receive buffer */
 
 typedef struct smlcbuffer {
   unsigned short in;
   unsigned short out;
-  char data[SMLC_BUFSIZE];
+  unsigned char data[SMLC_BUFSIZE];
 } SmlcBuffer;
 
 /* Simplex Line Control Block. */
@@ -195,7 +194,7 @@ typedef struct plcb {                     /* physical line control block */
            SmlcReceiveState recvstate;    /* receive state */
            bool     starting;             /* TRUE if waiting for response to SOH-ENQ */
            bool     naksent;              /* TRUE if last frame sent was a NAK */
-           int      fd;                   /* Unix fd */
+           int      fd;                   /* Unix file descriptor of socket */
            char     *remoteID;            /* remote TCP endpoint identifier */
            uint32_t host;                 /* TCP host */
   unsigned short    port;                 /* TCP port */
@@ -225,19 +224,12 @@ static void smlcaddstatus(SmlcDCB *dcbp, int line, unsigned short status) {
   dmcbufbegea = dmcpair >> 16;
   dmcbufendea = dmcpair & 0xffff;
   if (dmcbufendea >= dmcbufbegea) {
-#if DEBUG
-    fprintf(smlclog, "%s Interrupt status '%06o added for line %d on device '%02o, next '%06o, last '%06o\n",
+    TRACE(T_SMLC, "%s Interrupt status '%06o added for line %d on device '%02o, next '%06o, last '%06o\n",
       smlctimestamp, status, line, dcbp->deviceid, dmcbufbegea, dmcbufendea);
-#endif
     put16io(status + (line * 2), dmcbufbegea);
     dmcbufbegea = INCVA(dmcbufbegea, 1);
     put16io(dmcbufbegea, dcbp->dmcstatus);
     dcbp->intstate = SMLC_INTERRUPTPENDING;
-#if DEBUG
-  } else {
-    fprintf(smlclog, "%s Interrupt status '%06o -NOT- added for line %d on device '%02o, next '%06o, last '%06o\n",
-      smlctimestamp, status, line, dcbp->deviceid, dmcbufbegea, dmcbufendea);
-#endif
   }
 }
 
@@ -248,6 +240,8 @@ int devsmlc (int class, int func, int device) {
   static int optenable = 1;
   static struct timeval timeout = {0, 0};
 
+  struct sockaddr_in addr;
+  socklen_t addrlen;
   char *bp;
   char buf[SMLC_BUFSIZE];
   int bufidx;
@@ -259,11 +253,12 @@ int devsmlc (int class, int func, int device) {
   short dmcnw;
   unsigned int dmcpair;
   int dx;
-  char *ep;
+  unsigned char *ep;
   int fd;
+  int flags;
   uint32_t hostaddr;
   int i;
-  char *ip;
+  unsigned char *ip;
   PLCB *lp;
   bool isetb;
   int lx;
@@ -271,11 +266,10 @@ int devsmlc (int class, int func, int device) {
   int maxfd;
   int n;
   int nbytes;
-  char *np;
-  char *op;
+  unsigned char *np;
+  unsigned char *op;
   socklen_t optlen;
   int optval;
-  struct sockaddr_in raddr;
   fd_set readfds;
   int readycount;
   int rc;
@@ -284,16 +278,14 @@ int devsmlc (int class, int func, int device) {
   int sx;
   unsigned short word;
   fd_set writefds;
-#if DEBUG
   struct tm *tp;
   struct timespec sts;
-#endif
 
   currenttime = time(0);
-#if DEBUG
+#ifndef NOTRACE
   tp = localtime(&currenttime);
   clock_gettime(CLOCK_REALTIME, &sts);
-  sprintf(smlctimestamp, "%02d:%02d:%02d.%09d", tp->tm_hour, tp->tm_min, tp->tm_sec, sts.tv_nsec);
+  sprintf(smlctimestamp, "%02d:%02d:%02d.%09ld", tp->tm_hour, tp->tm_min, tp->tm_sec, sts.tv_nsec);
 #endif
 
   switch (device) {
@@ -320,20 +312,13 @@ int devsmlc (int class, int func, int device) {
 
     if (!inited) {
       FILE *cfgfile;
-      char devname[32];
-      int lc;
-      int tempport;
       struct hostent* host;
+      int lc;
       char *p;
+      char tcpaddr[MAXHOSTLEN + 1];
+      int tempport;
 
-#if DEBUG
-      smlclog = fopen("smlc.log", "wt");
-      if (smlclog == NULL) {
-        fprintf(stderr, "Failed to create smlclog.txt - aborting\n");
-        fatal(NULL);
-      }
-      smlclogflush();    // initialize log buffer
-#endif
+      smlclogflush(); // initialize log buffer for BSC frames
   
       /* initially, we don't know about any SMLC boards */
 
@@ -371,57 +356,54 @@ int devsmlc (int class, int func, int device) {
         while (fgets(buf, sizeof(buf), cfgfile) != NULL) {
           int n;
           lc++;
-          buf[sizeof(devname)] = 0;  /* don't let sscanf overwrite anything */
+          buf[sizeof(tcpaddr)] = 0;  /* don't let sscanf overwrite anything */
           buf[strlen(buf) - 1] = 0;  /* remove trailing newline */
           if (buf[0] == '\0' || buf[0] == ';' || buf[0] == '#')
             continue;
-          n = sscanf(buf, "%d %s", &i, devname);
+          n = sscanf(buf, "%d %s", &i, tcpaddr);
           if (n != 2) {
-            fprintf(stderr, "Can't parse smlc.cfg line #%d: %s\n", lc, buf);
+            fprintf(stderr, "smlc.cfg[%d] Can't parse: %s\n", lc, buf);
             continue;
           }
           if (i < 0 || i >= SMLC_MAXLINES) {
-            fprintf(stderr, "Line # %d out of range in smlc.cfg at line #%d: %s\n", i, lc, buf);
+            fprintf(stderr, "smlc.cfg[%d] SMLC line # %d out of range: %s\n", lc, i, buf);
             continue;
           }
-#if DEBUG
-          fprintf(smlclog, "%s Line %d, SMLC line %d set to device %s\n", smlctimestamp, lc, i, devname);
-#endif
           dx = i / SMLC_LINESPERBOARD;
           lx = i % SMLC_LINESPERBOARD;
-          if (strlen(devname) > MAXHOSTLEN) {
-            fprintf(stderr, "Line %d of smlc.cfg ignored: IP address too long\n", lc);
+          if (strlen(tcpaddr) > MAXHOSTLEN) {
+            fprintf(stderr, "smlc.cfg[%d] IP address too long: %s\n", lc, buf);
             continue;
           }
           tempport = 0;
-          if ((p=strtok(devname, PDELIM)) != NULL) {
-            host = gethostbyname(p);
+          host = NULL;
+          p = index(tcpaddr, ':');
+          if (p != NULL) {
+            *p++ = '\0';
+            host = gethostbyname(tcpaddr);
             if (host == NULL) {
-              fprintf(stderr, "Line %d of smlc.cfg ignored: can't resolve IP address %s\n", lc, p);
+              fprintf(stderr, "smlc.cfg[%d] Can't resolve IP address of %s\n", lc, tcpaddr);
               continue;
             }
-            if ((p=strtok(NULL, DELIM)) != NULL) {
-              tempport = atoi(p);
-              if (tempport < 1 || tempport > 65000) {
-                fprintf(stderr, "Line %d of smlc.cfg ignored: port number %d out of range 1-65000\n", tempport, lc);
-                continue;
-              }
-            }
+            tempport = atoi(p);
+          } else {
+            tempport = atoi(tcpaddr);
           }
           if (tempport == 0) {
-            fprintf(stderr, "Line %d of smlc.cfg ignored: no IP address or port number specified\n", lc);
+            fprintf(stderr, "smlc.cfg[%d] No IP address or port number specified\n", lc);
+            continue;
+          } else if (tempport < 1 || tempport > 65535) {
+            fprintf(stderr, "smlc.cfg[%d] Port number %d out of range 1-65535\n", lc, tempport);
             continue;
           }
           dc[dx].plines[lx].remoteID = (char *)malloc(32);
-          hostaddr = ntohl(*(unsigned int *)host->h_addr);
+          hostaddr = (host != NULL) ? ntohl(*(unsigned int *)host->h_addr) : 0;
           sprintf(dc[dx].plines[lx].remoteID, "%d.%d.%d.%d:%d", (hostaddr >> 24) & 0xff, (hostaddr >> 16) & 0xff,
             (hostaddr >> 8) & 0xff, hostaddr & 0xff, tempport);
           dc[dx].plines[lx].host = hostaddr;
           dc[dx].plines[lx].port = tempport;
-#if DEBUG
-          fprintf(smlclog, "%s TCP address, host=%x, port=%d, controller=%d, line=%d\n", smlctimestamp, dc[dx].plines[lx].host,
-            tempport, dx, lx);
-#endif
+          TRACE(T_SMLC, "%s smlc.cfg[%d] controller '%02o, line %d, TCP address %s\n", smlctimestamp, lc, dx + 050, lx,
+            dc[dx].plines[lx].remoteID);
         }
         fclose(cfgfile);
       }
@@ -445,40 +427,30 @@ int devsmlc (int class, int func, int device) {
     switch (func) {
  
    case 000: // enable high-speed SMLC clock
-#if DEBUG
-      fprintf(smlclog, "%s OCP '%02o%02o enable high-speed clock\n", smlctimestamp, func, device);
-#endif
+      TRACE(T_SMLC, "%s OCP '%02o%02o enable high-speed clock\n", smlctimestamp, func, device);
       IOSKIP;
       break;
 
     case 013: // acknowledge and clear interrupt
-#if DEBUG
-      fprintf(smlclog, "%s OCP '%02o%02o acknowledge and clear interrupt\n", smlctimestamp, func, device);
-#endif
+      TRACE(T_SMLC, "%s OCP '%02o%02o acknowledge and clear interrupt\n", smlctimestamp, func, device);
       dc[dx].intstate = SMLC_NOTINTERRUPTING;
       IOSKIP;
       break;
 
     case 015: // enable interrupts
-#if DEBUG
-      fprintf(smlclog, "%s OCP '%02o%02o enable interrupts\n", smlctimestamp, func, device);
-#endif
+      TRACE(T_SMLC, "%s OCP '%02o%02o enable interrupts\n", smlctimestamp, func, device);
       dc[dx].intenabled = 1;
       IOSKIP;
       break;
 
     case 016: // disable interrupts
-#if DEBUG
-      fprintf(smlclog, "%s OCP '%02o%02o disable interrupts\n", smlctimestamp, func, device);
-#endif
+      TRACE(T_SMLC, "%s OCP '%02o%02o disable interrupts\n", smlctimestamp, func, device);
       dc[dx].intenabled = 0;
       IOSKIP;
       break;
 
     case 017: // initialize controller
-#if DEBUG
-      fprintf(smlclog, "%s OCP '%02o%02o initialize controller\n", smlctimestamp, func, device);
-#endif
+      TRACE(T_SMLC, "%s OCP '%02o%02o initialize controller\n", smlctimestamp, func, device);
       dc[dx].intvector  = 0;
       dc[dx].intenabled = 0;
       dc[dx].intstate   = SMLC_NOTINTERRUPTING;
@@ -534,9 +506,7 @@ int devsmlc (int class, int func, int device) {
     TRACE(T_INST, " SKS '%02o%02o\n", func, device);
 
     if (func == 004) { /* skip if not interrupting */
-#if DEBUG
-      fprintf(smlclog, "%s SKS '02%02o skip if not interrupting, state is %s\n", smlctimestamp, device, intstates[dc[dx].intstate]);
-#endif
+      TRACE(T_SMLC, "%s SKS '02%02o skip if not interrupting, state is %s\n", smlctimestamp, device, intstates[dc[dx].intstate]);
       if (dc[dx].intstate == SMLC_INTERRUPTING) {
         IOSKIP;
       }
@@ -564,16 +534,12 @@ int devsmlc (int class, int func, int device) {
         }
       }
       putcrs16(A, data);
-#if DEBUG
-      fprintf(smlclog, "%s INA '00%02o input status returns 0x%04x\n", smlctimestamp, device, data);
-#endif
+      TRACE(T_SMLC, "%s INA '00%02o input status returns 0x%04x\n", smlctimestamp, device, data);
       IOSKIP;
 
     } else if (func == 011) { /* report device ID */
       putcrs16(A, SMLC_DEVICEID);
-#if DEBUG
-      fprintf(smlclog, "%s INA '11%02o report device ID returns 0x%04x\n", smlctimestamp, device, getcrs16(A));
-#endif
+      TRACE(T_SMLC, "%s INA '11%02o report device ID returns 0x%04x\n", smlctimestamp, device, getcrs16(A));
       IOSKIP;
 
     } else {
@@ -595,9 +561,7 @@ int devsmlc (int class, int func, int device) {
       data = getcrs16(A);
       dc[dx].fncode = data >> 8;
       dc[dx].lineno = data &  0377;
-#if DEBUG
-      fprintf(smlclog, "%s OTA '00%02o set function/line '%03o/'%03o\n", smlctimestamp, device, dc[dx].fncode, dc[dx].lineno);
-#endif
+      TRACE(T_SMLC, "%s OTA '00%02o set function/line '%03o/'%03o\n", smlctimestamp, device, dc[dx].fncode, dc[dx].lineno);
       switch (dc[dx].fncode) {
  
       case 000: // set modem controls
@@ -627,15 +591,11 @@ int devsmlc (int class, int func, int device) {
       switch (dc[dx].fncode) {
 
       case 000: // set modem controls
-#if DEBUG
-        fprintf(smlclog, "%s OTA '01%02o line '%02o set modem controls '%06o\n", smlctimestamp, device, dc[dx].lineno, data);
-        fprintf(smlclog, "%s     DTR: %d, RTS: %d\n", smlctimestamp, data & 1, (data & 2) == 1);
-#endif
+        TRACE(T_SMLC, "%s OTA '01%02o line '%02o set modem controls '%06o\n", smlctimestamp, device, dc[dx].lineno, data);
+        TRACE(T_SMLC, "%s     DTR: %d, RTS: %d\n", smlctimestamp, data & 1, (data & 2) == 1);
         sp->dtr = data & 1;
         if ((data & 1) == 0 && lp->fd != -1) {
-#if DEBUG
-          fprintf(smlclog, "%s     close connection to %s\n", smlctimestamp, lp->remoteID);
-#endif
+          TRACE(T_SMLC, "%s     close connection to %s\n", smlctimestamp, lp->remoteID);
           close(lp->fd);
           lp->fd = -1;
           lp->connstate = SMLC_STATEDISCONNECTED;
@@ -647,9 +607,7 @@ int devsmlc (int class, int func, int device) {
       case 010: // set special character
         i = (data >> 8) & 0xff;
         ch = data & 0xff;
-#if DEBUG
-        fprintf(smlclog, "%s OTA '01%02o line '%02o set special character %d <%02x>\n", smlctimestamp, device, dc[dx].lineno, i, ch);
-#endif
+        TRACE(T_SMLC, "%s OTA '01%02o line '%02o set special character %d <%02x>\n", smlctimestamp, device, dc[dx].lineno, i, ch);
         if (i < SMLC_MAXSPCHARS) {
           sp->spchars[i] = ch;
         } else {
@@ -660,30 +618,26 @@ int devsmlc (int class, int func, int device) {
         break;
 
       case 012: // set configuration word
-#if DEBUG
-        fprintf(smlclog, "%s OTA '01%02o line '%02o set configuration word 0x%04x\n", smlctimestamp, device, dc[dx].lineno, data);
-#endif
+        TRACE(T_SMLC, "%s OTA '01%02o line '%02o set configuration word 0x%04x\n", smlctimestamp, device, dc[dx].lineno, data);
         sp->configword = data;
         IOSKIP;
         break;
 
       case 014: // set primary I/O channel
-#if DEBUG
-        fprintf(smlclog, "%s OTA '01%02o line '%02o set primary I/O channel '%06o\n", smlctimestamp, device, dc[dx].lineno, data);
-#endif
+        TRACE(T_SMLC, "%s OTA '01%02o line '%02o set primary I/O channel '%06o\n", smlctimestamp, device, dc[dx].lineno, data);
         sp->dmcprimarycount = (data >> 12) + 1;
         sp->dmcprimaryidx = 0;
         sp->dmcprimary = data & 0x7fe;
         if (data != 0) {
           if ((data & 04000) == 0) fatal("Can't run SMLC in DMA mode!");
-#if DEBUG
-          fprintf(smlclog, "%s   %d buffers\n", smlctimestamp, sp->dmcprimarycount);
+#ifndef NOTRACE
+          TRACE(T_SMLC, "%s   %d buffers\n", smlctimestamp, sp->dmcprimarycount);
           for (i = 0; i < sp->dmcprimarycount; i++) {
             dmcpair = get32io ((data & 0x7fe) + (i * 2));
             dmcbufbegea = dmcpair >> 16;
             dmcbufendea = dmcpair & 0xffff;
             dmcnw = (dmcbufendea - dmcbufbegea) + 1;
-            fprintf(smlclog, "%s     %d: next '%06o, last '%06o, words %d\n", smlctimestamp, i, dmcbufbegea, dmcbufendea, dmcnw);
+            TRACE(T_SMLC, "%s     %d: next '%06o, last '%06o, words %d\n", smlctimestamp, i, dmcbufbegea, dmcbufendea, dmcnw);
           }
 #endif
         }
@@ -691,10 +645,8 @@ int devsmlc (int class, int func, int device) {
         break;
 
       case 015: // enable
-#if DEBUG
-        fprintf(smlclog, "%s OTA '01%02o line '%02o enable '%06o (%s %s)\n", smlctimestamp, device, dc[dx].lineno, data,
+        TRACE(T_SMLC, "%s OTA '01%02o line '%02o enable '%06o (%s %s)\n", smlctimestamp, device, dc[dx].lineno, data,
           sx ? "xmit" : "recv", (data & 1) ? "on" : "off");
-#endif
         sp->enabled = data & 1;
         if (sp->enabled) devpoll[device] = 1;
         IOSKIP;
@@ -706,22 +658,20 @@ int devsmlc (int class, int func, int device) {
          *  this OTA function. Consequently, this emulation module does not currently implement any logic to alternate
          *  storing recceived data between the primary and backup channels.
          */
-#if DEBUG
-        fprintf(smlclog, "%s OTA '01%02o line '%02o set backup I/O channel '%06o\n", smlctimestamp, device, dc[dx].lineno, data);
-#endif
+        TRACE(T_SMLC, "%s OTA '01%02o line '%02o set backup I/O channel '%06o\n", smlctimestamp, device, dc[dx].lineno, data);
         sp->dmcbackupcount = (data >> 12) + 1;
         sp->dmcbackupidx = 0;
         sp->dmcbackup = data & 0x7fe;
         if (data != 0) {
           if ((data & 04000) == 0) fatal("Can't run SMLC in DMA mode!");
-#if DEBUG
-          fprintf(smlclog, "%s   %d buffers\n", smlctimestamp, sp->dmcbackupcount);
+#ifndef NOTRACE
+          TRACE(T_SMLC, "%s   %d buffers\n", smlctimestamp, sp->dmcbackupcount);
           for (i = 0; i < sp->dmcbackupcount; i++) {
             dmcpair = get32io ((data & 0x7fe) + (i * 2));
             dmcbufbegea = dmcpair >> 16;
             dmcbufendea = dmcpair & 0xffff;
             dmcnw = (dmcbufendea - dmcbufbegea) + 1;
-            fprintf(smlclog, "%s     %d: next '%06o, last '%06o, words %d\n", smlctimestamp, i, dmcbufbegea, dmcbufendea, dmcnw);
+            TRACE(T_SMLC, "%s     %d: next '%06o, last '%06o, words %d\n", smlctimestamp, i, dmcbufbegea, dmcbufendea, dmcnw);
           }
 #endif
         }
@@ -729,9 +679,7 @@ int devsmlc (int class, int func, int device) {
         break;
 
       case 017: // set status channel
-#if DEBUG
-        fprintf(smlclog, "%s OTA '01%02o line '%02o set status channel '%06o\n", smlctimestamp, device, dc[dx].lineno, data);
-#endif
+        TRACE(T_SMLC, "%s OTA '01%02o line '%02o set status channel '%06o\n", smlctimestamp, device, dc[dx].lineno, data);
         if (!(data & 04000) && data != 0)
           fatal("Can't run SMLC in DMA mode!");
         if (lx != 0 || sx != 0) {
@@ -740,9 +688,7 @@ int devsmlc (int class, int func, int device) {
           fatal(NULL);
         }
         dc[dx].dmcstatus = data & 0x7fe;
-#if DEBUG
-        fprintf(smlclog, "%s   next %06o, last %06o\n", smlctimestamp, get32io(dc[dx].dmcstatus) >> 16, get32io(dc[dx].dmcstatus) & 0xffff);
-#endif
+        TRACE(T_SMLC, "%s   next %06o, last %06o\n", smlctimestamp, get32io(dc[dx].dmcstatus) >> 16, get32io(dc[dx].dmcstatus) & 0xffff);
         IOSKIP;
         break;
 
@@ -754,9 +700,7 @@ int devsmlc (int class, int func, int device) {
       break;
 
     case 016: // set interrupt vector
-#if DEBUG
-      fprintf(smlclog, "%s OTA '16%02o set interrupt vector '%06o\n", smlctimestamp, device, getcrs16(A));
-#endif
+      TRACE(T_SMLC, "%s OTA '16%02o set interrupt vector '%06o\n", smlctimestamp, device, getcrs16(A));
       dc[dx].intvector = getcrs16(A);
       IOSKIP;
       break;
@@ -785,9 +729,7 @@ int devsmlc (int class, int func, int device) {
       } else {
         gv.intvec = dc[dx].intvector;
         dc[dx].intstate = SMLC_INTERRUPTING;
-#if DEBUG
-        fprintf(smlclog, "%s Raise interrupt on device '%02o\n", smlctimestamp, device);
-#endif
+        TRACE(T_SMLC, "%s Raise interrupt on device '%02o\n", smlctimestamp, device);
       }
       return 0;
     }
@@ -798,23 +740,41 @@ int devsmlc (int class, int func, int device) {
 
     for (lx = 0; lx < SMLC_LINESPERBOARD; lx++) {
       lp = &dc[dx].plines[lx];
-      if (lp->host == 0) continue;
+      if (lp->port == 0) continue;
       switch (lp->connstate) {
 
       case SMLC_STATEDISCONNECTED:
-        if (lp->nextconntime <= currenttime && lp->slines[SMLC_RECVIX].dtr != 0) {
+        if (lp->host != 0) {
+          //
+          // Workstation mode.
+          //
+          // Periodically attempt to create a connection to the remote host, when
+          // the DTR modem signal is up.
+          //
+          if (lp->slines[SMLC_RECVIX].dtr == 0 || lp->nextconntime > currenttime) continue;
           fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
           if (fd < 0) {
             fprintf(stderr, "Failed to create socket for SMLC line %d\n", (dx * SMLC_LINESPERBOARD) + lx);
             fatal(NULL);
           }
-          setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (void *)&optenable, sizeof(optenable));
-          fcntl(fd, F_SETFL, O_NONBLOCK);
-          bzero((char *) &raddr, sizeof(raddr));
-          raddr.sin_family = AF_INET;
-          raddr.sin_addr.s_addr = htonl(dc[dx].plines[lx].host);
-          raddr.sin_port = htons(dc[dx].plines[lx].port);
-          rc = connect(fd, (struct sockaddr *)&raddr, sizeof(raddr));
+          if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (void *)&optenable, sizeof(optenable)) == -1) {
+            fprintf(stderr, "Failed to set socket option SO_KEEPALICE for SMLC line %d\n", (dx * SMLC_LINESPERBOARD) + lx);
+            fatal(NULL);
+          }
+          if ((flags = fcntl(fd, F_GETFL)) == -1) {
+            fprintf(stderr, "Failed to get flags for SMLC line %d\n", (dx * SMLC_LINESPERBOARD) + lx);
+            fatal(NULL);
+          }
+          flags |= O_NONBLOCK;
+          if (fcntl(fd, F_SETFL, flags) == -1) {
+            fprintf(stderr, "Failed to set flags for SMLC line %d\n", (dx * SMLC_LINESPERBOARD) + lx);
+            fatal(NULL);
+          }
+          bzero((char *) &addr, sizeof(addr));
+          addr.sin_family = AF_INET;
+          addr.sin_addr.s_addr = htonl(lp->host);
+          addr.sin_port = htons(lp->port);
+          rc = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
           lp->connstate = SMLC_STATECONNECTING;
           if (rc < 0 && errno != EINPROGRESS) {
             fprintf(stderr, "Failed to create connection to %s for SMLC line %d\n", lp->remoteID,
@@ -824,18 +784,67 @@ int devsmlc (int class, int func, int device) {
             lp->connstate = SMLC_STATEDISCONNECTED;
             break;
           } else { // connection in progress
-#if DEBUG
-            fprintf(smlclog, "%s Connection initiated to %s for SMLC line %d\n", smlctimestamp, lp->remoteID,
+            TRACE(T_SMLC, "%s Connection initiated to %s for SMLC line %d\n", smlctimestamp, lp->remoteID,
               (dx * SMLC_LINESPERBOARD) + lx);
-#endif
             lp->fd = fd;
           }
+        } else {
+          //
+          // Host mode.
+          //
+          // Begin listening for connections.
+          //
+          fd = socket(AF_INET, SOCK_STREAM, 0);
+          if (fd < 0) {
+            fprintf(stderr, "Failed to create socket for SMLC line %d\n", (dx * SMLC_LINESPERBOARD) + lx);
+            fatal(NULL);
+          }
+          if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &optenable, sizeof(optenable)) == -1) {
+            fprintf(stderr, "Failed to set socket option SO_REUSEADDR for SMLC line %d\n", (dx * SMLC_LINESPERBOARD) + lx);
+            fatal(NULL);
+          }
+          addr.sin_family = AF_INET;
+          addr.sin_addr.s_addr = INADDR_ANY;
+          addr.sin_port = htons(lp->port);
+          if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
+            fprintf(stderr, "Failed to bind to port %d for SMLC line %d\n", lp->port, (dx * SMLC_LINESPERBOARD) + lx);
+            fatal(NULL);
+          }
+          if (listen(fd, 1) == -1) {
+            fprintf(stderr, "Failed to listen on port %d for SMLC line %d\n", lp->port, (dx * SMLC_LINESPERBOARD) + lx);
+            fatal(NULL);
+          }
+          if ((flags = fcntl(fd, F_GETFL)) == -1) {
+            fprintf(stderr, "Failed to get flags for SMLC line %d\n", (dx * SMLC_LINESPERBOARD) + lx);
+            fatal(NULL);
+          }
+          flags |= O_NONBLOCK;
+          if (fcntl(fd, F_SETFL, flags) == -1) {
+            fprintf(stderr, "Failed to set flags for SMLC line %d\n", (dx * SMLC_LINESPERBOARD) + lx);
+            fatal(NULL);
+          }
+          lp->fd = fd;
+          lp->connstate = SMLC_STATECONNECTING;
+          TRACE(T_SMLC, "%s Listening for connections on %s for SMLC line %d\n", smlctimestamp, lp->remoteID,
+            (dx * SMLC_LINESPERBOARD) + lx);
         }
-        /* fall through when no error has occurred */
+        if (lp->connstate != SMLC_STATECONNECTING) break;
 
       case SMLC_STATECONNECTING:
-        FD_SET(lp->fd, &writefds);
-        if (lp->fd > maxfd) maxfd = lp->fd;
+        if (lp->host != 0) {
+          //
+          // Workstation mode. Connection is complete when socket is writable.
+          //
+          FD_SET(lp->fd, &writefds);
+          if (lp->fd > maxfd) maxfd = lp->fd;
+        } else if (lp->slines[SMLC_RECVIX].dtr != 0) {
+          //
+          // Host mode. Connection request received when socket is readable.
+          // However, test for requests only when DTR modem signal is up.
+          //
+          FD_SET(lp->fd, &readfds);
+          if (lp->fd > maxfd) maxfd = lp->fd;
+        }
         break;
 
       case SMLC_STATECONNECTED:
@@ -863,11 +872,9 @@ int devsmlc (int class, int func, int device) {
             if (dmcnw <= 0) {
               sp->dmcprimaryidx += 1;
             } else {
-#if DEBUG
-              fprintf(smlclog, "%s Line %d on device '%02o send to %s from channel '%06o\n", smlctimestamp, lx, device, lp->remoteID,
+              TRACE(T_SMLC, "%s Line %d on device '%02o send to %s from channel '%06o\n", smlctimestamp, lx, device, lp->remoteID,
                 sp->dmcprimary);
-              fprintf(smlclog, "%s   next '%06o, last '%06o, words %d\n", smlctimestamp, dmcbufbegea, dmcbufendea, dmcnw);
-#endif
+              TRACE(T_SMLC, "%s   next '%06o, last '%06o, words %d\n", smlctimestamp, dmcbufbegea, dmcbufendea, dmcnw);
               n = 0;
               while (n < dmcnw && np + 1 < ep) {
                 word = get16io(dmcbufbegea);
@@ -876,10 +883,8 @@ int devsmlc (int class, int func, int device) {
                 *np++ = word & 0377;
                 n += 1;
               }
-#if DEBUG
-              fprintf(smlclog, "%s   %d words transferred to output buffer\n", smlctimestamp, n);
-              fprintf(smlclog, "%s   next '%06o, last '%06o\n", smlctimestamp, dmcbufbegea, dmcbufendea);
-#endif
+              TRACE(T_SMLC, "%s   %d words transferred to output buffer\n", smlctimestamp, n);
+              TRACE(T_SMLC, "%s   next '%06o, last '%06o\n", smlctimestamp, dmcbufbegea, dmcbufendea);
               put16io(dmcbufbegea, sp->dmcprimary + (sp->dmcprimaryidx * 2));
               if (n == dmcnw) {
                 status = SMLC_EOR | SMLC_XMIT;
@@ -925,7 +930,7 @@ int devsmlc (int class, int func, int device) {
 
     for (lx = 0; lx < SMLC_LINESPERBOARD; lx++) {
       lp = &dc[dx].plines[lx];
-      if (lp->host == 0) continue;
+      if (lp->port == 0) continue;
       switch (lp->connstate) {
 
       case SMLC_STATECONNECTING:
@@ -934,10 +939,7 @@ int devsmlc (int class, int func, int device) {
           rc = getsockopt(lp->fd, SOL_SOCKET, SO_ERROR, &optval, &optlen);
           if (rc < 0) {
             fprintf(stderr, "Failed to get socket status for SMLC line %d\n", (dx * SMLC_LINESPERBOARD) + lx);
-            close(lp->fd);
-            lp->fd = -1;
-            lp->nextconntime = currenttime + SMLC_CONNECTINTERVAL;
-            lp->connstate = SMLC_STATEDISCONNECTED;
+            fatal(NULL);
           } else if (optval != 0) { // connection failed
             fprintf(stderr, "Failed to create connection to %s for SMLC line %d\n", lp->remoteID, (dx * SMLC_LINESPERBOARD) + lx);
             close(lp->fd);
@@ -945,47 +947,72 @@ int devsmlc (int class, int func, int device) {
             lp->nextconntime = currenttime + SMLC_CONNECTINTERVAL;
             lp->connstate = SMLC_STATEDISCONNECTED;
           } else {
-#if DEBUG
-            fprintf(smlclog, "%s Connection created to %s for SMLC line %d\n", smlctimestamp, lp->remoteID, (dx * SMLC_LINESPERBOARD) + lx);
-#endif
+            TRACE(T_SMLC, "%s Connection created to %s for SMLC line %d\n", smlctimestamp, lp->remoteID, (dx * SMLC_LINESPERBOARD) + lx);
             lp->connstate = SMLC_STATECONNECTED;
             lp->recvstate = SMLC_STATERCVSYN;
-            lp->starting = 0;
-            lp->naksent = 0;
-            lp->slines[SMLC_RECVIX].buf.in = 0;
-            lp->slines[SMLC_RECVIX].buf.out = 0;
-            lp->slines[SMLC_XMITIX].buf.in = 0;
-            lp->slines[SMLC_XMITIX].buf.out = 0;
-            smlcaddstatus(&dc[dx], lx, SMLC_DSS_BIT | SMLC_DSR_BIT | SMLC_CTS_BIT | SMLC_DCD_BIT | SMLC_SQ_BIT);
+          }
+        } else if (FD_ISSET(lp->fd, &readfds)) {
+          addrlen = sizeof(addr);
+          fd = accept(lp->fd, (struct sockaddr *)&addr, &addrlen);
+          if (fd >= 0) {
+            if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (void *)&optenable, sizeof(optenable)) == -1) {
+              fprintf(stderr, "Failed to set socket option SO_KEEPALICE for SMLC line %d\n", (dx * SMLC_LINESPERBOARD) + lx);
+              fatal(NULL);
+            }
+            if ((flags = fcntl(fd, F_GETFL)) == -1) {
+              fprintf(stderr, "Failed to get flags for SMLC line %d\n", (dx * SMLC_LINESPERBOARD) + lx);
+              fatal(NULL);
+            }
+            flags |= O_NONBLOCK;
+            if (fcntl(fd, F_SETFL, flags) == -1) {
+              fprintf(stderr, "Failed to set flags for SMLC line %d\n", (dx * SMLC_LINESPERBOARD) + lx);
+              fatal(NULL);
+            }
+            close(lp->fd);
+            lp->fd = fd;
+            lp->connstate = SMLC_STATECONNECTED;
+            lp->recvstate = SMLC_STATERCVSOH;
+            strcpy(lp->remoteID, inet_ntoa(addr.sin_addr));
+            TRACE(T_SMLC, "%s Connection accepted from %s for SMLC line %d\n", smlctimestamp, lp->remoteID,
+              (dx * SMLC_LINESPERBOARD) + lx);
+          }
+          else {
+            TRACE(T_SMLC, "%s Spurious connection attempt on SMLC line %d\n", smlctimestamp, (dx * SMLC_LINESPERBOARD) + lx);
           }
         }
-        if (lp->connstate != SMLC_STATECONNECTED)
-          break;
+        if (lp->connstate == SMLC_STATECONNECTED) {
+          lp->starting = 0;
+          lp->naksent = 0;
+          lp->slines[SMLC_RECVIX].buf.in = 0;
+          lp->slines[SMLC_RECVIX].buf.out = 0;
+          lp->slines[SMLC_XMITIX].buf.in = 0;
+          lp->slines[SMLC_XMITIX].buf.out = 0;
+          smlcaddstatus(&dc[dx], lx, SMLC_DSS_BIT | SMLC_DSR_BIT | SMLC_CTS_BIT | SMLC_DCD_BIT | SMLC_SQ_BIT);
+        }
+        break;
 
       case SMLC_STATECONNECTED:
         sp = &lp->slines[SMLC_RECVIX];
         if (FD_ISSET(lp->fd, &readfds)) {
           n = read(lp->fd, &sp->buf.data[sp->buf.in], sizeof(sp->buf.data) - sp->buf.in);
           if (n > 0) {
-#if DEBUG
-            fprintf(smlclog, "%s Line %d on device '%02o received %d bytes from %s:\n", smlctimestamp, lx, device, n, lp->remoteID);
+#ifndef NOTRACE
+            TRACE(T_SMLC, "%s Line %d on device '%02o received %d bytes from %s:\n", smlctimestamp, lx, device, n, lp->remoteID);
             smlclogbytes(&sp->buf.data[sp->buf.in], n);
             smlclogflush();
 #endif
             sp->buf.in += n;
           } else if (n < 0 && (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR)) {
             n = 0;
-#if DEBUG
-            fprintf(smlclog, "%s recv from %s for line %d returned errno %d (ignored)\n",
+            TRACE(T_SMLC, "%s read from %s for line %d returned errno %d (ignored)\n",
               smlctimestamp, lp->remoteID, (dx * SMLC_LINESPERBOARD) + lx, errno);
-#endif
           } else {
-#if DEBUG
+#ifndef NOTRACE
             if (n < 0) {
-              fprintf(smlclog, "%s recv from %s for line %d failed with errno %d\n",
+              TRACE(T_SMLC, "%s read from %s for line %d failed with errno %d\n",
                 smlctimestamp, lp->remoteID, (dx * SMLC_LINESPERBOARD) + lx, errno);
             } else {
-              fprintf(smlclog, "%s recv from %s for line %d returned EOF\n", smlctimestamp, lp->remoteID, (dx * SMLC_LINESPERBOARD) + lx);
+              TRACE(T_SMLC, "%s read from %s for line %d returned EOF\n", smlctimestamp, lp->remoteID, (dx * SMLC_LINESPERBOARD) + lx);
             }
 #endif
             lp->connstate = SMLC_STATEDISCONNECTING;
@@ -1007,17 +1034,15 @@ int devsmlc (int class, int func, int device) {
               sp->dmcprimaryidx += 1;
               continue;
             }
-#if DEBUG
-            fprintf(smlclog, "%s Line %d on device '%02o receive from %s to channel '%06o\n", smlctimestamp, lx, device, lp->remoteID,
+            TRACE(T_SMLC, "%s Line %d on device '%02o receive from %s to channel '%06o\n", smlctimestamp, lx, device, lp->remoteID,
               sp->dmcprimary);
-            fprintf(smlclog, "%s   next '%06o, last '%06o, words %d\n", smlctimestamp, dmcbufbegea, dmcbufendea, dmcnw);
-#endif
+            TRACE(T_SMLC, "%s   next '%06o, last '%06o, words %d\n", smlctimestamp, dmcbufbegea, dmcbufendea, dmcnw);
             maxbytes = dmcnw * 2;
             n = 0;
             dmcnw = 0;
             status = 0;
             isetb = 0;
-            while (n < maxbytes && np < ip) {
+            while (n < maxbytes && np < ip && status == 0) {
               ch = *np++;
               if (lp->recvstate == SMLC_STATERCVSYN) {
                 if (ch == SMLC_SYN) {
@@ -1030,10 +1055,8 @@ int devsmlc (int class, int func, int device) {
                     lp->recvstate = SMLC_STATERCVSYN;
                     break;
                   } else {
-#if DEBUG
-                    fprintf(smlclog, "%s NAK received after sending NAK to %s for line %d\n", smlctimestamp, lp->remoteID,
+                    TRACE(T_SMLC, "%s NAK received after sending NAK to %s for line %d\n", smlctimestamp, lp->remoteID,
                       (dx * SMLC_LINESPERBOARD) + lx);
-#endif
                     lp->connstate = SMLC_STATEDISCONNECTING;
                     smlcaddstatus(&dc[dx], lx, SMLC_DSS_BIT);
                     devpoll[device] = 1; /* return ASAP */
@@ -1052,29 +1075,64 @@ int devsmlc (int class, int func, int device) {
                 word = ch << 8;
               }
               n += 1;
-              if (lp->recvstate == SMLC_STATERCVDLE) {
+              switch (lp->recvstate) {
+              case SMLC_STATERCVDLE:
                 lp->recvstate = SMLC_STATERCVCHAR;
-                if (ch == SMLC_ACK0) {
+                switch (ch) {
+                case SMLC_ACK0:
                   status |= SMLC_ENCODE_BIT | SMLC_ACK0_STATUS;
                   lp->recvstate = SMLC_STATERCVSYN;
                   break;
-                } else if (ch == SMLC_STX) {
+                case SMLC_STX:
                   status |= SMLC_ENCODE_BIT | SMLC_STX_STATUS;
                   break;
-                } else if (ch == SMLC_ETB) {
+                case SMLC_ETB:
                   status |= SMLC_ENCODE_BIT | SMLC_ETB_STATUS;
                   lp->recvstate = SMLC_STATERCVSYN;
                   isetb = 1;
                   break;
+                default:
+                  // do nothing
+                  break;
                 }
-              } else if (ch == SMLC_DLE) {
-                lp->recvstate = SMLC_STATERCVDLE;
+                break;
+              case SMLC_STATERCVSOH:
+                if (ch == SMLC_SOH) {
+                  status |= SMLC_ENCODE_BIT | SMLC_SOH_STATUS;
+                  lp->recvstate = SMLC_STATERCVENQ;
+                } else {
+                  n = 0;
+                }
+                break;
+              case SMLC_STATERCVENQ:
+                if (ch == SMLC_ENQ) {
+                  status |= SMLC_ENCODE_BIT | SMLC_ENQ_STATUS;
+                  lp->recvstate = SMLC_STATERCVSYN;
+                } else if (ch == SMLC_SOH) {
+                  status |= SMLC_ENCODE_BIT | SMLC_SOH_STATUS;
+                } else {
+                  n = 0;
+                  lp->recvstate = SMLC_STATERCVSOH;
+                }
+                break;
+              case SMLC_STATERCVCHAR:
+                if (ch == SMLC_DLE) {
+                  lp->recvstate = SMLC_STATERCVDLE;
+                }
+                break;
+              default:
+                fprintf(stderr, "Invalid recv state %d for SMLC line %d\n", lp->recvstate, (dx * SMLC_LINESPERBOARD) + lx);
+                fatal(NULL);
+                break;
               }
             }
             if ((n & 1) != 0) { // odd number of bytes processed, so store "incomplete" word, or back up one byte
               if (n < maxbytes
-                  && ((n > 1 && *(np - 1) == SMLC_ETB && *(np - 2) == SMLC_DLE)
-                      || (n == 1 && *(np - 1) == SMLC_NAK))) {
+                  && (status & SMLC_ENCODE_BIT) != 0
+                  && (   (status & SMLC_MASK_STATUS) == SMLC_ETB_STATUS
+                      || (status & SMLC_MASK_STATUS) == SMLC_SOH_STATUS
+                      || (status & SMLC_MASK_STATUS) == SMLC_ENQ_STATUS
+                      || (status & SMLC_MASK_STATUS) == SMLC_NAK_STATUS)) {
                 put16io(word, dmcbufbegea);
                 dmcbufbegea = INCVA(dmcbufbegea, 1);
                 dmcnw += 1;
@@ -1085,10 +1143,8 @@ int devsmlc (int class, int func, int device) {
             }
             put16io(dmcbufbegea, sp->dmcprimary + (sp->dmcprimaryidx * 2));
             sp->dmcprimaryidx += 1;
-#if DEBUG
-            fprintf(smlclog, "%s   %d words transferred from input buffer\n", smlctimestamp, dmcnw);
-            fprintf(smlclog, "%s   next '%06o, last '%06o\n", smlctimestamp, dmcbufbegea, dmcbufendea);
-#endif
+            TRACE(T_SMLC, "%s   %d words transferred from input buffer\n", smlctimestamp, dmcnw);
+            TRACE(T_SMLC, "%s   next '%06o, last '%06o\n", smlctimestamp, dmcbufbegea, dmcbufendea);
             if (n == maxbytes) {
               status |= SMLC_EOR;
             } else if (n > maxbytes) {
@@ -1117,8 +1173,8 @@ int devsmlc (int class, int func, int device) {
             lp->naksent = nbytes >= 5 && sp->buf.data[sp->buf.out + 4] == SMLC_NAK;
             n = write(lp->fd, &sp->buf.data[sp->buf.out], nbytes);
             if (n >= 0) {
-#if DEBUG
-              fprintf(smlclog, "%s Line %d on device '%02o sent %d bytes to %s:\n", smlctimestamp, lx, device, n, lp->remoteID);
+#ifndef NOTRACE
+              TRACE(T_SMLC, "%s Line %d on device '%02o sent %d bytes to %s:\n", smlctimestamp, lx, device, n, lp->remoteID);
               smlclogbytes(&sp->buf.data[sp->buf.out], n);
               smlclogflush();
 #endif
@@ -1128,10 +1184,8 @@ int devsmlc (int class, int func, int device) {
                 smlcaddstatus(&dc[dx], lx, SMLC_LCT | SMLC_XMIT);
               }
             } else if (errno != EWOULDBLOCK && errno != EAGAIN && errno != EINTR) {
-#if DEBUG
-              fprintf(smlclog, "%s Connection failed to %s for line %d with errno %d\n", smlctimestamp, lp->remoteID,
+              TRACE(T_SMLC, "%s Connection failed to %s for line %d with errno %d\n", smlctimestamp, lp->remoteID,
                 (dx * SMLC_LINESPERBOARD) + lx, errno);
-#endif
               lp->connstate = SMLC_STATEDISCONNECTING;
               smlcaddstatus(&dc[dx], lx, SMLC_DSS_BIT);
               devpoll[device] = 1; /* return ASAP */
@@ -1155,7 +1209,6 @@ int devsmlc (int class, int func, int device) {
   return 0;
 }
 
-#if DEBUG
 static unsigned char ebcdicToAscii[256] = {
   /* 00-07 */  0x00,    0x01,    0x02,    0x03,    0x1a,    0x09,    0x1a,    0x7f,
   /* 08-0F */  0x1a,    0x1a,    0x1a,    0x0b,    0x0c,    0x0d,    0x0e,    0x0f,
@@ -1193,14 +1246,16 @@ static unsigned char ebcdicToAscii[256] = {
 };
 
 static void smlclogflush(void) {
+#ifndef NOTRACE
   if (smlclogbytescol > 0) {
-    fputs(smlclogbuf, smlclog);
-    fputc('\n', smlclog);
-    fflush(smlclog);
+    fputs(smlclogbuf, gv.tracefile);
+    fputc('\n', gv.tracefile);
+    fflush(gv.tracefile);
   }
   smlclogbytescol = 0;
   memset(smlclogbuf, ' ', LogLineLength);
   smlclogbuf[LogLineLength] = '\0';
+#endif
 }
 
 static void smlclogbytes(unsigned char *bytes, int len) {
@@ -1211,24 +1266,27 @@ static void smlclogbytes(unsigned char *bytes, int len) {
   int hexCol;
   int i;
 
-  ascCol = AsciiColumn(smlclogbytescol);
-  hexCol = HexColumn(smlclogbytescol);
+#ifndef NOTRACE
+  if (gv.traceflags & T_SMLC) {
+    ascCol = AsciiColumn(smlclogbytescol);
+    hexCol = HexColumn(smlclogbytescol);
 
-  for (i = 0; i < len; i++) {
-    b = bytes[i];
-    ac = ebcdicToAscii[b];
-    if (ac < 0x20 || ac >= 0x7f) {
-      ac = '.';
-    }
-    sprintf(hex, "%02x", b);
-    memcpy(smlclogbuf + hexCol, hex, 2);
-    hexCol += 3;
-    smlclogbuf[ascCol++] = ac;
-    if (++smlclogbytescol >= 16) {
-      smlclogflush();
-      ascCol = AsciiColumn(smlclogbytescol);
-      hexCol = HexColumn(smlclogbytescol);
+    for (i = 0; i < len; i++) {
+      b = bytes[i];
+      ac = ebcdicToAscii[b];
+      if (ac < 0x20 || ac >= 0x7f) {
+        ac = '.';
+      }
+      sprintf(hex, "%02x", b);
+      memcpy(smlclogbuf + hexCol, hex, 2);
+      hexCol += 3;
+      smlclogbuf[ascCol++] = ac;
+      if (++smlclogbytescol >= 16) {
+        smlclogflush();
+        ascCol = AsciiColumn(smlclogbytescol);
+        hexCol = HexColumn(smlclogbytescol);
+      }
     }
   }
-}
 #endif
+}
