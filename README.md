@@ -22,6 +22,9 @@ the host processor having a large set of general-purpose registers.
 Coming soon, we swear!  There is a unix man page included in this
 repository.
 
+Github discussions are now enabled for this repository, and can be
+used to ask for help.
+
 ## Public Systems
 
 There are a set of emulators available for public use.  These may be
