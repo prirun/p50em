@@ -1,5 +1,5 @@
 /* Pr1me Computer emulator, Jim Wilcoxson (prirun@gmail.com), April 4, 2005
-   Copyright (C) 2005-2019, Jim Wilcoxson.  All Rights Reserved.
+   Copyright (C) 2005-2021, Jim Wilcoxson.  All Rights Reserved.
 
    Emulates a Prime Computer system by:
    - booting from a Prime disk image (normal usage)
@@ -4368,7 +4368,7 @@ int main (int argc, char **argv) {
 #define XRBRACE 0375
 
   printf("[Prime Emulator ver %s %s]\n", REV, __DATE__);
-  printf("[Copyright (C) 2005-2019 Jim Wilcoxson prirun@gmail.com]\n");
+  printf("[Copyright (C) 2005-2021 Jim Wilcoxson prirun@gmail.com]\n");
   if (argc > 1 && (strcmp(argv[1],"--version") == 0)) {
     exit(0);
   }
