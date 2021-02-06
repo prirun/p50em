@@ -6297,13 +6297,31 @@ d_hlt:  /* 000000 */
   if (bootarg) {
     printf("\nCPU halt, instruction #%u at %o/%o %s: %o %o ^%06o^\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d", gv.instcount, RPH, RPL, searchloadmap(gv.prevpc,' '), get16t(gv.prevpc), get16t(gv.prevpc+1), lights, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X));
     while (1) {
+      int n;
+      static int ttydev;
+      ttydev = open("/dev/tty", O_RDWR, 0);
+      if (ttydev < 0) {
+        perror(" error opening /dev/tty");
+        fatal(NULL);
+      }
       printf("\nPress Enter to continue, h to halt... ");
-      utempa = getchar();
+      fflush(stdout);
+      utempa = ' ';
+      n = 0;
+      while (n == 0)
+        n = read(ttydev, &utempa, 1);
+/*    utempa = getchar(); */
       printf("\n");
       if (utempa == '\r' || utempa == '\n')
+      {
+        close(ttydev);
         goto fetch;
+      }
       if (utempa == 'h')
+      {
+        close(ttydev);
         break;
+      }
     }
   }
   fatal("CPU halt");
