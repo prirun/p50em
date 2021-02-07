@@ -262,6 +262,7 @@ int devamlc (int class, int func, int device) {
     unsigned short ctinterrupt;         /* 1 bit per line */
     unsigned short dss;                 /* 1 bit per line */
     unsigned short connected;           /* 1 bit per line */
+    unsigned short dolineclear;         /* 1 bit per line */
     unsigned short serial;              /* true if any CT_SERIAL lines */
     unsigned short dsstime;             /* countdown to dss poll */
              short fd[16];              /* Unix fd, 1 per line */
@@ -329,6 +330,7 @@ int devamlc (int class, int func, int device) {
       for (dx=0; dx<MAXBOARDS; dx++) {
         dc[dx].deviceid = 0;
         dc[dx].connected = 0;
+        dc[dx].dolineclear = 0;
         dc[dx].serial = 0;
         for (lx = 0; lx < 16; lx++) {
           dc[dx].fd[lx] = -1;
@@ -885,6 +887,7 @@ int devamlc (int class, int func, int device) {
                   close(dc[i].fd[lx]);
                 dc[i].dss |= BITMASK16(lx+1);
                 dc[i].connected |= BITMASK16(lx+1);
+                dc[i].dolineclear |= BITMASK16(lx+1);
                 dc[i].fd[lx] = fd;
                 dc[i].tstate[lx] = TS_DATA;
                 //printf("em: AMLC connection, fd=%d, device='%o, line=%d\n", fd, dc[i].deviceid, lx);
@@ -1139,6 +1142,53 @@ dorecv:
       int nfds;
       if (dc[dx].deviceid == 0 || dc[dx].connected == 0 || dc[dx].eor)
         continue;
+
+      /* Inject xon / kill if dolineclear is true */
+
+      if (dolinecleararg)
+        for (lx = 0; lx < 16; lx++)
+          if (dc[dx].dolineclear & BITMASK16(lx+1))
+          {
+            unsigned char ch;
+            unsigned short utemp;
+            int dmcpair, lcount;
+            ea_t dmcea, dmcbufbegea, dmcbufendea;
+            unsigned short dmcnw;
+
+            if (dc[dx].bufnum)
+              dmcea = dc[dx].dmcchan + 2;
+            else
+              dmcea = dc[dx].dmcchan;
+            dmcpair = get32io(dmcea);
+            dmcbufbegea = dmcpair>>16;
+            dmcbufendea = dmcpair & 0xffff;
+            dmcnw = dmcbufendea - dmcbufbegea + 1;
+
+            if (dmcnw < 2)
+              continue;
+
+            utemp = lx<<12 | 0x0200 | 0221; /* dc1/xon */
+            put16io(utemp, dmcbufbegea);
+            dmcbufbegea = INCVA(dmcbufbegea, 1);
+
+            ch = (unsigned char)get16(MAKEVA(014, 0705));
+            utemp = lx<<12 | 0x0200 | ch; /* kill */
+            put16io(utemp, dmcbufbegea);
+            dmcbufbegea = INCVA(dmcbufbegea, 1);
+
+            dc[dx].recvlx = lx;
+            if (dmcbufbegea-1 > dmcbufendea)
+              fatal("AMLC tumble table overflowed?");
+            put16io(dmcbufbegea, dmcea);
+            if (dmcbufbegea > dmcbufendea) {          /* end of range has occurred */
+              dc[dx].bufnum = 1-dc[dx].bufnum;
+              dc[dx].eor = 1;
+              neweor = 1;
+              anyeor = 1;
+            }
+
+            dc[dx].dolineclear &= ~BITMASK16(lx+1);
+          }
 
       /* select to see which lines have data to be read */
 

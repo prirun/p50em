@@ -658,6 +658,7 @@ static unsigned short *physmem = NULL; /* system's physical memory */
 
 //static ea_t tnoua_ea=0, tnou_ea=0, tsrc_ea=0;
 static int domemdump;                       /* -memdump arg */
+static int dolinecleararg;                  /* -dolineclear arg */
 
 static int tport;                           /* -tport option (incoming terminals) */
 static int nport;                           /* -nport option (PNC/Ringnet) */
@@ -4451,6 +4452,7 @@ int main (int argc, char **argv) {
 #include "dispatch.h"
 
   domemdump = 0;
+  dolinecleararg = 0;
   bootarg = NULL;
   bootfile[0] = 0;
   gv.pmap32bits = 0;
@@ -4469,6 +4471,9 @@ int main (int argc, char **argv) {
 
     } else if (strcmp(argv[i],"-memdump") == 0) {
       domemdump = 1;
+
+    } else if (strcmp(argv[i],"-dolineclear") == 0) {
+      dolinecleararg = 1;
 
     } else if (strcmp(argv[i],"-ss") == 0) {
       if (i+1 < argc && argv[i+1][0] != '-') {

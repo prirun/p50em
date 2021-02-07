@@ -145,6 +145,15 @@ on the host.  Multiple trace types may be listed, separated by
 spaces.  Tracing may be initially turned off by including the
 .I off
 trace type.
+.PP
+\fB-dolineclear\fR
+.IP
+Inject an XON (DC1, 0221) character and a line kill character into the
+input buffers each time an AMLC line receives an incoming connection.
+The system's configured line kill character is fetched from the
+DEFKIL field of FIGCOM, at address 14(0)/705.  This behavior helps
+counteract lines which have been blocked by internet vulnerability
+scanners injecting non-telnet data streams.
 .\" ---------------------------------------------------------------------------
 .SH FILES
 .TP
