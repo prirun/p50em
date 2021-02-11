@@ -1,5 +1,5 @@
 /* Pr1me Computer emulator, Jim Wilcoxson (prirun@gmail.com), April 4, 2005
-   Copyright (C) 2005-2019, Jim Wilcoxson.  All Rights Reserved.
+   Copyright (C) 2005-2021, Jim Wilcoxson.  All Rights Reserved.
 
    Emulates a Prime Computer system by:
    - booting from a Prime disk image (normal usage)
@@ -287,6 +287,7 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
    T_PX         Process exchange
    T_LM         License manager
    T_TLB        STLB and IOTLB changes
+   T_SMLC       SMLC device I/O
 */
 
 #define T_EAR   0x00000001
@@ -309,6 +310,7 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 #define T_GET   0x00020000
 #define T_EAS   0x00040000
 #define T_TLB   0x00080000
+#define T_SMLC  0x00100000
 
 #define BITMASK16(b) (0x8000 >> ((b)-1))
 #define BITMASK32(b) ((unsigned int)(0x80000000) >> ((b)-1))
@@ -4366,7 +4368,7 @@ int main (int argc, char **argv) {
 #define XRBRACE 0375
 
   printf("[Prime Emulator ver %s %s]\n", REV, __DATE__);
-  printf("[Copyright (C) 2005-2019 Jim Wilcoxson prirun@gmail.com]\n");
+  printf("[Copyright (C) 2005-2021 Jim Wilcoxson prirun@gmail.com]\n");
   if (argc > 1 && (strcmp(argv[1],"--version") == 0)) {
     exit(0);
   }
@@ -4606,6 +4608,8 @@ int main (int argc, char **argv) {
           setlinebuf(gv.tracefile);
         else if (strcmp(argv[i],"tlb") == 0)
           gv.traceflags |= T_TLB;
+        else if (strcmp(argv[i],"smlc") == 0)
+          gv.traceflags |= T_SMLC;
         else if (isdigit(argv[i][0]) && strlen(argv[i]) <= 3 && sscanf(argv[i],"%d", &templ) == 1)
           gv.traceuser = 0100000 | (templ<<6);   /* form OWNERL for user # */
         else if (strlen(argv[i]) == 6 && sscanf(argv[i],"%o", &templ) == 1)
@@ -6293,13 +6297,31 @@ d_hlt:  /* 000000 */
   if (bootarg) {
     printf("\nCPU halt, instruction #%u at %o/%o %s: %o %o ^%06o^\nA='%o/%d  B='%o/%d  L='%o/%d  X=%o/%d", gv.instcount, RPH, RPL, searchloadmap(gv.prevpc,' '), get16t(gv.prevpc), get16t(gv.prevpc+1), lights, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X));
     while (1) {
+      int n;
+      static int ttydev;
+      ttydev = open("/dev/tty", O_RDWR, 0);
+      if (ttydev < 0) {
+        perror(" error opening /dev/tty");
+        fatal(NULL);
+      }
       printf("\nPress Enter to continue, h to halt... ");
-      utempa = getchar();
+      fflush(stdout);
+      utempa = ' ';
+      n = 0;
+      while (n == 0)
+        n = read(ttydev, &utempa, 1);
+/*    utempa = getchar(); */
       printf("\n");
       if (utempa == '\r' || utempa == '\n')
+      {
+        close(ttydev);
         goto fetch;
+      }
       if (utempa == 'h')
+      {
+        close(ttydev);
         break;
+      }
     }
   }
   fatal("CPU halt");
