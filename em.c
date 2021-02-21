@@ -2352,7 +2352,7 @@ special:
 static ea_t apea(unsigned short *bitarg) {
   unsigned short ibr, ea_s, ea_w, bit, br, a;
   unsigned int utempl;
-  ea_t ea, ip;
+  ea_t ea, ip, iwea;
 
   eap = &gv.brp[RPBR];
   utempl = get32(RP);
@@ -2378,8 +2378,11 @@ static ea_t apea(unsigned short *bitarg) {
       bit = get16(INCVA(ea,2)) >> 12;
     else
       bit = 0;
+    iwea = ea;
     ea = ip;
     TRACE(T_EAAP, " After indirect, AP ea = %o/%o, bit=%d  %s\n", ea>>16, ea & 0xFFFF, bit, searchloadmap(ea,' '));
+    if (ea & 0x80000000)
+      fault(POINTERFAULT, ea>>16, iwea);    /* XXX: faddr=0? */
   }
   if (bitarg != NULL)
     *bitarg = bit;
