@@ -15,7 +15,7 @@
 
    $ time ./em -tport 8000 -cpuid 5 -boot 14714 -map MFD.2462/PRIRUN/RING0.MAP MFD.2462/PRIRUN/RING3.MAP 2>err
 
-   Disk boot device is 14uc4, tape is 10005, 
+   Disk boot device is 14uc4, tape is 10005,
    where u=1/3/5/7 for units 0/1/2/3
    and c=1/3/5/7 for controller 26/27/...
       (See complete boot table below)
@@ -23,7 +23,7 @@
    NOTE: the -map command is optional, but is needed to set the
    real-time clock automatically for older models (cpuid < 15).  If
    maps are not available, use the Primos SE command to set the clock
-   manually after the system boots: 
+   manually after the system boots:
         SE -MMDDYY HHMM
 
    -------------
@@ -40,11 +40,11 @@ $ time ./em  -cpuid 5 -boot SAM.SAVE 14114 2>err
 
 Enter physical device = 2466
 
-QUICK VERIFY MODE Enabled; Enter 'RESET QVFY' for normal operation. 
-Enter 'SET DCM' to display CASE messages. 
+QUICK VERIFY MODE Enabled; Enter 'RESET QVFY' for normal operation.
+Enter 'SET DCM' to display CASE messages.
 Enter 'LOAD;RUN' for Default Execution
 
-SAM> 
+SAM>
 
    --------------
    Usage:  to load initial boot from tape, then prompt for disk pdev
@@ -56,7 +56,7 @@ Sense switches set to 1005       <--- these cause pdev prompt
 
 PHYSICAL DEVICE=2466
 
-DISK ERROR, STATUS: 000001 
+DISK ERROR, STATUS: 000001
 PHYSICAL DEVICE=
 
    ---------------
@@ -70,12 +70,12 @@ RUN FILE TREENAME=MFD>DOS>DOS.SAVE
 BOOTING FROM MT0    MFD>DOS>DOS.SAVE
 
 
-PRIMOS II REV 20.0 03/15/85 (AT 170000) 
+PRIMOS II REV 20.0 03/15/85 (AT 170000)
 Copyright (c) Prime Computer, Inc. 1985.
-PRIMOS II is being phased out.  To boot PRIMOS return to CP mode. 
+PRIMOS II is being phased out.  To boot PRIMOS return to CP mode.
 ("BOOT 14xxx" will autoboot PRIMOS.)
 
-OK: 
+OK:
    ---------------
 
 TRACING:
@@ -138,7 +138,7 @@ gv.tracetriggered = 1; this simulates the Ctrl-t.
 
    Locations '40-'57 are reserved for 8 DMC channels, 2 words each.
    Locations '60-'77 are interrupt vectors
-   Locations '100-'177 are for external device interrupts 
+   Locations '100-'177 are for external device interrupts
    see p. A-8 of Sys Arch
 
    In VI mode, locations 0-'17 are trapped and map to the live
@@ -191,7 +191,7 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 
 /* set condition codes based on V-mode FP accumulator
 
-   NOTES: 
+   NOTES:
 
    -Prime considers anything with a zero fraction to be zero,
    even if the exponent is non-zero (this is a "dirty zero")
@@ -202,7 +202,7 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 
    XXX: #define SETCC_F SETCC_32(getcrs32(FLTH))
 */
-  
+
 #define SETCC_F \
   CLEARCC; \
   if (getcrs32s(FLTH) < 0) \
@@ -435,7 +435,7 @@ typedef struct {
 
    The special cache can also be used for write references.  Bits 2-4
    of the cache entry vpn are the access bits from mapva, so bit 4
-   being 1 means that writes are allowed.  
+   being 1 means that writes are allowed.
 
    IMPORTANT NOTE: bit 4 MUST BE CHECKED before all write references!
 */
@@ -714,7 +714,7 @@ char *brp_name() {
    match; if the address isn't found exactly, the index returned
    will be the address lower than the requested address, or -1
    if the symbol table is empty or the requested address is
-   lower than any in the symbol table 
+   lower than any in the symbol table
 
    Symbol types:
      e = address of ecb
@@ -851,7 +851,7 @@ char *searchloadmap(int addr, char type) {
       return buf[bufix];
     } else
       return mapsym[ix].symname;
-  } else 
+  } else
     return &blank;
 }
 
@@ -1070,11 +1070,11 @@ static unsigned int mapio(ea_t ea) {
 #define put64(value, ea) (put64r((value),(ea),RP))
 #define put64r0(value, ea) (put64r((value),(ea),0))
 
-/* 
+/*
    get16 handles 16-bit fetches that CANNOT cause address traps.
 
    get16t handles 16-bit fetches that MIGHT cause address traps,
-   indicated by the sign bit set in EA. 
+   indicated by the sign bit set in EA.
    Address traps can occur:
    - fetching S/R mode instructions
    - fetching V-mode instructions when RPL < 010 or 040 (seg enabled/not)
@@ -1090,7 +1090,7 @@ static unsigned int mapio(ea_t ea) {
    get16r handles 16-bit fetches that used a passed-in virtual address;
    (only the ring part is used from this address).
 
-   VERY IMPORTANT: get16r _cannot_ use the supercache!  You don't want to 
+   VERY IMPORTANT: get16r _cannot_ use the supercache!  You don't want to
    cache Ring 0 accesses to data, then let Ring 3 use the cache!  It could
    be changed to use a special R0 brp cache entry, but probably not much
    gain performance-wise.  Might speed up process exchange...
@@ -1490,7 +1490,7 @@ static void put64r(long long value, ea_t ea, ea_t rpring) {
    disk buffers and shutdown gracefully.
 
    NOTE: it may take up to 1 minute for Primos to see the sensor
-   check.  User 1 will usually be at the OK, prompt, waiting on 
+   check.  User 1 will usually be at the OK, prompt, waiting on
    input, and the check will occur when the 1-minute abort occurs.
 
    NOTE: these are inactive if the emulator is using dedicated
@@ -1545,7 +1545,7 @@ void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int dswsta
 }
 
 
-/* queue instructions 
+/* queue instructions
 
    NOTE: ABQ is typically used in software to add an item to a
    hardware (physical) queue and RTQ is used by DMQ hardware to fetch
@@ -1553,7 +1553,7 @@ void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int dswsta
    support physical queues, but only ABQ and RTQ currently support
    them (they're needed for AMLC boards).  If ICS support is added,
    the other queue instructions will probably need to support physical
-   queues. 
+   queues.
 
    The CPU KEYS are not set here because this would not happen on a
    DMQ request - only when the instruction is executed by software.
@@ -1739,7 +1739,7 @@ static int (*devmap[64])(int, int, int) = {
 static void warn(char *msg) {
   printf("emulator warning:\n  instruction #%u at %o/%o: %o %o keys=%o, modals=%o\n  %s\n", gv.instcount, gv.prevpc >> 16, gv.prevpc & 0xFFFF, get16t(gv.prevpc), get16t(gv.prevpc+1),getcrs16(KEYS), getcrs16(MODALS), msg);
 }
-    
+
 
 /* return a string for the keys
    C = C bit set
@@ -1792,7 +1792,7 @@ char *keystring(unsigned short keys) {
 /* return a string for the modals
    I = interrupts inhibited, bit 1 = 0
    E = interrupts enabled, bit 1 = 1
-   
+
    V = vectored interrupt mode, bit 2 = 1
 
    0-7 = CRS, bits 9-11
@@ -1857,7 +1857,7 @@ static void fatal(char *msg) {
   if (msg)
     printf(": %s", msg);
   printf("\n");
-  
+
   if (physmem != NULL) {
     printf("instruction #%u at %o/%o %s ^%06o^\nA='%o/%d  B='%o/%d  L='%o/%d  X='%o/%d K=%o [%s]\nowner=%o %s, modals=%o [%s]\n", gv.instcount, gv.prevpc >> 16, gv.prevpc & 0xFFFF, searchloadmap(gv.prevpc,' '), lights, getcrs16(A), getcrs16s(A), getcrs16(B), getcrs16s(B), getcrs32(A), getcrs32s(A), getcrs16(X), getcrs16s(X), getcrs16(KEYS), keystring(getcrs16(KEYS)), getcrs16(OWNERL), searchloadmap(getcrs32(OWNER),' '), getcrs16(MODALS), modstring(getcrs16(MODALS)));
 
@@ -1899,7 +1899,7 @@ static void fatal(char *msg) {
     for (i=0; i<64; i++)
       devmap[i](-2, 0, i);
   }
-  
+
 #ifndef NOTRACE
   fclose(gv.tracefile);
 #endif
@@ -1948,7 +1948,7 @@ static void newkeys (unsigned short new) {
 }
 
 static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
-  static unsigned char faultname[LASTFAULT-FIRSTFAULT+2][4] = 
+  static unsigned char faultname[LASTFAULT-FIRSTFAULT+2][4] =
     {"RXM", "PRC", "PAG", "SVC", "UII", "SEM", "MCK", "MM", "ILL", "ACC", "ARI", "STK", "SEG", "PTR", "-?-"};
   unsigned char *faultnamep;
   ea_t pcbp, pxfvec, csea, ea;
@@ -1981,7 +1981,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
   regs.sym.pswkeys = crs[KEYS];   /* Prime->Prime: no swap! */
   putcrs16(FCODE, fcode);
   putcrs32(FADDR, faddr);
-  
+
   if (FIRSTFAULT <= fvec && fvec <= LASTFAULT)
     faultnamep = faultname[fvec-FIRSTFAULT];
   else
@@ -2073,7 +2073,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
 }
 
 
-/* 16S Addressing Mode 
+/* 16S Addressing Mode
 
    NOTE: when fetching indirect words via address traps, ie, the word
    is in a register, the segment and ring bits are unimportant.  But
@@ -2085,7 +2085,7 @@ static void fault(unsigned short fvec, unsigned short fcode, ea_t faddr) {
 */
 
 static ea_t ea16s (unsigned short inst) {
-  
+
   unsigned short rpl, amask, i, x;
   int indlevel;
   ea_t ea, va;
@@ -2124,7 +2124,7 @@ static ea_t ea16s (unsigned short inst) {
 /* 32S Addressing Mode */
 
 static ea_t ea32s (unsigned short inst) {
-  
+
   unsigned short rpl, amask, i, x;
   int indlevel;
   ea_t ea, va;
@@ -2191,7 +2191,7 @@ static inline ea_t ea32r64r (ea_t earp, unsigned short inst) {
       TRACE(T_EAR, " PC relative, P=%o, new ea=%o\n", rpl, ea);
       eap = &gv.brp[RPBR];
     }
-    else 
+    else
       goto special;                              /* special cases */
   else {
     eap = &gv.brp[S0BR];
@@ -2382,7 +2382,7 @@ static ea_t apea(unsigned short *bitarg) {
     ea = ip;
     TRACE(T_EAAP, " After indirect, AP ea = %o/%o, bit=%d  %s\n", ea>>16, ea & 0xFFFF, bit, searchloadmap(ea,' '));
     if (ea & 0x80000000)
-      fault(POINTERFAULT, ea>>16, iwea);    /* XXX: faddr=0? */
+      fault(POINTERFAULT, ea>>16, iwea);
   }
   if (bitarg != NULL)
     *bitarg = bit;
@@ -2422,7 +2422,7 @@ static inline void mathexception(unsigned char extype, unsigned short fcode, ea_
   putcrs16(KEYS, getcrs16(KEYS) | 0x8000);
   switch (extype) {
   case 'i':
-    if (getcrs16(KEYS) & 0400) 
+    if (getcrs16(KEYS) & 0400)
       fault(ARITHFAULT, fcode, faddr);
     break;
   case 'd':
@@ -2716,7 +2716,7 @@ static void argt() {
   rp = get32(stackfp+2);
 
   /* reload the caller's base registers for EA calculations */
-  
+
   brsave[0] = rp >> 16;    brsave[1] = 0;
   /* set ring bits on LB and SB to get correct ring on args */
   brsave[2] = get16(stackfp+4) | ((rp >> 16) & RINGMASK16);
@@ -2843,7 +2843,7 @@ static void pcl (ea_t ecbea) {
   /* get a copy of the ecb.  gates must be aligned on a 16-word
      boundary, therefore can't cross a page boundary, and mapva has
      already ensured that the ecb page is resident.  For a non-gate
-     ecb, check to see if it crosses a page boundary.  If not, a 
+     ecb, check to see if it crosses a page boundary.  If not, a
      memcpy is okay; if it does, do fetches */
 
   if (access == 1 && (ecbea & 0xF) != 0)
@@ -2964,7 +2964,7 @@ static void pcl (ea_t ecbea) {
      Y(low) = number of arguments left to transfer (JW hack!) */
 
 
-  /* if a page fault occurs during argument transfer, we need to 
+  /* if a page fault occurs during argument transfer, we need to
      make sure to use the current RP, which points to the ARGT
      instruction.  Otherwise, the return from the page fault
      is to the PCL instruction, which has already completed at
@@ -3046,7 +3046,7 @@ static void pcl (ea_t ecbea) {
       utempa = get16(get32(ea));       /* 1st arg: key */
       TRACEA(" TSRC$$: key = %d\n", utempa);
       eatemp = get32(ea+9);       /* 4th arg: CP(1..2) */
-      utempl = get32(eatemp);   
+      utempl = get32(eatemp);
       utempa1 = utempl>>16;       /* starting cp */
       utempa2 = utempl&0xffff;    /* # chars */
       TRACEA("   cp(0)=%d, cp(1)=%d, loc(cp)=%o/%o\n", utempa1, utempa2, eatemp>>16, eatemp&0xffff);
@@ -3124,7 +3124,7 @@ static void calf(ea_t ea) {
   for (i=0; i<6; i++)
     cs[i] = get16r0(csea+i);
 
-  /* pop the concealed stack 
+  /* pop the concealed stack
      XXX: this was after code below.  Does it matter? */
 
   put16r0(this, pcbp+PCBCSNEXT);
@@ -3144,7 +3144,7 @@ static void calf(ea_t ea) {
 
 
 /* process exchange register save:  saves the current register
-   set to the process pcb. 
+   set to the process pcb.
    NOTES:
    - adding "wait" arg and only saving base registers fixed Case 63
 */
@@ -3166,7 +3166,7 @@ static void pxregsave(unsigned short wait) {
   }
 
   TRACE(T_PX, "pxregsave: saving registers owned by %o (wait=%d)\n", getcrs16(OWNERL), wait);
-    
+
   /* NB: I think hardware might save the base registers in a predictable
      location in the PCB register save area, rather than compressed in a
      random order, because IIRC, Primos sometimes looks at a waiting
@@ -3251,7 +3251,7 @@ static void ors(unsigned short pcbw) {
        debug, I wanted to make sure a process never owns 2 register sets */
 
     if (ownerl == pcbw) {
-      if (ownedx >= 0) 
+      if (ownedx >= 0)
         fatal("Process owns more than 1 register set!");
       ownedx = rx;
     } else if (ownerl == 0)
@@ -3372,7 +3372,7 @@ static void dispatcher() {
     fatal(NULL);
   }
 #endif
-  
+
   /* pcbp now points to the process we're going to run (pcbw is the
      16-bit word number that will go in OWNERL).  By definition, this
      process should not be on any wait lists, so pcb.waitlist(seg)
@@ -3477,7 +3477,7 @@ static void dispatcher() {
     TRACE(T_PX, "dispatch: abort flags for %o are %o\n", getcrs16(OWNERL), utempa);
     put16r0(0, pcbp+PCBABT);
     fault(PROCESSFAULT, utempa, 0);
-    fatal("fault returned after process fault");    
+    fatal("fault returned after process fault");
   }
 
   firstbdx = 1;
@@ -3585,8 +3585,8 @@ static unsigned short ready (ea_t pcbp, unsigned short begend) {
 
   resched = 0;
   if (level < getar16(PLA16) || (level == getar16(PLA16) && begend)) {
-    regs.sym.plb = regs.sym.pla;          /* Prime->Prime: no byte swap */ 
-    regs.sym.pcbb = regs.sym.pcba;        /* Prime->Prime: no byte swap */ 
+    regs.sym.plb = regs.sym.pla;          /* Prime->Prime: no byte swap */
+    regs.sym.pcbb = regs.sym.pcba;        /* Prime->Prime: no byte swap */
     putar16(PLA16, level);
     putar16(PCBA16, pcbw);
     resched = 1;
@@ -3786,7 +3786,7 @@ static void lpsw() {
   if (getcrs16(MODALS) & 4) {
     TRACE(T_PX, "Segmentation enabled\n");
     gv.livereglim = 010;
-  } else 
+  } else
     gv.livereglim = 040;
   if (getcrs16(MODALS) & 010) {
     TRACE(T_PX, "Process exchange enabled:\n");
@@ -3829,7 +3829,7 @@ static void sssn() {
     put16(0, ea+i);
   }
 
-  /* if SSSN is from segment 14, it's probably the rev 23.4.Y2K 
+  /* if SSSN is from segment 14, it's probably the rev 23.4.Y2K
      system serial number check.  Bypass the check loop. */
 
   if (RPH == 014)
@@ -4169,9 +4169,9 @@ static int add32(unsigned int a1, unsigned int a2, unsigned int a3, ea_t ea) {
   uresult = utemp;                         /* truncate result to result size */
   retval = uresult;
   if (utemp & 0x100000000LL)               /* set L-bit if carry occurred */
-    link = 020000;  
+    link = 020000;
   if (uresult == 0)                        /* set EQ? */
-    eq = 0100; 
+    eq = 0100;
   if (((~a1 ^ a2) & (a1 ^ uresult) & 0x80000000) == 0) {
     if (*(int *)&uresult < 0)
       lt = 0200;
@@ -4194,11 +4194,11 @@ static int add16(unsigned short a1, unsigned short a2, unsigned short a3, ea_t e
   uresult = a1;                            /* expand to higher precision */
   uresult += a2;                           /* double-precision add */
   uresult += a3;                           /* again, for subtract */
-  keybits = (uresult & 0x10000) >> 3;      /* set L-bit if carry occurred */  
+  keybits = (uresult & 0x10000) >> 3;      /* set L-bit if carry occurred */
   uresult &= 0xFFFF;                       /* truncate result */
   retval = uresult;                        /* save result */
   if (uresult == 0)                        /* set EQ? */
-    keybits |= 0100; 
+    keybits |= 0100;
   oflow = (((~a1 ^ a2) & (a1 ^ uresult) & 0x8000) != 0); /* overflow! */
   if (oflow)
     uresult = ~uresult;
@@ -4688,7 +4688,7 @@ int main (int argc, char **argv) {
     regs.u32[i] = 0;
 
   crsl = (void *)regs.sym.userregs[0]; /* first user register set */
-  
+
   putcrs16(MODALS, 0);                /* interrupts inhibited */
   newkeys(0);
   RP = 01000;
@@ -4704,8 +4704,8 @@ int main (int argc, char **argv) {
     fatal("Can't allocate Prime memory block");
   }
   bzero(MEM, 64*1024*2);              /* zero first 64K words */
-  
-  /* if no maps were specified on the command line, look for ring0.map and 
+
+  /* if no maps were specified on the command line, look for ring0.map and
      ring3.map in the current directory and read them */
 
   if (numsyms == 0) {
@@ -4906,7 +4906,7 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
   close(bootfd);
 
   /* check we got it all */
-  
+
   if (nw2 != nw*2) {
     printf("rvec[0]=%d, rvec[1]=%d, nw2=%d, nw=%d, nw*2=%d\n", rvec[0], rvec[1], nw2, nw, nw*2);
     fatal("Didn't read entire boot program");
@@ -4917,7 +4917,7 @@ a filename, CPU registers and keys are loaded from the runfile header.\n\
 #if 1
   /* do a partial sysclr... move it here later if it fixes rev 19
      reboot from tape (ctrl-b) */
-  
+
   putcrs16(MODALS, 0);                /* interrupts inhibited */
   for (i=0; i < STLBENTS; i++)
     gv.stlb[i].seg = 0xFFFF;        /* marker for invalid STLB entry */
@@ -5143,7 +5143,7 @@ fetch:
   /* NOTE: Rev 21 Sys Arch Guide, 2nd Ed, pg 3-32 says:
 
      "When bits 17 to 32 of the program counter contain a value within
-     the ATR (address trap range) and the processor is reading an 
+     the ATR (address trap range) and the processor is reading an
      instruction, an address trap always occurs.  The only exception
      to this is if the machine is operating in 32I mode."
 
@@ -5157,7 +5157,7 @@ fetch:
      NOTE 10/9/2007 (JW):
      iget16 has checks for RP < 0 to indicate an address trap, and all
      of the EA calculations can generate traps (and set the high-order
-     bit) except 32I.  
+     bit) except 32I.
 
      If it's a bad idea for RP to have the high-order bit set, then
      this code can be enabled, along with special handling in JMP,
@@ -5256,7 +5256,7 @@ xec:
 
   } else if ((getcrs16(KEYS) & 0016000) == 010000) {  /* E32I */
       goto imode;
-    
+
   } else if ((inst & 036000) == 030000) { /* check for pio in S/R modes, */
     pio(inst);                            /* before calculating EA */
     goto fetch;
@@ -5528,7 +5528,7 @@ d_stac:  /* 001200 */
   if (get16(ea) == getcrs16(B)) {
     put16(getcrs16(A), ea);
     SETEQ;
-  } else 
+  } else
     CLEAREQ;
   goto fetch;
 
@@ -5538,7 +5538,7 @@ d_stlc:  /* 001204 */
   if (get32(ea) == getcrs32(E)){
     put32(getcrs32(L), ea);
     SETEQ;
-  } else 
+  } else
     CLEAREQ;
   goto fetch;
 
@@ -5668,7 +5668,7 @@ d_zmvd:  /* 001115 */
     while (utempa--)
       *zcp2++ = *zcp1++;
 #else
-    /* this causes error: 
+    /* this causes error:
           Coldstarting PRIMOS, Please wait...
           Unable to initialize gate segment.  (GATE_INIT) */
     memcpy(zcp2, zcp1, utempa);
@@ -6066,7 +6066,7 @@ d_wait:  /* 000315 */
   pwait();
   goto fetch;
 
-d_nfy:  /* 1210 (nfye), 1211 (nfyb), 
+d_nfy:  /* 1210 (nfye), 1211 (nfyb),
            1214 (inen), 1215 (inbn), 1216 (inec), 1217 (inbc) */
   TRACE(T_FLOW, " NFY\n", inst);
   RESTRICT();
@@ -6266,7 +6266,7 @@ d_svc:  /* 000505 */
   TRACE(T_FLOW, " SVC\n");
   fault(SVCFAULT, 0, 0);
   fatal("Returned from SVC fault");
-  
+
 d_cea:  /* 000111 */
   TRACE(T_FLOW, " CEA\n");
   switch ((getcrs16(KEYS) & 016000) >> 10) {
@@ -6601,7 +6601,7 @@ d_bfgt:  /* 0141611 */
 d_bix:  /* 0141334 */
   TRACE(T_FLOW, " BIX\n");
   putcrs16(X, getcrs16(X) + 1);
-  if (getcrs16(X) != 0) 
+  if (getcrs16(X) != 0)
     RPL = iget16(RP);
   else
     INCRP;
@@ -6610,7 +6610,7 @@ d_bix:  /* 0141334 */
 d_biy:  /* 0141324 */
   TRACE(T_FLOW, " BIY\n");
   putcrs16(Y, getcrs16(Y) + 1);
-  if (getcrs16(Y) != 0) 
+  if (getcrs16(Y) != 0)
     RPL = iget16(RP);
   else
     INCRP;
@@ -6619,7 +6619,7 @@ d_biy:  /* 0141324 */
 d_bdy:  /* 0140724 */
   TRACE(T_FLOW, " BDY\n");
   putcrs16(Y, getcrs16(Y) - 1);
-  if (getcrs16(Y) != 0) 
+  if (getcrs16(Y) != 0)
     RPL = iget16(RP);
   else
     INCRP;
@@ -6628,7 +6628,7 @@ d_bdy:  /* 0140724 */
 d_bdx:  /* 0140734 */
   TRACE(T_FLOW, " BDX\n");
   putcrs16(X, getcrs16(X) - 1);
-  if (getcrs16(X) == 0) 
+  if (getcrs16(X) == 0)
     INCRP;
   else {
     m = iget16(RP);
@@ -6638,7 +6638,7 @@ d_bdx:  /* 0140734 */
       long delayusec, actualmsec;
 
       /* for BDX * loop (backstop process mainly), we want to change
-         this to a long sleep so that the emulation host's CPU isn't 
+         this to a long sleep so that the emulation host's CPU isn't
          pegged the whole time the emulator is running.
 
          So first, check to see if any device times expire sooner than
@@ -6679,7 +6679,7 @@ d_bdx:  /* 0140734 */
       if (delayusec > 1000) {
         if (gettimeofday(&tv0, NULL) != 0)
           fatal("em: gettimeofday 0 failed");
-        
+
         /* for some reason, the SIGTERM signal handler gets reset
            during emulator initialization; this re-installs it */
 
@@ -6702,7 +6702,7 @@ d_bdx:  /* 0140734 */
           TRACEA(" BDX loop at %o/%o, owner=%o, utempl=%d, wanted %d ms, got %d ms\n", gv.prevpc>>16, gv.prevpc&0xffff, getcrs16(OWNERL), utempl, delayusec/1000, actualmsec);
         }
 #endif
-        /* do timer bookkeeping that would have occurred if we had 
+        /* do timer bookkeeping that would have occurred if we had
            actually looped on BDX utempl times */
 
         for (i=0; i<64; i++)
@@ -6818,14 +6818,14 @@ d_caz:  /* 0140214 */
 d_irx:  /* 0140114 */
   TRACE(T_FLOW, " IRX\n");
   putcrs16(X, getcrs16(X) + 1);
-  if (getcrs16(X) == 0) 
+  if (getcrs16(X) == 0)
     INCRP;
   goto fetch;
 
 d_drx:  /* 0140210 */
   TRACE(T_FLOW, " DRX\n");
   putcrs16(X, getcrs16(X) - 1);
-  if (getcrs16(X) == 0) 
+  if (getcrs16(X) == 0)
     INCRP;
   goto fetch;
 
@@ -7296,7 +7296,7 @@ d_tstq:  /* 0141757 */
 
   /* XXX: hack for CPU.FAULT; not sure how to determine
      whether an instruction is illegal or unimplemented */
-  
+
   fault(ILLINSTFAULT, RPL, RP);
   fatal("Return from 0141700 fault");
 
@@ -8433,7 +8433,7 @@ dfcmdr:
       if (get32(ea) == getgr32(dr+1)) {
         put32(getgr32(dr), ea);
         SETEQ;
-      } else 
+      } else
         CLEAREQ;
       break;
 
@@ -8443,7 +8443,7 @@ dfcmdr:
       if (get16(ea) == (getcrs16(dr*2+1))) {
         put16(getgr16(dr), ea);
         SETEQ;
-      } else 
+      } else
         CLEAREQ;
       break;
 
@@ -8732,7 +8732,7 @@ dfcmdr:
           tempa1 = getgr32(FAC0+dr+1) & 0xffff;
           tempa2 = immu64 & 0xffff;
           if (abs(tempa1-tempa2) < 48)
-            if (prieee8(getfr64(dr), &tempd1) 
+            if (prieee8(getfr64(dr), &tempd1)
                 && prieee8(immu64, &tempd2)
                 && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC0+dr), 0))
               CLEARC;
@@ -8754,7 +8754,7 @@ dfcmdr:
         immu64 = get64(ea);
       if (immu64 & 0xFFFFFFFF00000000LL)
         if (getgr32s(FAC0+dr))
-          if (prieee8(getfr64(dr), &tempd1) 
+          if (prieee8(getfr64(dr), &tempd1)
               && prieee8(immu64, &tempd2)
               && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC0+dr), 0))
             CLEARC;
@@ -8846,7 +8846,7 @@ dfcmdr:
           tempa1 = getgr32(FAC0+dr+1) & 0xffff;
           tempa2 = immu64 & 0xffff;
           if (abs(tempa1-tempa2) < 48)
-            if (prieee8(getfr64(dr), &tempd1) 
+            if (prieee8(getfr64(dr), &tempd1)
                 && prieee8(immu64, &tempd2)
                 && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC0+dr), 0))
               CLEARC;
@@ -8872,7 +8872,7 @@ dfcmdr:
         immu64 = get64(ea);
       if (immu64 & 0xFFFFFFFF00000000LL)
         if (getgr32s(FAC0+dr))
-          if (prieee8(getfr64(dr), &tempd1) 
+          if (prieee8(getfr64(dr), &tempd1)
               && prieee8(immu64, &tempd2)
               && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC0+dr), 0))
             CLEARC;
@@ -8896,7 +8896,7 @@ dfcmdr:
           immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
         }
         if (immu64 & 0xFFFFFFFF00000000LL)
-          if (prieee8(immu64, &tempd2) 
+          if (prieee8(immu64, &tempd2)
               && prieee8(getfr64(dr), &tempd1)
               && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC0+dr), 0))
             CLEARC;
@@ -8916,7 +8916,7 @@ dfcmdr:
         if (*(int *)&ea >= 0)
           immu64 = get64(ea);
         if (immu64 & 0xFFFFFFFF00000000LL)
-          if (prieee8(immu64, &tempd2) 
+          if (prieee8(immu64, &tempd2)
               && prieee8(getfr64(dr), &tempd1)
               && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC0+dr), 0))
             CLEARC;
@@ -8994,7 +8994,7 @@ dfcmdr:
       }
       if (immu64 & 0xFFFFFFFF00000000LL)
         if (getgr32s(FAC0+dr))
-          if (prieee8(immu64, &tempd2) 
+          if (prieee8(immu64, &tempd2)
               && prieee8(getfr64(dr), &tempd1)
               && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC0+dr), 1))
             CLEARC;
@@ -9014,7 +9014,7 @@ dfcmdr:
         immu64 = get64(ea);
       if (immu64 & 0xFFFFFFFF00000000LL)
         if (getgr32s(FAC0+dr))
-          if (prieee8(immu64, &tempd2) 
+          if (prieee8(immu64, &tempd2)
               && prieee8(getfr64(dr), &tempd1)
               && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC0+dr), 1))
             CLEARC;
@@ -9558,7 +9558,7 @@ d_adddad:  /* 00600 (R-mode) */
     putcrs16(KEYS, getcrs16(KEYS) | 020000);
   /* NOTE: this EQ test prevents reusing the ADD code :( */
   if (getcrs32s(L) == 0)              /* set EQ? */
-    SETEQ; 
+    SETEQ;
   if (((~utempa ^ m) & (utempa ^ getcrs16(A))) & 0x8000) {
     if (getcrs32s(L) >= 0)
       SETLT;
@@ -9593,7 +9593,7 @@ d_subdsb:  /* 00700 */
   if (utempl & 0x10000)                  /* set L-bit if carry */
     putcrs16(KEYS, getcrs16(KEYS) | 020000);
   if (getcrs32s(L) == 0)              /* set EQ? */
-    SETEQ; 
+    SETEQ;
   if (((utempa ^ m) & (utempa ^ getcrs16(A))) & 0x8000) {
     if (getcrs32s(L) >= 0)
       SETLT;
@@ -9645,9 +9645,9 @@ d_cas:  /* 01100 */
   utempl += 1;
   putcrs16(A, utempl);                   /* truncate results */
   if (utempl & 0x10000)                  /* set L-bit if carry */
-    putcrs16(KEYS, getcrs16(KEYS) | 020000);  
+    putcrs16(KEYS, getcrs16(KEYS) | 020000);
   if (getcrs16(A) == 0)                  /* set EQ? */
-    SETEQ; 
+    SETEQ;
   if (((utempa ^ m) & (utempa ^ getcrs16(A))) & 0x8000) {
     if (getcrs16s(A) >= 0)
       SETLT;
@@ -9944,7 +9944,7 @@ d_fad:  /* 00601 */
       tempa1 = getcrs16(FEXP);
       tempa2 = immu64 & 0xffff;
       if (abs(tempa1-tempa2) < 48)
-        if (prieee8(getfr64(2), &tempd1) 
+        if (prieee8(getfr64(2), &tempd1)
             && prieee8(immu64, &tempd2)
             && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC1), 0))
           CLEARC;
@@ -9972,7 +9972,7 @@ d_fdv:  /* 01701 */
   immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
   if (immu64 & 0xFFFFFFFF00000000LL)
     if (getgr32s(FAC1))
-      if (prieee8(immu64, &tempd2) 
+      if (prieee8(immu64, &tempd2)
           && prieee8(getfr64(2), &tempd1)
           && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC1), 1))
         CLEARC;
@@ -9997,7 +9997,7 @@ d_fmp:  /* 01601 */
     immu64 = get32(ea);
     immu64 = ((immu64 << 32) & 0xffffff0000000000LL) | (immu64 & 0xff);
     if (immu64 & 0xFFFFFFFF00000000LL)
-      if (prieee8(immu64, &tempd2) 
+      if (prieee8(immu64, &tempd2)
           && prieee8(getfr64(2), &tempd1)
           && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC1), 0))
         CLEARC;
@@ -10018,7 +10018,7 @@ d_fsb:  /* 00701 */
       tempa1 = getcrs16(FEXP);
       tempa2 = immu64 & 0xffff;
       if (abs(tempa1-tempa2) < 48)
-        if (prieee8(getfr64(2), &tempd1) 
+        if (prieee8(getfr64(2), &tempd1)
             && prieee8(immu64, &tempd2)
             && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC1), 0))
           CLEARC;
@@ -10057,7 +10057,7 @@ d_dfad:  /* 0602 */
   immu64 = get64(ea);
   if (immu64 & 0xFFFFFFFF00000000LL)
     if (getgr32s(FAC1))
-      if (prieee8(getfr64(2), &tempd1) 
+      if (prieee8(getfr64(2), &tempd1)
           && prieee8(immu64, &tempd2)
           && ieeepr8(tempd1+tempd2, (long long *)(crsl+FAC1), 0)) {
         CLEARC;
@@ -10083,7 +10083,7 @@ d_dfdv:  /* 01702 */
     immu64 = get64(ea);
   if (immu64 & 0xFFFFFFFF00000000LL)
     if (getgr32s(FAC1))
-      if (prieee8(immu64, &tempd2) 
+      if (prieee8(immu64, &tempd2)
           && prieee8(getfr64(2), &tempd1)
           && ieeepr8(tempd1/tempd2, (long long *)(crsl+FAC1), 1)) {
         CLEARC;
@@ -10112,7 +10112,7 @@ d_dfmp:  /* 01602 */
   if (getgr32s(FAC1)) {
     immu64 = get64(ea);
     if (immu64 & 0xFFFFFFFF00000000LL)
-      if (prieee8(immu64, &tempd2) 
+      if (prieee8(immu64, &tempd2)
           && prieee8(getfr64(2), &tempd1)
           && ieeepr8(tempd1*tempd2, (long long *)(crsl+FAC1), 0)) {
         CLEARC;
@@ -10131,7 +10131,7 @@ d_dfsb:  /* 0702 */
   immu64 = get64(ea);
   if (immu64 & 0xFFFFFFFF00000000LL)
     if (getgr32s(FAC1))
-      if (prieee8(getfr64(2), &tempd1) 
+      if (prieee8(getfr64(2), &tempd1)
           && prieee8(immu64, &tempd2)
           && ieeepr8(tempd1-tempd2, (long long *)(crsl+FAC1), 0)) {
         CLEARC;
