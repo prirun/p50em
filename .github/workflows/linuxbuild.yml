@@ -9,6 +9,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: "actions/checkout@v2"
     - name: make
       run: make
+    - uses: "marvinpinto/action-automatic-releases@latest"
+      with:
+        automatic_release_tag: "latest"
+        prerelease: false
+        title: "Bleeding Edge Binary - Ubuntu"
+        files: |
+          LICENSE
+          README.md
+          em.1
+          em
