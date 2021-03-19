@@ -10,7 +10,7 @@ jobs:
     - uses: "vmactions/freebsd-vm@v0.1.3"
       with:
         usesh: true
-        prepare: pkg install -y curl
+        prepare: pkg install -y curl git
         run: |
           make
     - uses: "marvinpinto/action-automatic-releases@latest"
