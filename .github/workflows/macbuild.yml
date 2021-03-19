@@ -1,0 +1,25 @@
+name: macbuild
+
+on:
+  release:
+    types:
+      - created
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+    - uses: "actions/checkout@v2"
+    - name: make
+      run: make
+    - uses: "marvinpinto/action-automatic-releases@latest"
+      with:
+        repo_token: "${{ secrets.GITHUB_TOKEN }}"
+        automatic_release_tag: "latest"
+        prerelease: false
+        title: "Bleeding Edge Binary - MacOS"
+        files: |
+          LICENSE
+          README.md
+          em.1
+          em
