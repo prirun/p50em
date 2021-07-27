@@ -2383,8 +2383,8 @@ static ea_t apea(unsigned short *bitarg) {
     iwea = ea;
     ea = ip;
     TRACE(T_EAAP, " After indirect, AP ea = %o/%o, bit=%d  %s\n", ea>>16, ea & 0xFFFF, bit, searchloadmap(ea,' '));
-    if (ea & 0x80000000)
-      fault(POINTERFAULT, ea>>16, iwea);
+//    if (ea & 0x80000000)
+//      fault(POINTERFAULT, ea>>16, iwea);
   }
   if (bitarg != NULL)
     *bitarg = bit;

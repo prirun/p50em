@@ -991,6 +991,7 @@ int devamlc (int class, int func, int device) {
         if (dc[dx].xmitenabled & BITMASK16(lx+1)) {
           int n, maxn;
           unsigned short qtop, qbot, qseg, qmask, qents;
+          short hasiac;         /* This buffer contains an escaped IAC */
           ea_t qentea, qcbea;
           n = 0;
           qcbea = dc[dx].baseaddr + lx*4;
@@ -1019,12 +1020,35 @@ int devamlc (int class, int func, int device) {
                precludes the use of TTY8BIT mode... */
 
             n = 0;
+            hasiac = 0;
             for (i=0; i < maxn; i++) {
               unsigned short utemp;
               utemp = get16mem(qentea);
-              qentea = (qentea & ~qmask) | ((qentea+1) & qmask);
+/*              qentea = (qentea & ~qmask) | ((qentea+1) & qmask); */
               //printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utemp, utemp & 0x7f);
+#ifdef NOMASKAMLC
+              if (((utemp & 0xff) == 0xff) && (dc[dx].ctype[lx] != CT_SERIAL))
+              {
+                if (n != 0)
+                  break;          /* Clear the buffer before handling IAC */
+                else
+                {
+                  buf[n++] = 0xFF;
+                  buf[n++] = 0xFF;
+                  hasiac = 1;
+                  qentea = (qentea & ~qmask) | ((qentea+1) & qmask);
+                  break;          /* Now ship _just_ the IAC */
+                }
+              }
+              else
+              {
+                buf[n++] = utemp & 0xFF;
+                qentea = (qentea & ~qmask) | ((qentea+1) & qmask);
+              }
+#else
+              /* None of the IAC handling matters if we splatter parity */
               buf[n++] = utemp & 0x7F;
+#endif
             }
           } else {
 
@@ -1089,7 +1113,10 @@ int devamlc (int class, int func, int device) {
                  used and Unix buffers get full so writes can't
                  complete */
 
-              qtop = (qtop & ~qmask) | ((qtop+nw) & qmask);
+              if (hasiac)
+                qtop = (qtop & ~qmask) | ((qtop+1) & qmask);
+              else
+                qtop = (qtop & ~qmask) | ((qtop+nw) & qmask);
               put16io(qtop, qcbea);
               if (nw > maxxmit)
                 maxxmit = nw;
