@@ -1,5 +1,5 @@
 /* utextp.c, Jim Wilcoxson, March 16, 2005
-   Reads a Unix text file and converts it to a compressed Prime text file. 
+   Reads a Unix text file and converts it to a compressed Prime text file.
    This means:
    - turn high bit on
    - expand Unix tabs to spaces
@@ -29,7 +29,7 @@ main () {
     else {                    /* not a space character */
       while (space) {         /* dump held-back spaces first */
 	if (space < 3) {      /* write regular spaces */
-	  putchar(' ');
+	  putchar(0240);
 	  space--;
 	  n++;
 	} else {              /* write compressed spaces */
