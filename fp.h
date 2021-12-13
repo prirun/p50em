@@ -40,6 +40,7 @@ http://tima-cmp.imag.fr/~guyot/Cours/Oparithm/english/Op_Ar2.htm
 
 inline void getdp (unsigned long long p, long long *frac64, int *exp32) {
 
+  TRACE(T_FP, "  getdp(%016llx)\n", p);
   *frac64 = p & 0xFFFFFFFFFFFF0000LL;  /* unpack fraction */
   *exp32 = (short) (p & 0xFFFFLL);     /* unpack SIGNED exponent */
 }
@@ -59,22 +60,29 @@ int prieee8(unsigned long long dp, double *d) {
   /* unpack Prime DPFP */
 
   getdp (dp, &frac64, &exp32);
+  TRACE(T_FP, "  prieee8: unpacked frac %016llx exp %08x\n", frac64, exp32);
 
   /* if negative, change to sign-magnitude */
 
   sign = 0;
   if (frac64 < 0) {
+    TRACE(T_FP, "  prieee8: changing to sign-magnitude\n");
 
     /* special case: negative power of 2 */
 
     if (frac64 == 0x8000000000000000LL) {
+      TRACE(T_FP, "  prieee8: frac is negative power of 2\n");
       exp32 += (1023-128);
       if (exp32 < 0 || exp32 > 0x7fe)
+      {
+        TRACE(T_FP, "  prieee8: exp %x out of range\n", exp32);
         return 0;
+      }
       frac64 |= ((long long)exp32 << 52);
       *d = *(double *)&frac64;
       return 1;
     } else {
+      TRACE(T_FP, "  prieee8: frac is just negative\n");
       sign = 0x8000000000000000LL;
       frac64 = -frac64;
     }
@@ -82,13 +90,15 @@ int prieee8(unsigned long long dp, double *d) {
   /* special case: zero */
 
   } else if (frac64 == 0) {
+    TRACE(T_FP, "  prieee8: frac is 0\n");
     *d = 0.0;
     return 1;
-  } 
+  }
 
   /* normalize positive fraction until bit 2 is 1 */
 
   while ((frac64 & 0x4000000000000000LL) == 0) {
+    TRACE(T_FP, "  prieee8: normalizing positive fraction\n");
     frac64 = frac64 << 1;
     exp32--;
   }
@@ -98,7 +108,10 @@ int prieee8(unsigned long long dp, double *d) {
   exp32 += (1023-128) - 1;
 #if 1
   if (exp32 < 0 || exp32 > 0x7fe)
+  {
+    TRACE(T_FP, "  prieee8: exponent %x out of range\n", exp32);
     return 0;
+  }
 #else
   if (exp32 < 0) {
     *d = 0.0;
@@ -113,6 +126,7 @@ int prieee8(unsigned long long dp, double *d) {
   /* pack into an IEEE DPFP, losing the leading 1 bit in the process */
 
   frac64 = sign | ((long long)exp32 << 52) | ((frac64 >> 10) & 0xfffffffffffffLL);
+  TRACE(T_FP, "  prieee8: packed ieee dpfp %016llx\n", frac64);
   *d = *(double *)&frac64;
   return 1;
 }
@@ -134,7 +148,7 @@ retry:
   neg = frac64 < 0;
   exp32 = (frac64 >> 52) & 0x7ff;
   frac64 &= 0xfffffffffffffLL;
-  //printf("dp=%llx, neg=%d, frac64=%llx, exp32=%d, \n", *(long long *)dp, neg, frac64, exp32);
+  TRACE(T_FP, "d=%016llx, neg=%x, frac64=%016llx, exp32=%08x, \n", (long long)d, neg, frac64, exp32);
 
   /* special case: NaN & +-infinity */
 
@@ -159,12 +173,21 @@ retry:
      and subnormal */
 
   if (exp32 != 0)           /* typical IEEE normalized */
+  {
+    TRACE(T_FP, "  ieeepr8: is normalized\n");
     frac64 |= 0x10000000000000LL;
-  else if (frac64 == 0) {   /* IEEE +-0.0 (zero exp+frac) */
+  }
+  else if (frac64 == 0)     /* IEEE +-0.0 (zero exp+frac) */
+  {
+    TRACE(T_FP, "  ieeepr8: zero exp and frac\n");
     *p = 0;                 /* IEEE and Prime zero are the same */
     return okay;
-  } else
+  }
+  else
+  {
+    TRACE(T_FP, "  ieeepr8: subnormal value\n");
       ;                     /* subnormal: no hidden 1 bit */
+  }
 
   /* adjust exponent, change sign-magnitude to 2's complement,
      and shift fraction into Prime placement (high 48 bits) */
@@ -173,12 +196,14 @@ retry:
   if (neg)
     frac64 = -frac64;
   frac64 <<= 10;
+  TRACE(T_FP, "  ieeepr8: de-biased prime-ised frac %016llx exp %08x\n", frac64, exp32);
 
   /* normalize Prime DPFP */
 
   while ((frac64 ^ (frac64 << 1)) >= 0) {
     frac64 = frac64 << 1;
     exp32--;
+    TRACE(T_FP, "  ieeepr8: normalized prime frac %016llx exp %08x\n", frac64, exp32);
   }
 
 #if 0
@@ -204,8 +229,11 @@ retry:
 
   if (round)
     if ((frac64 & 0x8000) && ((frac64 & 0x7fffffffffff0000LL) !=  0x7fffffffffff0000LL))
+    {
       /* XXX: should this be a subtract for negative numbers? */
       frac64 += 0x10000;
+      TRACE(T_FP, "  ieeepr8: rounded frac %016llx\n", frac64);
+    }
 
   *p = swap64((frac64 & 0xffffffffffff0000LL) | (exp32 & 0xffff));
   return okay;
@@ -260,6 +288,7 @@ unsigned long long dfcm (unsigned long long dp, int *oflow) {
   CLEARC;
   *oflow = 0;
   getdp(dp, &frac64, &exp32);
+  TRACE(T_FP, "  dfcm: unpacked frac %016llx exp %08x\n", frac64, exp32);
   if (frac64 != 0) {                          /* can't normalize zero */
     if (frac64 == 0x8000000000000000LL) {     /* overflow case? */
       frac64 = 0x4000000000000000LL;          /* complement power of 2 */
@@ -290,6 +319,7 @@ unsigned long long norm(unsigned long long dp, int *oflow) {
 
   *oflow = 0;
   getdp(dp, &frac64, &exp32);
+  TRACE(T_FP, "  norm: unpacked frac %016llx exp %08x\n", frac64, exp32);
   while ((frac64 ^ (frac64 << 1)) >= 0) {
     frac64 = frac64 << 1;
     exp32--;
@@ -314,11 +344,16 @@ unsigned long long frn(unsigned long long dp, int *oflow) {
 
   *oflow = 0;
   getdp(dp, &frac64, &exp32);
+  TRACE(T_FP, "  frn: unpacked frac %016llx exp %08x\n", frac64, exp32);
   if (frac64 == 0)
+  {
+    TRACE(T_FP, "  frn: returning 0\n");
     return 0;
+  }
   else {
     doround1 = ((frac64 & 0x18000000000LL) != 0);
     doround2 = ((frac64 &  0x8000000000LL) != 0) && ((frac64 & 0x7FFFFF0000LL) != 0);
+    TRACE(T_FP, "  frn: doround1 %x doround2 %x\n", doround1, doround2);
     if (doround1 || doround2) {
       frac64 &= 0xFFFFFF0000000000LL;
       if (frac64 != 0x7FFFFF0000000000LL)
@@ -329,8 +364,10 @@ unsigned long long frn(unsigned long long dp, int *oflow) {
       }
       frac64 |= (exp32 & 0xFFFF);
       frac64 = norm(frac64, oflow);
+      TRACE(T_FP, "  frn: rounded frac %016llx\n", frac64);
       return frac64;
     }
+    TRACE(T_FP, "  frn: dp %016llx\n", dp);
     return dp;
   }
 }
@@ -356,26 +393,37 @@ int fcs (unsigned long long fac, int fop) {
   fop = fop & 0xffffff00;
   if (fop == 0)                                      /* fix dirty zero */
     fopexp = 0;
+  TRACE(T_FP, "  fcs: FAC: %016llx %04x; op: %016llx %04x\n", templ, facexp, fop, fopexp);
   if ((templ & 0x80000000) == (fop & 0x80000000)) {  /* compare signs */
     if (facexp == fopexp)                            /* compare exponents */
       if (templ == fop) {                            /* compare fractions */
+        TRACE(T_FP, "  fcs: frac cmp returning eq / skip 1\n");
         SETEQ;
         return 1;
       } else if (templ < fop) {                      /* compare fractions */
+        TRACE(T_FP, "  fcs: frac cmp returning lt / skip 2\n");
         SETLT;                                       /* FAC < operand */
         return 2;
-      } else
+      } else {
+        TRACE(T_FP, "  fcs: frac cmp returning gt / skip 0\n");
         return 0;                                    /* FAC > operand */
+      }
     else if (facexp < fopexp) {                      /* compare exponents */
+      TRACE(T_FP, "  fcs: exp cmp returning lt / skip 2\n");
       SETLT;                                         /* FAC < operand */
       return 2;
-    } else
+    } else {
+      TRACE(T_FP, "  fcs: exp cmp returning gt / skip 0\n");
       return 0;
+    }
   } else if (templ & 0x80000000) {
+    TRACE(T_FP, "  fcs: sign cmp returning lt / skip 2\n");
     SETLT;                                           /* FAC < operand */
     return 2;
-  } else
+  } else {
+    TRACE(T_FP, "  fcs: sign cmp returning gt / skip 0\n");
     return 0;                                        /* FAC > operand */
+  }
 }
 
 
@@ -386,7 +434,7 @@ int fcs (unsigned long long fac, int fop) {
 
    NOTE: This code doesn't pass Prime diagnostics for higher model
    CPU's, I'm guessing because comparison is implemented as subtract,
-   and we can't do that because numbers with huge exponents (and 
+   and we can't do that because numbers with huge exponents (and
    Prime ASCII characters in the DAC) won't convert to IEEE.
 */
 
@@ -404,27 +452,35 @@ int dfcs (unsigned long long fac, long long fop) {
   fop = fop & 0xffffffffffff0000LL;
   if (fop == 0)                                      /* fix dirty zero */
     fopexp = 0;
-#if 0
-  printf("dfcs: FAC: %016llx %04x; op: %016llx %04x\n", templl, facexp, fop, fopexp);
-#endif
+  TRACE(T_FP, "  dfcs: FAC: %016llx %04x; op: %016llx %04x\n", templl, facexp, fop, fopexp);
   if ((templl & 0x8000000000000000LL) == (fop & 0x8000000000000000LL)) {  /* compare signs */
     if (facexp == fopexp)                            /* compare exponents */
       if (templl == fop) {                           /* compare fractions */
+        TRACE(T_FP, "  dfcs: frac cmp returning eq / skip 1\n");
         SETEQ;
         return 1;
       } else if (templl < fop) {                     /* compare fractions */
+        TRACE(T_FP, "  dfcs: frac cmp returning lt / skip 2\n");
         SETLT;                                       /* FAC < operand */
         return 2;
-      } else
+      } else {
+        TRACE(T_FP, "  dfcs: frac cmp returning gt / skip 0\n");
         return 0;                                    /* FAC > operand */
+      }
     else if (facexp < fopexp) {                      /* compare exponents */
+      TRACE(T_FP, "  dfcs: exp cmp returning lt / skip 2\n");
       SETLT;                                         /* FAC < operand */
       return 2;
-    } else
+    } else {
+      TRACE(T_FP, "  dfcs: exp cmp returning eq / skip 1\n");
       return 0;
+    }
   } else if (templl & 0x8000000000000000LL) {
+    TRACE(T_FP, "  dfcs: sign cmp returning lt / skip 2\n");
     SETLT;                                           /* FAC < operand */
     return 2;
-  } else
+  } else {
+    TRACE(T_FP, "  dfcs: sign cmp returning gt / skip 0\n");
     return 0;                                        /* FAC > operand */
+  }
 }

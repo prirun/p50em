@@ -274,6 +274,7 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
    T_EAV        trace V-mode effective address calculation
    T_EAI        trace I-mode effective address calculation
    T_FLOW       instruction summary
+   T_FP         floating point
    T_INST       detailed instruction trace
    T_MODE       trace CPU mode changes
    T_EAAP       AP effective address calculation
@@ -311,6 +312,7 @@ static void macheck (unsigned short p300vec, unsigned short chkvec, unsigned int
 #define T_EAS   0x00040000
 #define T_TLB   0x00080000
 #define T_SMLC  0x00100000
+#define T_FP    0x00200000
 
 #define BITMASK16(b) (0x8000 >> ((b)-1))
 #define BITMASK32(b) ((unsigned int)(0x80000000) >> ((b)-1))
@@ -4618,6 +4620,8 @@ int main (int argc, char **argv) {
           gv.traceflags |= T_TLB;
         else if (strcmp(argv[i],"smlc") == 0)
           gv.traceflags |= T_SMLC;
+        else if (strcmp(argv[i],"fp") == 0)
+          gv.traceflags |= T_FP;
         else if (isdigit(argv[i][0]) && strlen(argv[i]) <= 3 && sscanf(argv[i],"%d", &templ) == 1)
           gv.traceuser = 0100000 | (templ<<6);   /* form OWNERL for user # */
         else if (strlen(argv[i]) == 6 && sscanf(argv[i],"%o", &templ) == 1)
