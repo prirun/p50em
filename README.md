@@ -55,7 +55,7 @@ business unit ceased to exist.  A reformatted copy is available
 A growing collection of Prime and related documentation is available
 at [sysovl.info](https://sysovl.info/reference_prime.html).
 A howto on installing PRIMOS in the emulator is
-[here](https://sysovl.info/reference_prime_drb_installing_primos.html).
+[here](https://sysovl.info/reference_prime_drb_installoview.html).
 Discussion of adapting these instructions to
 22.1.4 has been occurring on the [cctalk mailing
 list](http://classiccmp.org/pipermail/cctalk/2020-March/052126.html).
