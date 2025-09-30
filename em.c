@@ -659,6 +659,7 @@ static unsigned short *physmem = NULL; /* system's physical memory */
 #define LASTFAULT     077
 
 //static ea_t tnoua_ea=0, tnou_ea=0, tsrc_ea=0;
+static int noclock;                         /* -noclock arg */
 static int domemdump;                       /* -memdump arg */
 static int dolinecleararg;                  /* -dolineclear arg */
 
@@ -4456,6 +4457,7 @@ int main (int argc, char **argv) {
 
 #include "dispatch.h"
 
+  noclock = 0;
   domemdump = 0;
   dolinecleararg = 0;
   bootarg = NULL;
@@ -4473,6 +4475,9 @@ int main (int argc, char **argv) {
     if ((strcmp(argv[i],"-map") == 0) || (strcmp(argv[i],"-maps") == 0)) {
       while (i+1 < argc && argv[i+1][0] != '-')
         readloadmap(argv[++i], 1);
+
+    } else if (strcmp(argv[i],"-noclock") == 0) {
+      noclock = 1;
 
     } else if (strcmp(argv[i],"-memdump") == 0) {
       domemdump = 1;

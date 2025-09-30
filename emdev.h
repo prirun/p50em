@@ -51,7 +51,7 @@
    '50 = #1 HSSMLC/MDLC (synchronous comm)
    '51 = #2 HSSMLC/MDLC
 *  '52 = #3 AMLC or ICS1
-*  '53 = #2 AMLC 
+*  '53 = #2 AMLC
 *  '54 = #1 AMLC
    '55 = MACI autocall unit
    '56 = old SMLC (RTOS User Guide, A-1 & Hacker's Guide)
@@ -229,7 +229,7 @@ int devnone (int class, int func, int device) {
    OCP '0604 = enable transmit DMA/C
    OCP '0704 = reset transmit interrupt mask and DMA/C enable
    OCP '1004 = Full duplex; software must echo
-   OCP '1104 = output a sync pulse (diagnostics) 
+   OCP '1104 = output a sync pulse (diagnostics)
    OCP '1204 = Prime normal, independent xmit and recv w/echoplex
    OCP '1304 = Self test mode (internally connects transmitter to receiver)
    OCP '1504 = Set both xmit & rcv interrupt masks
@@ -302,7 +302,7 @@ int devasr (int class, int func, int device) {
   int doblock;
   time_t unixtime;
   struct tm *tms;
-  
+
   doblock = BLOCKIO;
 
   switch (class) {
@@ -330,7 +330,7 @@ int devasr (int class, int func, int device) {
       perror(" unable to get tty attributes");
       fatal(NULL);
     }
-    
+
     /* save initial terminal setup to restore when exiting */
 
     origterminfo = terminfo;
@@ -497,7 +497,7 @@ readasr:
           goto readasr;
         }
 #endif
-        
+
         /* if doing local echo, do xon/xoff processing here.  If Unix
            does it, the emulator might block on a console write.  If
            the console is running full-duplex (no local echo), we can
@@ -650,7 +650,7 @@ readasr:
 
 /* Device '14 - magtape controller #1
 
-   NOTES: 
+   NOTES:
 
    This code only supports 1 tape controller (4 units), but could be
    extended to support 2 controllers (eg, see disk controller code)
@@ -863,7 +863,7 @@ fmterr:
       *mtstat |= 0x100;        /* set filemark status */
       goto repo;
     }
-    
+
     /* ignore attempts to backspace over error records.  This will
        cause Magsav to read the next record instead, and it may
        recover.  Re-reading the error record 10 times won't help! */
@@ -881,7 +881,7 @@ fmterr:
     }
 
     /* read leading reclen again to make sure we're positioned correctly */
-      
+
     n = read(fd, buf, 4);
     if (n == -1) goto readerr;
     if (n != 4) {
@@ -974,7 +974,7 @@ int devmt (int class, int func, int device) {
       enabled = 1;
       if (interrupting == 1)              /* if interrupt is pending */
         devpoll[device] = 10;             /* try to interrupt soon */
-      
+
     } else if (func == 016) {             /* reset interrupt mask */
       enabled = 0;
 
@@ -1092,7 +1092,7 @@ int devmt (int class, int func, int device) {
         } else
           unit[u].mtstat = 0x00C8;   /* Ready, Online, BOT */
       }
-      
+
       /* "select only" is ignored.  On a real tape controller, this
        blocks (I think) if the previous tape operation is in progress */
 
@@ -1276,12 +1276,12 @@ int devmt (int class, int func, int device) {
       }
       IOSKIP;
       break;
-        
+
     } else if (func == 02) {
       ready = 1;
       if (getcrs16(A) & 0x8000) {      /* status word 1 */
         datareg = unit[usel].mtstat;
-        
+
         /* if the tape was rewinding, return rewinding status once, then
            change it to BOT */
 
@@ -1413,7 +1413,9 @@ void initclock(ea_t datnowea) {
   unixtime = time(NULL);
   tms = localtime(&unixtime);
   datnow = tms->tm_year<<25 | (tms->tm_mon+1)<<21 | tms->tm_mday<<16 | ((tms->tm_hour*3600 + tms->tm_min*60 + tms->tm_sec)/4);
-  put32r0(datnow, datnowea);
+  if (! noclock) {
+    put32r0(datnow, datnowea);
+  }
 }
 
 
@@ -1438,7 +1440,7 @@ int devcp (int class, int func, int device) {
 
   case -1:
 
-    /* if -map is used, lookup DATNOW symbol and set the 32-bit 
+    /* if -map is used, lookup DATNOW symbol and set the 32-bit
        Primos time value (DATNOW+TIMNOW) */
 
     datnowea = 0;
@@ -1455,10 +1457,10 @@ int devcp (int class, int func, int device) {
       ;
 
     } else if (func == 01) {    /* ack PIC interrupt */
-      ; 
+      ;
 
     } else if (func == 02) {    /* stop LFC (IO.PNC DIAG) */
-      ; 
+      ;
 
     } else if (func == 04) {    /* does something on VCP during boot */
       ;
@@ -1581,7 +1583,7 @@ int devcp (int class, int func, int device) {
           previnstcount = gv.instcount;
           if (datnowea != 0)
             initclock(datnowea);
-        } 
+        }
         elapsedms = (tv.tv_sec-start_tv.tv_sec)*1000.0 + (tv.tv_usec-start_tv.tv_usec)/1000.0;
         targetticks = elapsedms/(-clkpic*clkrate/1000);
 #if 0
@@ -1595,7 +1597,7 @@ int devcp (int class, int func, int device) {
            available (no Primos maps), then we have to tick our way to
            the correct time.  In addition to lowering overhead, slower
            clock tick rates make catching up much faster.
-           
+
            When ticking faster, we need to be careful not to tick too
            fast, because that will cause timed events like disk I/O to
            timeout prematurely.  With rev 20 Primos, setting the
@@ -1812,7 +1814,7 @@ int devdisk (int class, int func, int device) {
       dc[dx].unit[u].modrecs = NULL;
     }
     return 0;
-      
+
   case 0:
     TRACE(T_INST|T_DIO, " OCP '%2o%2o\n", func, device);
     if (func == 016) {                /* reset interrupt */
@@ -2017,7 +2019,7 @@ int devdisk (int class, int func, int device) {
             }
             dmaaddr = ((getar16(REGDMX16+dmareg) & 3)<<16) | getar16(REGDMX16+dmareg+1);
             TRACE(T_INST|T_DIO,  " DMA channels: nch-1=%d, ['%o]='%o, ['%o]='%o, nwords=%d\n", dc[dx].dmanch, dc[dx].dmachan, swap16(regs.sym.regdmx[dmareg]), dc[dx].dmachan+1, dmaaddr, dmanw);
-            
+
             if (order == 5) {    /* read */
               if (getcrs16(MODALS) & 020)  /* mapped read */
                 if ((dmaaddr & 01777) || dmanw > 1024)
@@ -2078,7 +2080,7 @@ int devdisk (int class, int func, int device) {
         }
         TRACE(T_INST|T_DIO, " seek track %d, restore=%d, clear=%d\n", track, (m1 & 0100000) != 0, (m1 & 040000) != 0);
 #if 0
-        /* this has been disabled because SCSI drives sometimes seek to 
+        /* this has been disabled because SCSI drives sometimes seek to
            track 512 (special meaning in controller?) */
 
         if (track > dc[dx].unit[u].maxtrack) {
